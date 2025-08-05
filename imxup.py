@@ -126,332 +126,7 @@ class NestedProgressBar:
         self.children.append(child)
         child.parent = self
 
-class AsyncImxToUploader:
-    """Async version of ImxToUploader using aiohttp"""
-    
-    def __init__(self):
-        self.upload_url = "https://imx.to/api/upload"
-        self.web_url = "https://imx.to"
-        self.username = None
-        self.password = None
-        self.session = None
-        self._get_credentials()
-        
-        # Default headers for API requests
-        self.headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:141.0) Gecko/20100101 Firefox/141.0'
-        }
-    
-    def _get_credentials(self):
-        """Load stored credentials"""
-        config = configparser.ConfigParser()
-        config_file = os.path.join(os.path.expanduser("~"), ".imxup.ini")
-        
-        if os.path.exists(config_file):
-            config.read(config_file)
-            if 'CREDENTIALS' in config:
-                self.username = config.get('CREDENTIALS', 'username', fallback=None)
-                encrypted_password = config.get('CREDENTIALS', 'password', fallback=None)
-                if encrypted_password:
-                    self.password = decrypt_password(encrypted_password)
-    
-    async def upload_image_async(self, session, image_path, gallery_id=None, thumbnail_size=3, thumbnail_format=2):
-        """Upload a single image asynchronously"""
-        if not os.path.exists(image_path):
-            raise FileNotFoundError(f"Image file not found: {image_path}")
-        
-        # Prepare form data
-        data = aiohttp.FormData()
-        
-        # Add image file
-        with open(image_path, 'rb') as f:
-            data.add_field('image', f, filename=os.path.basename(image_path))
-        
-        # Add other parameters
-        if gallery_id:
-            data.add_field('gallery_id', str(gallery_id))
-        
-        data.add_field('format', 'all')
-        data.add_field('thumbnail_size', str(thumbnail_size))
-        data.add_field('thumbnail_format', str(thumbnail_format))
-        
-        try:
-            async with session.post(self.upload_url, data=data, headers=self.headers) as response:
-                if response.status == 200:
-                    result = await response.json()
-                    return result
-                else:
-                    text = await response.text()
-                    raise Exception(f"Upload failed with status {response.status}: {text}")
-        except Exception as e:
-            raise Exception(f"Network error during upload: {str(e)}")
-    
-    async def upload_folder_async(self, folder_path, gallery_name=None, thumbnail_size=3, thumbnail_format=2, max_retries=3, public_gallery=1, max_concurrent=4):
-        """Upload all images in a folder asynchronously with nested progress tracking"""
-        start_time = time.time()
-        
-        if not os.path.exists(folder_path):
-            raise FileNotFoundError(f"Folder not found: {folder_path}")
-        
-        # Get all image files and calculate total size
-        image_extensions = ('.jpg', '.jpeg', '.png', '.gif')
-        image_files = []
-        total_size = 0
-        
-        for f in os.listdir(folder_path):
-            if f.lower().endswith(image_extensions) and os.path.isfile(os.path.join(folder_path, f)):
-                image_files.append(f)
-                file_path = os.path.join(folder_path, f)
-                total_size += os.path.getsize(file_path)
-        
-        if not image_files:
-            raise ValueError(f"No image files found in {folder_path}")
-        
-        # Create gallery name
-        if not gallery_name:
-            gallery_name = os.path.basename(folder_path)
-        
-        original_name = gallery_name
-        gallery_name = sanitize_gallery_name(gallery_name)
-        if original_name != gallery_name:
-            print(f"{timestamp()} Sanitized gallery name: '{original_name}' -> '{gallery_name}'")
-        
-        # Create gallery (this would need to be implemented as async)
-        # For now, we'll use the sync version
-        uploader = ImxToUploader()
-        gallery_id = uploader.create_gallery_with_name(gallery_name, public_gallery, skip_login=True)
-        
-        if not gallery_id:
-            print("Failed to create named gallery, falling back to API-only upload...")
-            # For async mode, we'll create galleries without names and upload directly
-            # This bypasses the web interface entirely
-            async with aiohttp.ClientSession() as session:
-                return await self._upload_without_named_gallery_async(
-                    session, folder_path, image_files, thumbnail_size, thumbnail_format, max_retries, max_concurrent
-                )
-        
-        gallery_url = f"https://imx.to/g/{gallery_id}"
-        
-        # Results storage
-        results = {
-            'gallery_url': gallery_url,
-            'gallery_id': gallery_id,
-            'gallery_name': gallery_name,
-            'images': []
-        }
-        
-        # Create semaphore for limiting concurrent uploads
-        semaphore = asyncio.Semaphore(max_concurrent)
-        
-        async def upload_single_with_semaphore(image_file, attempt=1):
-            async with semaphore:
-                image_path = os.path.join(folder_path, image_file)
-                try:
-                    response = await self.upload_image_async(
-                        session, image_path, gallery_id, thumbnail_size, thumbnail_format
-                    )
-                    
-                    if response.get('status') == 'success':
-                        return image_file, response['data'], None
-                    else:
-                        return image_file, None, f"API error: {response}"
-                        
-                except Exception as e:
-                    return image_file, None, f"Network error: {str(e)}"
-        
-        # Main upload with nested progress tracking
-        async with aiohttp.ClientSession() as session:
-            self.session = session
-            
-            # Main progress bar
-            with NestedProgressBar(len(image_files), f"Uploading to {gallery_name}", level=0) as main_pbar:
-                uploaded_images = []
-                failed_images = []
-                
-                # Upload all images concurrently
-                tasks = [upload_single_with_semaphore(img_file) for img_file in image_files]
-                
-                # Process results as they complete
-                for coro in asyncio.as_completed(tasks):
-                    image_file, image_data, error = await coro
-                    
-                    if image_data:
-                        uploaded_images.append((image_file, image_data))
-                        main_pbar.set_postfix_str(f"✓ {image_file}")
-                    else:
-                        failed_images.append((image_file, error))
-                        main_pbar.set_postfix_str(f"✗ {image_file}")
-                    
-                    main_pbar.update(1)
-                
-                # Retry failed uploads
-                retry_count = 0
-                while failed_images and retry_count < max_retries:
-                    retry_count += 1
-                    retry_failed = []
-                    
-                    with NestedProgressBar(len(failed_images), f"Retry {retry_count}/{max_retries}", level=1) as retry_pbar:
-                        retry_tasks = [upload_single_with_semaphore(img_file, retry_count + 1) 
-                                     for img_file, _ in failed_images]
-                        
-                        for coro in asyncio.as_completed(retry_tasks):
-                            image_file, image_data, error = await coro
-                            
-                            if image_data:
-                                uploaded_images.append((image_file, image_data))
-                                retry_pbar.set_postfix_str(f"✓ {image_file}")
-                            else:
-                                retry_failed.append((image_file, error))
-                                retry_pbar.set_postfix_str(f"✗ {image_file}")
-                            
-                            retry_pbar.update(1)
-                    
-                    failed_images = retry_failed
-        
-        # Sort uploaded images by original file order
-        uploaded_images.sort(key=lambda x: image_files.index(x[0]))
-        
-        # Add to results
-        for _, image_data in uploaded_images:
-            results['images'].append(image_data)
-        
-        # Calculate statistics
-        end_time = time.time()
-        upload_time = end_time - start_time
-        
-        uploaded_size = sum(os.path.getsize(os.path.join(folder_path, img_file)) 
-                           for img_file, _ in uploaded_images)
-        transfer_speed = uploaded_size / upload_time if upload_time > 0 else 0
-        
-        results.update({
-            'upload_time': upload_time,
-            'total_size': total_size,
-            'uploaded_size': uploaded_size,
-            'transfer_speed': transfer_speed,
-            'successful_count': len(uploaded_images),
-            'failed_count': len(failed_images)
-        })
-        
-        # Create gallery folder and files
-        gallery_folder = os.path.join(folder_path, f"gallery_{gallery_id}")
-        os.makedirs(gallery_folder, exist_ok=True)
-        
-        # Create shortcut file
-        shortcut_content = f"""[InternetShortcut]
-URL=https://imx.to/g/{gallery_id}
-"""
-        shortcut_path = os.path.join(gallery_folder, f"gallery_{gallery_id}.url")
-        with open(shortcut_path, 'w', encoding='utf-8') as f:
-            f.write(shortcut_content)
-        
-        # Create bbcode file
-        bbcode_content = ""
-        for image_data in results['images']:
-            bbcode_content += image_data['bbcode'] + "\n"
-        
-        bbcode_path = os.path.join(gallery_folder, f"gallery_{gallery_id}_bbcode.txt")
-        with open(bbcode_path, 'w', encoding='utf-8') as f:
-            f.write(bbcode_content)
-        
-        return results
-    
-    async def _upload_without_named_gallery_async(self, session, folder_path, image_files, thumbnail_size, thumbnail_format, max_retries, max_concurrent):
-        """Upload images without creating a named gallery (API-only)"""
-        start_time = time.time()
-        
-        # Calculate total size
-        total_size = sum(os.path.getsize(os.path.join(folder_path, f)) for f in image_files)
-        
-        # Create semaphore for limiting concurrent uploads
-        semaphore = asyncio.Semaphore(max_concurrent)
-        
-        async def upload_single_with_semaphore(image_file, attempt=1):
-            async with semaphore:
-                image_path = os.path.join(folder_path, image_file)
-                try:
-                    response = await self.upload_image_async(
-                        session, image_path, None, thumbnail_size, thumbnail_format
-                    )
-                    
-                    if response.get('status') == 'success':
-                        return image_file, response['data'], None
-                    else:
-                        return image_file, None, f"API error: {response}"
-                        
-                except Exception as e:
-                    return image_file, None, f"Network error: {str(e)}"
-        
-        # Main upload with nested progress tracking
-        with NestedProgressBar(len(image_files), "Uploading images (API-only)", level=0) as main_pbar:
-            uploaded_images = []
-            failed_images = []
-            
-            # Upload all images concurrently
-            tasks = [upload_single_with_semaphore(img_file) for img_file in image_files]
-            
-            # Process results as they complete
-            for coro in asyncio.as_completed(tasks):
-                image_file, image_data, error = await coro
-                
-                if image_data:
-                    uploaded_images.append((image_file, image_data))
-                    main_pbar.set_postfix_str(f"✓ {image_file}")
-                else:
-                    failed_images.append((image_file, error))
-                    main_pbar.set_postfix_str(f"✗ {image_file}")
-                
-                main_pbar.update(1)
-            
-            # Retry failed uploads
-            retry_count = 0
-            while failed_images and retry_count < max_retries:
-                retry_count += 1
-                retry_failed = []
-                
-                with NestedProgressBar(len(failed_images), f"Retry {retry_count}/{max_retries}", level=1) as retry_pbar:
-                    retry_tasks = [upload_single_with_semaphore(img_file, retry_count + 1) 
-                                 for img_file, _ in failed_images]
-                    
-                    for coro in asyncio.as_completed(retry_tasks):
-                        image_file, image_data, error = await coro
-                        
-                        if image_data:
-                            uploaded_images.append((image_file, image_data))
-                            retry_pbar.set_postfix_str(f"✓ {image_file}")
-                        else:
-                            retry_failed.append((image_file, error))
-                            retry_pbar.set_postfix_str(f"✗ {image_file}")
-                        
-                        retry_pbar.update(1)
-                
-                failed_images = retry_failed
-        
-        # Sort uploaded images by original file order
-        uploaded_images.sort(key=lambda x: image_files.index(x[0]))
-        
-        # Calculate statistics
-        end_time = time.time()
-        upload_time = end_time - start_time
-        
-        uploaded_size = sum(os.path.getsize(os.path.join(folder_path, img_file)) 
-                           for img_file, _ in uploaded_images)
-        transfer_speed = uploaded_size / upload_time if upload_time > 0 else 0
-        
-        # Create results
-        results = {
-            'gallery_url': None,  # No gallery URL for API-only uploads
-            'gallery_id': None,
-            'gallery_name': None,
-            'images': [image_data for _, image_data in uploaded_images],
-            'upload_time': upload_time,
-            'total_size': total_size,
-            'uploaded_size': uploaded_size,
-            'transfer_speed': transfer_speed,
-            'successful_count': len(uploaded_images),
-            'failed_count': len(failed_images)
-        }
-        
-        return results
+
 
 def get_encryption_key():
     """Generate encryption key from system info"""
@@ -493,6 +168,8 @@ def load_user_defaults():
         return defaults
     return {}
 
+
+
 def setup_secure_password():
     """Interactive setup for secure password storage"""
     print("Setting up secure password storage for imx.to")
@@ -507,231 +184,253 @@ def setup_secure_password():
     if _save_credentials(username, password):
         print("[OK] Credentials saved successfully!")
         print("Note: Login test was skipped due to potential DDoS-Guard protection.")
+        print("You can test the credentials by running an upload.")
         return True
     else:
-        print("[ERROR] Failed to save credentials")
+        print("[ERROR] Failed to save credentials.")
         return False
 
 def _save_credentials(username, password):
-    """Save encrypted credentials to config file"""
-    try:
-        config = configparser.ConfigParser()
-        config_file = os.path.join(os.path.expanduser("~"), ".imxup.ini")
-        
-        if os.path.exists(config_file):
-            config.read(config_file)
-        
-        if 'CREDENTIALS' not in config:
-            config.add_section('CREDENTIALS')
-        
-        config.set('CREDENTIALS', 'username', username)
-        config.set('CREDENTIALS', 'password', encrypt_password(password))
-        
-        with open(config_file, 'w') as f:
-            config.write(f)
-        
-        return True
-    except Exception as e:
-        print(f"Error saving credentials: {str(e)}")
-        return False
-
-def save_unnamed_gallery(gallery_id, intended_name):
-    """Save an unnamed gallery ID with its intended name for later renaming"""
+    """Save credentials to config file"""
     config = configparser.ConfigParser()
-    config_file = os.path.join(get_central_storage_path(), "unnamed_galleries.ini")
+    config_file = os.path.join(os.path.expanduser("~"), ".imxup.ini")
     
     if os.path.exists(config_file):
         config.read(config_file)
     
-    if 'GALLERIES' not in config:
-        config.add_section('GALLERIES')
+    if 'CREDENTIALS' not in config:
+        config['CREDENTIALS'] = {}
     
-    config.set('GALLERIES', gallery_id, intended_name)
+    config['CREDENTIALS']['username'] = username
+    config['CREDENTIALS']['password'] = encrypt_password(password)
     
     with open(config_file, 'w') as f:
         config.write(f)
+    
+    print(f"[OK] Credentials saved to {config_file}")
+    return True
+
+def save_unnamed_gallery(gallery_id, intended_name):
+    """Save unnamed gallery for later renaming"""
+    config = configparser.ConfigParser()
+    config_file = os.path.join(os.path.expanduser("~"), ".imxup.ini")
+    
+    if os.path.exists(config_file):
+        config.read(config_file)
+    
+    if 'UNNAMED_GALLERIES' not in config:
+        config['UNNAMED_GALLERIES'] = {}
+    
+    config['UNNAMED_GALLERIES'][gallery_id] = intended_name
+    
+    with open(config_file, 'w') as f:
+        config.write(f)
+    
+    print(f"Saved unnamed gallery {gallery_id} for later renaming to '{intended_name}'")
 
 def get_central_storage_path():
-    """Get the central storage path for configuration files"""
-    return os.path.expanduser("~")
+    """Get central storage path for gallery files"""
+    central_path = os.path.join(os.path.expanduser("~"), "imxup_galleries")
+    os.makedirs(central_path, exist_ok=True)
+    return central_path
 
 def sanitize_gallery_name(name):
-    """Sanitize gallery name for imx.to"""
-    # Remove or replace invalid characters
-    name = re.sub(r'[<>:"/\\|?*]', '_', name)
-    # Limit length
-    if len(name) > 100:
-        name = name[:97] + "..."
-    return name
+    """Remove invalid characters from gallery name"""
+    import re
+    # Keep alphanumeric, spaces, hyphens, dashes, round brackets
+    # Remove everything else (square brackets, periods, number signs, etc.)
+    sanitized = re.sub(r'[^a-zA-Z0-9\s\-\(\)]', '', name)
+    # Remove multiple spaces
+    sanitized = re.sub(r'\s+', ' ', sanitized)
+    # Trim spaces
+    sanitized = sanitized.strip()
+    return sanitized
 
 def check_if_gallery_exists(folder_name):
-    """Check if a gallery with this name already exists by looking for files"""
-    sanitized_name = sanitize_gallery_name(folder_name)
-    pattern = f"gallery_*_{sanitized_name}*"
+    """Check if gallery files already exist for this folder"""
+    central_path = get_central_storage_path()
+    
+    # Check central location
+    central_files = [
+        os.path.join(central_path, f"{folder_name}.url"),
+        os.path.join(central_path, f"{folder_name}_bbcode.txt")
+    ]
+    
+    # Check folder location
+    folder_files = [
+        os.path.join(folder_name, f"gallery_*.url"),
+        os.path.join(folder_name, f"gallery_*_bbcode.txt")
+    ]
     
     existing_files = []
-    for root, dirs, files in os.walk("."):
-        for file in files:
-            if file.startswith("gallery_") and sanitized_name.lower() in file.lower():
-                existing_files.append(os.path.join(root, file))
+    for file_path in central_files:
+        if os.path.exists(file_path):
+            existing_files.append(file_path)
+    
+    for pattern in folder_files:
+        if glob.glob(pattern):
+            existing_files.extend(glob.glob(pattern))
     
     return existing_files
 
 def get_unnamed_galleries():
-    """Get all unnamed galleries that need renaming"""
+    """Get list of unnamed galleries"""
     config = configparser.ConfigParser()
-    config_file = os.path.join(get_central_storage_path(), "unnamed_galleries.ini")
+    config_file = os.path.join(os.path.expanduser("~"), ".imxup.ini")
     
-    if not os.path.exists(config_file):
-        return {}
-    
-    config.read(config_file)
-    
-    if 'GALLERIES' not in config:
-        return {}
-    
-    return dict(config.items('GALLERIES'))
+    if os.path.exists(config_file):
+        config.read(config_file)
+        if 'UNNAMED_GALLERIES' in config:
+            return dict(config['UNNAMED_GALLERIES'])
+    return {}
 
 def remove_unnamed_gallery(gallery_id):
-    """Remove an unnamed gallery from the list after successful renaming"""
+    """Remove gallery from unnamed list after successful renaming"""
     config = configparser.ConfigParser()
-    config_file = os.path.join(get_central_storage_path(), "unnamed_galleries.ini")
+    config_file = os.path.join(os.path.expanduser("~"), ".imxup.ini")
     
-    if not os.path.exists(config_file):
-        return
-    
-    config.read(config_file)
-    
-    if 'GALLERIES' in config and config.has_option('GALLERIES', gallery_id):
-        config.remove_option('GALLERIES', gallery_id)
+    if os.path.exists(config_file):
+        config.read(config_file)
         
-        with open(config_file, 'w') as f:
-            config.write(f)
+        if 'UNNAMED_GALLERIES' in config and gallery_id in config['UNNAMED_GALLERIES']:
+            del config['UNNAMED_GALLERIES'][gallery_id]
+            
+            with open(config_file, 'w') as f:
+                config.write(f)
+            
+            print(f"{timestamp()} Removed {gallery_id} from unnamed galleries list")
 
 def get_firefox_cookies(domain="imx.to"):
-    """Extract cookies from Firefox browser"""
-    cookies = {}
-    
+    """Extract cookies from Firefox browser for the given domain"""
     try:
-        # Try to find Firefox profile directory
+        # Find Firefox profile directory
         if platform.system() == "Windows":
-            appdata = os.getenv('APPDATA')
-            firefox_path = os.path.join(appdata, "Mozilla", "Firefox", "Profiles")
+            firefox_dir = os.path.join(os.environ['APPDATA'], 'Mozilla', 'Firefox', 'Profiles')
         else:
-            home = os.path.expanduser("~")
-            firefox_path = os.path.join(home, ".mozilla", "firefox")
+            firefox_dir = os.path.join(os.path.expanduser("~"), '.mozilla', 'firefox')
         
-        if not os.path.exists(firefox_path):
-            return cookies
+        if not os.path.exists(firefox_dir):
+            print(f"Firefox profiles directory not found: {firefox_dir}")
+            return {}
         
-        # Find the default profile
-        profiles = [d for d in os.listdir(firefox_path) if d.endswith('.default') or d.endswith('.default-release')]
+        # Find the default profile (usually ends with .default-release)
+        profiles = [d for d in os.listdir(firefox_dir) if d.endswith('.default-release')]
         if not profiles:
-            return cookies
+            # Try any profile that contains 'default'
+            profiles = [d for d in os.listdir(firefox_dir) if 'default' in d]
         
-        profile_dir = os.path.join(firefox_path, profiles[0])
-        cookies_file = os.path.join(profile_dir, "cookies.sqlite")
+        if not profiles:
+            print(f"{timestamp()} No Firefox profile found")
+            return {}
         
-        if not os.path.exists(cookies_file):
-            return cookies
+        profile_dir = os.path.join(firefox_dir, profiles[0])
+        cookie_file = os.path.join(profile_dir, 'cookies.sqlite')
         
-        # Copy cookies file to temp location (Firefox locks the original)
-        import tempfile
-        import shutil
+        if not os.path.exists(cookie_file):
+            print(f"{timestamp()} Firefox cookie file not found: {cookie_file}")
+            return {}
         
-        temp_cookies = tempfile.NamedTemporaryFile(delete=False, suffix='.sqlite')
-        shutil.copy2(cookies_file, temp_cookies.name)
-        temp_cookies.close()
+        # Extract cookies from the database
+        cookies = {}
+        conn = sqlite3.connect(cookie_file)
+        cursor = conn.cursor()
         
-        try:
-            # Read cookies from SQLite database
-            conn = sqlite3.connect(temp_cookies.name)
-            cursor = conn.cursor()
-            
-            cursor.execute("""
-                SELECT name, value, host, path, expiry 
-                FROM moz_cookies 
-                WHERE host LIKE ?
-            """, (f"%{domain}%",))
-            
-            for name, value, host, path, expiry in cursor.fetchall():
-                cookies[name] = {
-                    'value': value,
-                    'domain': host,
-                    'path': path,
-                    'expiry': expiry
-                }
-            
-            conn.close()
-            
-        finally:
-            # Clean up temp file
-            os.unlink(temp_cookies.name)
-            
+        cursor.execute("""
+            SELECT name, value, host, path, expiry, isSecure
+            FROM moz_cookies 
+            WHERE host LIKE ?
+        """, (f'%{domain}%',))
+        
+        for row in cursor.fetchall():
+            name, value, host, path, expires, secure = row
+            cookies[name] = {
+                'value': value,
+                'domain': host,
+                'path': path,
+                'secure': bool(secure)
+            }
+        
+        conn.close()
+        
+        return cookies
+        
     except Exception as e:
-        print(f"Error reading Firefox cookies: {str(e)}")
-    
-    return cookies
+        print(f"{timestamp()} Error extracting Firefox cookies: {e}")
+        return {}
 
 def load_cookies_from_file(cookie_file="cookies.txt"):
-    """Load cookies from a cookies.txt file"""
+    """Load cookies from a text file in Netscape format"""
     cookies = {}
-    
-    if not os.path.exists(cookie_file):
-        print(f"Cookie file not found: {cookie_file}")
-        return cookies
-    
     try:
-        with open(cookie_file, 'r') as f:
-            for line in f:
-                line = line.strip()
-                if line.startswith('#') or not line:
-                    continue
-                
-                parts = line.split('\t')
-                if len(parts) >= 7:
-                    domain, _, path, secure, expiry, name, value = parts[:7]
-                    cookies[name] = {
-                        'value': value,
-                        'domain': domain,
-                        'path': path,
-                        'expiry': expiry
-                    }
+        if os.path.exists(cookie_file):
+            with open(cookie_file, 'r') as f:
+                for line in f:
+                    line = line.strip()
+                    if line and not line.startswith('#') and '\t' in line:
+                        parts = line.split('\t')
+                        if len(parts) >= 7 and 'imx.to' in parts[0]:
+                            domain, subdomain, path, secure, expiry, name, value = parts[:7]
+                            cookies[name] = {
+                                'value': value,
+                                'domain': domain,
+                                'path': path,
+                                'secure': secure == 'TRUE'
+                            }
+            print(f"{timestamp()} Loaded {len(cookies)} cookies from {cookie_file}")
+        else:
+            print(f"{timestamp()} Cookie file not found: {cookie_file}")
     except Exception as e:
-        print(f"Error reading cookie file: {str(e)}")
-    
+        print(f"{timestamp()} Error loading cookies: {e}")
     return cookies
 
 class ImxToUploader:
     def _get_credentials(self):
-        """Load stored credentials"""
+        """Get username and password from stored config"""
         config = configparser.ConfigParser()
         config_file = os.path.join(os.path.expanduser("~"), ".imxup.ini")
         
         if os.path.exists(config_file):
             config.read(config_file)
             if 'CREDENTIALS' in config:
-                self.username = config.get('CREDENTIALS', 'username', fallback=None)
-                encrypted_password = config.get('CREDENTIALS', 'password', fallback=None)
-                if encrypted_password:
-                    self.password = decrypt_password(encrypted_password)
+                username = config['CREDENTIALS'].get('username')
+                encrypted_password = config['CREDENTIALS'].get('password', '')
+                
+                if username and encrypted_password:
+                    password = decrypt_password(encrypted_password)
+                    if password:
+                        return username, password
+        
+        return None, None
     
     def __init__(self):
-        self.upload_url = "https://imx.to/api/upload"
-        self.web_url = "https://imx.to"
-        self.username = None
-        self.password = None
-        self.session = None
-        self._get_credentials()
+        self.api_key = os.getenv('IMX_API')
         
-        # Default headers for API requests
+        if not self.api_key:
+            raise ValueError("IMX_API key not found in environment variables")
+        
+        # Get credentials from stored config
+        self.username, self.password = self._get_credentials()
+        
+        if not self.username or not self.password:
+            print(f"{timestamp()} Failed to get credentials. Please run --setup-secure first.")
+            sys.exit(1)
+        
+        self.base_url = "https://api.imx.to/v1"
+        self.web_url = "https://imx.to"
+        self.upload_url = f"{self.base_url}/upload.php"
         self.headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:141.0) Gecko/20100101 Firefox/141.0'
+            "X-API-Key": self.api_key
         }
         
-        # Initialize session
+        # Session for web interface
         self.session = requests.Session()
-        self.session.headers.update(self.headers)
+        self.session.headers.update({
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:141.0) Gecko/20100101 Firefox/141.0',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            'Accept-Language': 'en-US',
+            'Accept-Encoding': 'gzip, deflate, br, zstd',
+            'DNT': '1'
+        })
     
     def login(self):
         """Login to imx.to web interface"""
@@ -1532,10 +1231,7 @@ def main():
                        help='Set up secure password storage (interactive)')
     parser.add_argument('--rename-unnamed', action='store_true',
                        help='Rename all unnamed galleries from previous uploads')
-    parser.add_argument('--use-async', action='store_true',
-                       help='Use async upload implementation (experimental)')
-    parser.add_argument('--max-concurrent', type=int, default=4,
-                       help='Maximum concurrent uploads for async mode (default: 4)')
+
     parser.add_argument('--install-context-menu', action='store_true',
                        help='Install Windows context menu integration')
     parser.add_argument('--remove-context-menu', action='store_true',
@@ -1656,54 +1352,24 @@ def main():
             print(f"{timestamp()} Login failed - falling back to API-only uploads")
         
         # Process multiple galleries
-        if args.use_async:
-            # Use async uploader
-            async_uploader = AsyncImxToUploader()
+        for folder_path in expanded_paths:
+            # Use folder name as gallery name if not specified
+            gallery_name = args.name if args.name else None
             
-            async def upload_all_folders():
-                for folder_path in expanded_paths:
-                    gallery_name = args.name if args.name else None
-                    
-                    try:
-                        results = await async_uploader.upload_folder_async(
-                            folder_path,
-                            gallery_name,
-                            thumbnail_size=args.thumbnail_size,
-                            thumbnail_format=args.thumbnail_format,
-                            max_retries=args.max_retries,
-                            public_gallery=public_gallery,
-                            max_concurrent=args.max_concurrent
-                        )
-                        if results:
-                            all_results.append(results)
-                        
-                    except Exception as e:
-                        print(f"Error uploading {folder_path}: {str(e)}", file=sys.stderr)
-                        continue
+            try:
+                results = uploader.upload_folder(
+                    folder_path, 
+                    gallery_name,
+                    thumbnail_size=args.thumbnail_size,
+                    thumbnail_format=args.thumbnail_format,
+                    max_retries=args.max_retries,
+                    public_gallery=public_gallery
+                )
+                all_results.append(results)
                 
-                return all_results
-            
-            # Run async upload
-            all_results = asyncio.run(upload_all_folders())
-        else:
-            # Use sync uploader
-            for folder_path in expanded_paths:
-                gallery_name = args.name if args.name else None
-                
-                try:
-                    results = uploader.upload_folder(
-                        folder_path, 
-                        gallery_name,
-                        thumbnail_size=args.thumbnail_size,
-                        thumbnail_format=args.thumbnail_format,
-                        max_retries=args.max_retries,
-                        public_gallery=public_gallery
-                    )
-                    all_results.append(results)
-                    
-                except Exception as e:
-                    print(f"Error uploading {folder_path}: {str(e)}", file=sys.stderr)
-                    continue
+            except Exception as e:
+                print(f"Error uploading {folder_path}: {str(e)}", file=sys.stderr)
+                continue
         
         # Display summary for all galleries
         if all_results:
