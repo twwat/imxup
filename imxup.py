@@ -48,13 +48,10 @@ def create_windows_context_menu():
             # If running as script, use the compiled exe
             exe_path = os.path.join(os.path.dirname(exe_path), 'imx2.exe')
         
-        # Create registry entries
+        # Create registry entries for command line upload
         key_path = r"Directory\Background\shell\UploadToImx"
         key = winreg.CreateKey(winreg.HKEY_CLASSES_ROOT, key_path)
         winreg.SetValue(key, "", winreg.REG_SZ, "Upload to imx.to")
-        
-        # Set icon (optional)
-        # winreg.SetValue(key, "Icon", winreg.REG_SZ, exe_path)
         
         # Create command
         command_key = winreg.CreateKey(key, "command")
@@ -63,8 +60,22 @@ def create_windows_context_menu():
         winreg.CloseKey(command_key)
         winreg.CloseKey(key)
         
+        # Create registry entries for GUI mode
+        gui_key_path = r"Directory\Background\shell\UploadToImxGUI"
+        gui_key = winreg.CreateKey(winreg.HKEY_CLASSES_ROOT, gui_key_path)
+        winreg.SetValue(gui_key, "", winreg.REG_SZ, "Upload to imx.to (GUI)")
+        
+        # Create GUI command
+        gui_command_key = winreg.CreateKey(gui_key, "command")
+        winreg.SetValue(gui_command_key, "", winreg.REG_SZ, f'"{exe_path}" --gui "%V"')
+        
+        winreg.CloseKey(gui_command_key)
+        winreg.CloseKey(gui_key)
+        
         print(f"Context menu created successfully!")
-        print(f"Right-click on any folder and select 'Upload to imx.to'")
+        print(f"Right-click on any folder and select:")
+        print(f"  - 'Upload to imx.to' for command line mode")
+        print(f"  - 'Upload to imx.to (GUI)' for graphical interface")
         return True
         
     except Exception as e:
@@ -74,8 +85,22 @@ def create_windows_context_menu():
 def remove_windows_context_menu():
     """Remove Windows context menu integration"""
     try:
-        key_path = r"Directory\Background\shell\UploadToImx"
-        winreg.DeleteKey(winreg.HKEY_CLASSES_ROOT, key_path)
+        # Remove command line context menu
+        try:
+            key_path = r"Directory\Background\shell\UploadToImx"
+            winreg.DeleteKey(winreg.HKEY_CLASSES_ROOT, key_path + r"\command")
+            winreg.DeleteKey(winreg.HKEY_CLASSES_ROOT, key_path)
+        except FileNotFoundError:
+            pass  # Key doesn't exist
+        
+        # Remove GUI context menu
+        try:
+            gui_key_path = r"Directory\Background\shell\UploadToImxGUI"
+            winreg.DeleteKey(winreg.HKEY_CLASSES_ROOT, gui_key_path + r"\command")
+            winreg.DeleteKey(winreg.HKEY_CLASSES_ROOT, gui_key_path)
+        except FileNotFoundError:
+            pass  # Key doesn't exist
+        
         print("Context menu removed successfully!")
         return True
     except Exception as e:
@@ -1236,8 +1261,35 @@ def main():
                        help='Install Windows context menu integration')
     parser.add_argument('--remove-context-menu', action='store_true',
                        help='Remove Windows context menu integration')
+    parser.add_argument('--gui', action='store_true',
+                       help='Launch graphical user interface')
     
     args = parser.parse_args()
+    
+    # Handle GUI launch
+    if args.gui:
+        try:
+            # Try to import GUI module
+            import imxup_gui
+            
+            # Check if folder paths were provided for GUI
+            if args.folder_paths:
+                # Pass folder paths to GUI for initial loading
+                sys.argv = [sys.argv[0]] + args.folder_paths
+            else:
+                # Remove GUI arg to avoid conflicts
+                sys.argv = [sys.argv[0]]
+            
+            # Launch GUI
+            imxup_gui.main()
+            return
+        except ImportError as e:
+            print(f"{timestamp()} Error: PyQt6 is required for GUI mode. Install with: pip install PyQt6")
+            print(f"{timestamp()} Import error: {e}")
+            sys.exit(1)
+        except Exception as e:
+            print(f"{timestamp()} Error launching GUI: {e}")
+            sys.exit(1)
     
     # Handle secure setup
     if args.setup_secure:
@@ -1357,6 +1409,7 @@ def main():
             gallery_name = args.name if args.name else None
             
             try:
+                print(f"{timestamp()} Starting upload: {os.path.basename(folder_path)}")
                 results = uploader.upload_folder(
                     folder_path, 
                     gallery_name,
@@ -1367,6 +1420,9 @@ def main():
                 )
                 all_results.append(results)
                 
+            except KeyboardInterrupt:
+                print(f"\n{timestamp()} Upload interrupted by user")
+                break
             except Exception as e:
                 print(f"Error uploading {folder_path}: {str(e)}", file=sys.stderr)
                 continue
@@ -1407,6 +1463,9 @@ def main():
 if __name__ == "__main__":
     try:
         main()
+    except KeyboardInterrupt:
+        print("\nExiting gracefully...")
+        sys.exit(0)
     except SystemExit:
         # Handle argparse errors gracefully in PyInstaller
         pass
