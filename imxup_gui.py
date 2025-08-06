@@ -10,6 +10,7 @@ import json
 import socket
 import threading
 import time
+import configparser
 from pathlib import Path
 from datetime import datetime
 from queue import Queue, Empty
@@ -22,7 +23,8 @@ from PyQt6.QtWidgets import (
     QGroupBox, QSplitter, QTextEdit, QComboBox, QSpinBox, QCheckBox,
     QMessageBox, QSystemTrayIcon, QMenu, QFrame, QScrollArea,
     QGridLayout, QSizePolicy, QTabWidget, QFileDialog, QTableWidget,
-    QTableWidgetItem, QHeaderView, QDialog, QDialogButtonBox, QPlainTextEdit
+    QTableWidgetItem, QHeaderView, QDialog, QDialogButtonBox, QPlainTextEdit,
+    QLineEdit
 )
 from PyQt6.QtCore import (
     Qt, QThread, pyqtSignal, QTimer, QMimeData, QUrl, 
@@ -31,10 +33,24 @@ from PyQt6.QtCore import (
 from PyQt6.QtGui import QDragEnterEvent, QDropEvent, QIcon, QFont, QPixmap, QPainter, QColor
 
 # Import the core uploader functionality
-from imxup import ImxToUploader, load_user_defaults, timestamp, sanitize_gallery_name
+from imxup import ImxToUploader, load_user_defaults, timestamp, sanitize_gallery_name, encrypt_password, decrypt_password
 
 # Single instance communication port
 COMMUNICATION_PORT = 27849
+
+def check_stored_credentials():
+    """Check if credentials are stored"""
+    config = configparser.ConfigParser()
+    config_file = os.path.join(os.path.expanduser("~"), ".imxup.ini")
+    
+    if os.path.exists(config_file):
+        config.read(config_file)
+        if 'CREDENTIALS' in config:
+            username = config.get('CREDENTIALS', 'username', fallback='')
+            encrypted_password = config.get('CREDENTIALS', 'password', fallback='')
+            if username and encrypted_password:
+                return True
+    return False
 
 @dataclass
 class GalleryQueueItem:
@@ -116,12 +132,9 @@ class GUIImxToUploader(ImxToUploader):
             if self.worker_thread:
                 self.worker_thread.log_message.emit(f"{timestamp()} Sanitized gallery name: '{original_name}' -> '{gallery_name}'")
         
-        # Check if gallery already exists - for GUI, skip interactive prompt
-        from imxup import check_if_gallery_exists
-        existing_files = check_if_gallery_exists(gallery_name)
-        if existing_files:
-            if self.worker_thread:
-                self.worker_thread.log_message.emit(f"{timestamp()} Found existing gallery files for '{gallery_name}', continuing anyway...")
+        # Gallery name is already validated at add time, so we can proceed
+        if self.worker_thread:
+            self.worker_thread.log_message.emit(f"{timestamp()} Starting upload for gallery: {gallery_name}")
         
         # Create gallery (skip login since it's already done)
         gallery_id = self.create_gallery_with_name(gallery_name, public_gallery, skip_login=True)
@@ -258,6 +271,133 @@ URL=https://imx.to/g/{gallery_id}
         print(f"{timestamp()} Gallery upload completed successfully")
         
         return results
+    
+    def _upload_without_named_gallery(self, folder_path, image_files, thumbnail_size, thumbnail_format, max_retries):
+        """Override to add progress tracking for GUI"""
+        start_time = time.time()
+        
+        if self.worker_thread:
+            self.worker_thread.log_message.emit(f"{timestamp()} Using API-only upload (no gallery naming)")
+        
+        # Upload first image and create gallery
+        first_image_path = os.path.join(folder_path, image_files[0])
+        if self.worker_thread:
+            self.worker_thread.log_message.emit(f"{timestamp()} Uploading first image: {image_files[0]}")
+        
+        first_response = self.upload_image(first_image_path, create_gallery=True, 
+                                          thumbnail_size=thumbnail_size, thumbnail_format=thumbnail_format)
+        
+        if first_response.get('status') != 'success':
+            raise Exception(f"{timestamp()} Failed to create gallery: {first_response}")
+        
+        # Get gallery ID from first upload
+        gallery_id = first_response['data'].get('gallery_id')
+        gallery_url = f"https://imx.to/g/{gallery_id}"
+        
+        # Save for later renaming (with sanitized name)
+        folder_name = sanitize_gallery_name(os.path.basename(folder_path))
+        from imxup import save_unnamed_gallery
+        save_unnamed_gallery(gallery_id, folder_name)
+        if self.worker_thread:
+            self.worker_thread.log_message.emit(f"{timestamp()} Saved unnamed gallery {gallery_id} for later renaming to '{folder_name}'")
+        
+        # Store results
+        results = {
+            'gallery_url': gallery_url,
+            'images': [first_response['data']]
+        }
+        
+        # Upload remaining images with progress tracking
+        def upload_single_image(image_file, attempt=1):
+            image_path = os.path.join(folder_path, image_file)
+            
+            try:
+                response = self.upload_image(image_path, gallery_id=gallery_id,
+                                           thumbnail_size=thumbnail_size, thumbnail_format=thumbnail_format)
+                
+                if response.get('status') == 'success':
+                    return image_file, response['data'], None
+                else:
+                    error_msg = f"API error: {response}"
+                    return image_file, None, error_msg
+                    
+            except Exception as e:
+                error_msg = f"Network error: {str(e)}"
+                return image_file, None, error_msg
+        
+        # Upload remaining images sequentially for progress tracking
+        uploaded_images = []
+        failed_images = []
+        
+        # Upload images sequentially for progress tracking
+        for i, image_file in enumerate(image_files[1:], 1):  # Start from 1 since first image is already uploaded
+            if self.worker_thread:
+                self.worker_thread.log_message.emit(f"{timestamp()} [{i+1}/{len(image_files)}] Uploading: {image_file}")
+            
+            image_file_result, image_data, error = upload_single_image(image_file)
+            
+            if image_data:
+                uploaded_images.append((image_file_result, image_data))
+                if self.worker_thread:
+                    self.worker_thread.log_message.emit(f"{timestamp()} ✓ Uploaded: {image_file}")
+            else:
+                failed_images.append((image_file_result, error))
+                if self.worker_thread:
+                    self.worker_thread.log_message.emit(f"{timestamp()} ✗ Failed: {image_file} - {error}")
+            
+            # Update progress after each image
+            completed_count = len(uploaded_images) + 1  # +1 for first image
+            progress_percent = int((completed_count / len(image_files)) * 100)
+            
+            if self.worker_thread:
+                self.worker_thread.progress_updated.emit(
+                    folder_path, completed_count, len(image_files), progress_percent, image_file
+                )
+                self.worker_thread.log_message.emit(f"{timestamp()} Progress: {completed_count}/{len(image_files)} ({progress_percent}%)")
+        
+        # Retry failed uploads
+        retry_count = 0
+        while failed_images and retry_count < max_retries:
+            retry_count += 1
+            retry_failed = []
+            
+            for image_file, _ in failed_images:
+                image_file_result, image_data, error = upload_single_image(image_file, retry_count + 1)
+                if image_data:
+                    uploaded_images.append((image_file_result, image_data))
+                else:
+                    retry_failed.append((image_file_result, error))
+            
+            failed_images = retry_failed
+        
+        # Sort uploaded images by original file order
+        uploaded_images.sort(key=lambda x: image_files.index(x[0]))
+        
+        # Add to results in correct order
+        for _, image_data in uploaded_images:
+            results['images'].append(image_data)
+        
+        # Calculate statistics
+        end_time = time.time()
+        upload_time = end_time - start_time
+        
+        # Calculate transfer speed
+        uploaded_size = sum(os.path.getsize(os.path.join(folder_path, img_file)) 
+                           for img_file, _ in uploaded_images)
+        transfer_speed = uploaded_size / upload_time if upload_time > 0 else 0
+        
+        # Add statistics to results
+        results.update({
+            'gallery_id': gallery_id,
+            'gallery_name': folder_name,
+            'upload_time': upload_time,
+            'uploaded_size': uploaded_size,
+            'transfer_speed': transfer_speed,
+            'successful_count': len(uploaded_images) + 1,  # +1 for first image
+            'failed_count': len(failed_images)
+        })
+        
+        return results
 
 class UploadWorker(QThread):
     """Worker thread for uploading galleries"""
@@ -267,6 +407,7 @@ class UploadWorker(QThread):
     gallery_started = pyqtSignal(str, int)  # path, total_images
     gallery_completed = pyqtSignal(str, dict)  # path, results
     gallery_failed = pyqtSignal(str, str)  # path, error_message
+    gallery_exists = pyqtSignal(str, list)  # gallery_name, existing_files
     log_message = pyqtSignal(str)
     
     def __init__(self, queue_manager):
@@ -382,7 +523,8 @@ class QueueManager:
         """Save queue state to persistent storage"""
         queue_data = []
         for item in self.items.values():
-            if item.status in ["ready", "queued", "paused", "completed"]:  # Save all persistent items
+            # Save all items except failed ones (unless they're completed)
+            if item.status in ["ready", "queued", "paused", "completed"]:
                 queue_data.append({
                     'path': item.path,
                     'name': item.name,
@@ -398,14 +540,21 @@ class QueueManager:
                 })
         
         self.settings.setValue("queue_items", queue_data)
+        self.settings.sync()  # Force sync to disk
+        print(f"DEBUG: Saved {len(queue_data)} items to persistent storage")
+        print(f"DEBUG: Current items in memory: {list(self.items.keys())}")
+        print(f"DEBUG: Items being saved: {[item['path'] for item in queue_data]}")
     
     def load_persistent_queue(self):
         """Load queue state from persistent storage"""
         queue_data = self.settings.value("queue_items", [])
+        print(f"DEBUG: Loading persistent queue with {len(queue_data)} items")
         if queue_data:
             for item_data in queue_data:
                 path = item_data.get('path', '')
                 status = item_data.get('status', 'ready')
+                
+                print(f"DEBUG: Loading item: {path} (status: {status})")
                 
                 # For completed items, don't check if path exists (might be moved/deleted)
                 if status == "completed" or (os.path.exists(path) and os.path.isdir(path)):
@@ -426,6 +575,7 @@ class QueueManager:
                         )
                         self._next_order = max(self._next_order, item.insertion_order + 1)
                         self.items[path] = item
+                        print(f"DEBUG: Loaded completed item: {path}")
                     else:
                         # Check for images and count them for non-completed items
                         image_extensions = ('.jpg', '.jpeg', '.png', '.gif')
@@ -435,18 +585,31 @@ class QueueManager:
                                 image_files.append(f)
                         
                         if image_files:
+                            # Reset status to "ready" when loading to prevent auto-start
+                            load_status = "ready" if status in ["queued", "uploading"] else status
                             item = GalleryQueueItem(
                                 path=path,
                                 name=item_data.get('name'),
-                                status=status,
+                                status=load_status,
                                 total_images=len(image_files),  # Set the total count
                                 insertion_order=item_data.get('insertion_order', self._next_order),
                                 added_time=item_data.get('added_time')
                             )
                             self._next_order = max(self._next_order, item.insertion_order + 1)
                             self.items[path] = item
-                            if item.status == "queued":
-                                self.queue.put(item)
+                            print(f"DEBUG: Loaded item: {path}")
+                        else:
+                            print(f"DEBUG: Skipped item (no images): {path}")
+                else:
+                    print(f"DEBUG: Skipped item (path doesn't exist): {path}")
+        
+        print(f"DEBUG: Loaded {len(self.items)} items total")
+    
+    def clear_persistent_queue(self):
+        """Clear persistent queue storage (for testing)"""
+        self.settings.remove("queue_items")
+        self.settings.sync()
+        print("DEBUG: Cleared persistent queue storage")
         
     def add_item(self, path: str, name: Optional[str] = None) -> bool:
         """Add a gallery to the queue"""
@@ -467,10 +630,19 @@ class QueueManager:
             
             if not image_files:
                 return False
+            
+            # Check for existing gallery files
+            gallery_name = name or sanitize_gallery_name(os.path.basename(path))
+            from imxup import check_if_gallery_exists
+            existing_files = check_if_gallery_exists(gallery_name)
+            
+            if existing_files:
+                # Return special value to indicate duplicate
+                return "duplicate"
                 
             item = GalleryQueueItem(
                 path=path,
-                name=name or sanitize_gallery_name(os.path.basename(path)),
+                name=gallery_name,
                 status="ready",  # Items start as ready
                 total_images=len(image_files),  # Set the total count immediately
                 insertion_order=self._next_order,
@@ -505,7 +677,10 @@ class QueueManager:
     def remove_item(self, path: str) -> bool:
         """Remove a gallery from the queue"""
         with QMutexLocker(self.mutex):
-            if path in self.items and self.items[path].status == "queued":
+            if path in self.items:
+                # Only prevent deletion of currently uploading items
+                if self.items[path].status == "uploading":
+                    return False
                 del self.items[path]
                 self.renumber_insertion_orders()
                 return True
@@ -533,7 +708,9 @@ class QueueManager:
     def get_all_items(self) -> List[GalleryQueueItem]:
         """Get all items, sorted by insertion order"""
         with QMutexLocker(self.mutex):
-            return sorted(self.items.values(), key=lambda x: x.insertion_order)
+            items = sorted(self.items.values(), key=lambda x: x.insertion_order)
+            #print(f"DEBUG: get_all_items returning {len(items)} items: {[item.path for item in items]}")
+            return items
     
     def get_item(self, path: str) -> Optional[GalleryQueueItem]:
         """Get a specific item by path"""
@@ -563,7 +740,7 @@ class QueueManager:
             for path in to_remove:
                 del self.items[path]
             
-            # Renumber remaining items
+            # Renumber remaining items (don't save persistent queue yet)
             if to_remove:
                 self.renumber_insertion_orders()
             
@@ -573,16 +750,66 @@ class QueueManager:
         """Remove specific items from the queue"""
         with QMutexLocker(self.mutex):
             removed_count = 0
+            print(f"DEBUG: remove_items called with paths: {paths}")
+            print(f"DEBUG: Current items: {list(self.items.keys())}")
+            
             for path in paths:
+                print(f"DEBUG: Checking path: {path}")
                 if path in self.items:
+                    print(f"DEBUG: Path found, status: {self.items[path].status}")
+                    # Only prevent deletion of currently uploading items
+                    if self.items[path].status == "uploading":
+                        print(f"DEBUG: Skipping uploading item: {path}")
+                        continue
+                    print(f"DEBUG: Deleting item: {path}")
                     del self.items[path]
                     removed_count += 1
+                else:
+                    print(f"DEBUG: Path not found: {path}")
             
-            # Renumber remaining items
+            print(f"DEBUG: Removed count: {removed_count}")
+            print(f"DEBUG: Items remaining after deletion: {list(self.items.keys())}")
+            
+            # Verify deletion actually worked
+            for path in paths:
+                if path in self.items:
+                    print(f"ERROR: Item {path} was NOT actually deleted!")
+                else:
+                    print(f"SUCCESS: Item {path} was actually deleted")
+            
+            # Renumber remaining items (don't save persistent queue yet - let GUI handle it)
             if removed_count > 0:
                 self.renumber_insertion_orders()
+                print(f"DEBUG: Renumbered items after deletion")
             
             return removed_count
+    
+    def _force_add_item(self, path: str, name: str):
+        """Force add an item (for duplicate handling)"""
+        with QMutexLocker(self.mutex):
+            # Check for images and count them
+            image_extensions = ('.jpg', '.jpeg', '.png', '.gif')
+            image_files = []
+            for f in os.listdir(path):
+                if f.lower().endswith(image_extensions) and os.path.isfile(os.path.join(path, f)):
+                    image_files.append(f)
+            
+            if not image_files:
+                return False
+                
+            item = GalleryQueueItem(
+                path=path,
+                name=name,
+                status="ready",  # Items start as ready
+                total_images=len(image_files),  # Set the total count immediately
+                insertion_order=self._next_order,
+                added_time=time.time()  # Current timestamp
+            )
+            self._next_order += 1
+            
+            self.items[path] = item
+            self.save_persistent_queue()
+            return True
 
 class GalleryTableWidget(QTableWidget):
     """Table widget for gallery queue with resizable columns, sorting, and action buttons"""
@@ -656,6 +883,13 @@ class GalleryTableWidget(QTableWidget):
         
         # Enable multi-selection
         self.setSelectionMode(QTableWidget.SelectionMode.ExtendedSelection)
+        
+        # Set focus policy to ensure keyboard events work
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        
+        # Enable context menu
+        self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.customContextMenuRequested.connect(self.show_context_menu)
     
     def keyPressEvent(self, event):
         """Handle key press events"""
@@ -682,6 +916,12 @@ class GalleryTableWidget(QTableWidget):
         if event.button() == Qt.MouseButton.LeftButton:
             self.handle_enter_or_double_click()
         super().mouseDoubleClickEvent(event)
+    
+    def mousePressEvent(self, event):
+        """Handle mouse press to ensure focus"""
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.setFocus()
+        super().mousePressEvent(event)
     
     def handle_enter_or_double_click(self):
         """Handle Enter key or double-click for viewing completed items"""
@@ -714,6 +954,67 @@ class GalleryTableWidget(QTableWidget):
                             widget.copy_bbcode_to_clipboard(path)
                             return
                         widget = widget.parent()
+    
+    def show_context_menu(self, position):
+        """Show context menu for table items"""
+        from PyQt6.QtWidgets import QMenu
+        
+        menu = QMenu()
+        
+        # Get selected rows
+        selected_rows = set()
+        for item in self.selectedItems():
+            selected_rows.add(item.row())
+        
+        if selected_rows:
+            # Add delete action
+            delete_action = menu.addAction("Delete Selected")
+            delete_action.triggered.connect(self.delete_selected_via_menu)
+            
+            # Add copy BBCode action for completed items
+            completed_items = []
+            for row in selected_rows:
+                name_item = self.item(row, 1)
+                if name_item:
+                    path = name_item.data(Qt.ItemDataRole.UserRole)
+                    if path:
+                        # Find the main GUI window to check item status
+                        widget = self
+                        while widget:
+                            if hasattr(widget, 'queue_manager'):
+                                item = widget.queue_manager.get_item(path)
+                                if item and item.status == "completed":
+                                    completed_items.append(path)
+                                break
+                            widget = widget.parent()
+            
+            if completed_items:
+                menu.addSeparator()
+                copy_action = menu.addAction("Copy BBCode")
+                copy_action.triggered.connect(lambda: self.copy_bbcode_via_menu(completed_items[0]))
+        
+        if menu.actions():
+            menu.exec(self.mapToGlobal(position))
+    
+    def delete_selected_via_menu(self):
+        """Delete selected items via context menu"""
+        # Find the main GUI window
+        widget = self
+        while widget:
+            if hasattr(widget, 'delete_selected_items'):
+                widget.delete_selected_items()
+                return
+            widget = widget.parent()
+    
+    def copy_bbcode_via_menu(self, path):
+        """Copy BBCode via context menu"""
+        # Find the main GUI window
+        widget = self
+        while widget:
+            if hasattr(widget, 'copy_bbcode_to_clipboard'):
+                widget.copy_bbcode_to_clipboard(path)
+                return
+            widget = widget.parent()
 
 class ActionButtonWidget(QWidget):
     """Action buttons widget for table cells"""
@@ -731,7 +1032,7 @@ class ActionButtonWidget(QWidget):
             QPushButton {
                 background-color: #27ae60;
                 color: white;
-                border: 1px solid #219150;
+                border: 1px solid #135730;
                 border-radius: 3px;
                 font-size: 10px;
                 font-weight: bold;
@@ -754,7 +1055,7 @@ class ActionButtonWidget(QWidget):
             QPushButton {
                 background-color: #f39c12;
                 color: black;
-                border: 1px solid #c27c0e;
+                border: 1px solid #744a08;
                 border-radius: 3px;
                 font-size: 9px;
                 font-weight: bold;
@@ -775,7 +1076,7 @@ class ActionButtonWidget(QWidget):
             QPushButton {
                 background-color: #3498db;
                 color: white;
-                border: 1px solid #2980b9;
+                border: 1px solid #184c6f;
                 border-radius: 3px;
                 font-size: 9px;
                 font-weight: bold;
@@ -823,6 +1124,96 @@ class ActionButtonWidget(QWidget):
             self.start_btn.setVisible(False)
             self.pause_btn.setVisible(False)
             self.view_btn.setVisible(False)
+
+class CredentialSetupDialog(QDialog):
+    """Dialog for setting up secure credentials"""
+    
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Setup Secure Credentials")
+        self.setModal(True)
+        self.resize(500, 300)
+        
+        layout = QVBoxLayout(self)
+        
+        # Info text
+        info_text = QLabel(
+            "IMX.to Gallery Uploader needs your credentials to upload galleries.\n\n"
+            "Your credentials will be stored securely encrypted using:\n"
+            "• Your system's username and hostname as the encryption key\n"
+            "• AES-128 encryption via Fernet\n"
+            "• The encrypted data is tied to your specific computer\n\n"
+            "This means:\n"
+            "• Your password cannot be recovered if you forget it\n"
+            "• The encrypted data won't work on other computers\n"
+            "• Your credentials are protected from other users on this system"
+        )
+        info_text.setWordWrap(True)
+        info_text.setStyleSheet("padding: 10px; background-color: #f0f8ff; border: 1px solid #ccc; border-radius: 5px;")
+        layout.addWidget(info_text)
+        
+        # Username input
+        username_layout = QHBoxLayout()
+        username_layout.addWidget(QLabel("Username:"))
+        self.username_edit = QLineEdit()
+        username_layout.addWidget(self.username_edit)
+        layout.addLayout(username_layout)
+        
+        # Password input
+        password_layout = QHBoxLayout()
+        password_layout.addWidget(QLabel("Password:"))
+        self.password_edit = QLineEdit()
+        self.password_edit.setEchoMode(QLineEdit.EchoMode.Password)
+        password_layout.addWidget(self.password_edit)
+        layout.addLayout(password_layout)
+        
+        # Buttons
+        button_layout = QHBoxLayout()
+        button_layout.addStretch()
+        
+        self.save_btn = QPushButton("Save Credentials")
+        self.save_btn.clicked.connect(self.save_credentials)
+        button_layout.addWidget(self.save_btn)
+        
+        self.cancel_btn = QPushButton("Cancel")
+        self.cancel_btn.clicked.connect(self.reject)
+        button_layout.addWidget(self.cancel_btn)
+        
+        layout.addLayout(button_layout)
+    
+    def save_credentials(self):
+        """Save credentials securely"""
+        username = self.username_edit.text().strip()
+        password = self.password_edit.text()
+        
+        if not username or not password:
+            QMessageBox.warning(self, "Missing Information", "Please enter both username and password.")
+            return
+        
+        try:
+            # Save credentials
+            config = configparser.ConfigParser()
+            config_file = os.path.join(os.path.expanduser("~"), ".imxup.ini")
+            
+            if os.path.exists(config_file):
+                config.read(config_file)
+            
+            if 'CREDENTIALS' not in config:
+                config['CREDENTIALS'] = {}
+            
+            config['CREDENTIALS']['username'] = username
+            config['CREDENTIALS']['password'] = encrypt_password(password)
+            
+            with open(config_file, 'w') as f:
+                config.write(f)
+            
+            QMessageBox.information(self, "Success", 
+                                  f"Credentials saved securely to {config_file}\n\n"
+                                  "Your password is encrypted and tied to this computer.")
+            self.accept()
+            
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to save credentials: {str(e)}")
 
 class BBCodeViewerDialog(QDialog):
     """Dialog for viewing and editing BBCode text files"""
@@ -1131,11 +1522,17 @@ class ImxUploadGUI(QMainWindow):
         self.setup_system_tray()
         self.restore_settings()
         
+        # Check for stored credentials
+        self.check_credentials()
+        
         # Start worker thread
         self.start_worker()
         
         # Initial display update
         self.update_queue_display()
+        
+        # Ensure table has focus for keyboard shortcuts
+        self.gallery_table.setFocus()
         
         # Update timer
         self.update_timer = QTimer()
@@ -1181,6 +1578,12 @@ class ImxUploadGUI(QMainWindow):
         self.gallery_table.setMinimumHeight(400)  # Taller table
         queue_layout.addWidget(self.gallery_table, 1)  # Give it stretch priority
         
+        # Add keyboard shortcut hint
+        shortcut_hint = QLabel("💡 Tip: Press Delete key to remove selected items")
+        shortcut_hint.setStyleSheet("color: #666; font-size: 11px; font-style: italic;")
+        shortcut_hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        queue_layout.addWidget(shortcut_hint)
+        
         # Queue controls
         controls_layout = QHBoxLayout()
         
@@ -1195,6 +1598,8 @@ class ImxUploadGUI(QMainWindow):
         self.clear_completed_btn = QPushButton("Clear Completed")
         self.clear_completed_btn.clicked.connect(self.clear_completed)
         controls_layout.addWidget(self.clear_completed_btn)
+        
+
         
         queue_layout.addLayout(controls_layout)
         left_layout.addWidget(queue_group)
@@ -1286,6 +1691,29 @@ class ImxUploadGUI(QMainWindow):
         
         main_layout.addWidget(progress_group)
         
+    def check_credentials(self):
+        """Check for stored credentials and prompt if missing"""
+        if not check_stored_credentials():
+            reply = QMessageBox.question(
+                self,
+                "Setup Required",
+                "No stored credentials found. Would you like to set up secure credential storage now?\n\n"
+                "This will encrypt and store your IMX.to username and password using your system's unique encryption key.",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.Yes
+            )
+            
+            if reply == QMessageBox.StandardButton.Yes:
+                dialog = CredentialSetupDialog(self)
+                if dialog.exec() == QDialog.DialogCode.Accepted:
+                    self.add_log_message(f"{timestamp()} Credentials saved securely")
+                else:
+                    self.add_log_message(f"{timestamp()} Credential setup cancelled")
+            else:
+                self.add_log_message(f"{timestamp()} Credential setup skipped")
+        else:
+            self.add_log_message(f"{timestamp()} Using stored credentials")
+
     def setup_system_tray(self):
         """Setup system tray icon"""
         if QSystemTrayIcon.isSystemTrayAvailable():
@@ -1323,6 +1751,7 @@ class ImxUploadGUI(QMainWindow):
             self.worker.gallery_started.connect(self.on_gallery_started)
             self.worker.gallery_completed.connect(self.on_gallery_completed)
             self.worker.gallery_failed.connect(self.on_gallery_failed)
+            self.worker.gallery_exists.connect(self.on_gallery_exists)
             self.worker.log_message.connect(self.add_log_message)
             self.worker.start()
     
@@ -1342,9 +1771,32 @@ class ImxUploadGUI(QMainWindow):
         """Add folders to the upload queue"""
         added_count = 0
         for path in folder_paths:
-            if self.queue_manager.add_item(path):
+            result = self.queue_manager.add_item(path)
+            if result == True:
                 added_count += 1
                 self.add_log_message(f"{timestamp()} Added to queue: {os.path.basename(path)}")
+            elif result == "duplicate":
+                # Handle duplicate gallery
+                gallery_name = sanitize_gallery_name(os.path.basename(path))
+                from imxup import check_if_gallery_exists
+                existing_files = check_if_gallery_exists(gallery_name)
+                
+                message = f"Gallery '{gallery_name}' already exists with {len(existing_files)} files.\n\nContinue with upload anyway?"
+                reply = QMessageBox.question(
+                    self,
+                    "Gallery Already Exists",
+                    message,
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.No
+                )
+                
+                if reply == QMessageBox.StandardButton.Yes:
+                    # Force add the item
+                    self.queue_manager._force_add_item(path, gallery_name)
+                    added_count += 1
+                    self.add_log_message(f"{timestamp()} Added to queue (user confirmed): {os.path.basename(path)}")
+                else:
+                    self.add_log_message(f"{timestamp()} Skipped: {os.path.basename(path)} (user cancelled)")
             else:
                 self.add_log_message(f"{timestamp()} Failed to add: {os.path.basename(path)} (no images or already in queue)")
         
@@ -1364,35 +1816,18 @@ class ImxUploadGUI(QMainWindow):
     def update_queue_display(self):
         """Update the gallery table display"""
         items = self.queue_manager.get_all_items()
+        print(f"DEBUG: update_queue_display called with {len(items)} items")
+        print(f"DEBUG: Item paths: {[item.path for item in items]}")
         
-        # Create a lookup table: path -> row number in current sorted table
-        path_to_row = {}
-        for row in range(self.gallery_table.rowCount()):
-            name_item = self.gallery_table.item(row, 1)  # Gallery name is now column 1
-            if name_item:
-                stored_path = name_item.data(Qt.ItemDataRole.UserRole)
-                if stored_path:
-                    path_to_row[stored_path] = row
+        # Clear the table first
+        self.gallery_table.clearContents()
+        self.gallery_table.setRowCount(len(items))
+        print(f"DEBUG: Table cleared and set to {len(items)} rows")
         
-        # Update table row count if needed
-        if self.gallery_table.rowCount() != len(items):
-            self.gallery_table.setRowCount(len(items))
+        # Populate the table with current items
         
-        # Update items using lookup table or add new ones
-        for item in items:
-            if item.path in path_to_row:
-                # Update existing row
-                row = path_to_row[item.path]
-            else:
-                # Find first empty row or add new row
-                row = None
-                for r in range(self.gallery_table.rowCount()):
-                    name_item = self.gallery_table.item(r, 1)  # Gallery name is in column 1
-                    if not name_item or not name_item.data(Qt.ItemDataRole.UserRole):
-                        row = r
-                        break
-                if row is None:
-                    continue  # Skip if no available row
+        # Populate the table with current items
+        for row, item in enumerate(items):
             
             # Order number
             order_item = QTableWidgetItem(str(item.insertion_order))
@@ -1424,22 +1859,32 @@ class ImxUploadGUI(QMainWindow):
             status_item.setFlags(status_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
             status_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             
-            # Color code status
+            # Color code status - use stronger color application
             if item.status == "completed":
                 status_item.setBackground(QColor(46, 204, 113))  # Green
                 status_item.setForeground(QColor(0, 0, 0))  # Black text
+                status_item.setData(Qt.ItemDataRole.BackgroundRole, QColor(46, 204, 113))
+                status_item.setData(Qt.ItemDataRole.ForegroundRole, QColor(0, 0, 0))
             elif item.status == "failed":
                 status_item.setBackground(QColor(231, 76, 60))  # Red
                 status_item.setForeground(QColor(255, 255, 255))  # White text
+                status_item.setData(Qt.ItemDataRole.BackgroundRole, QColor(231, 76, 60))
+                status_item.setData(Qt.ItemDataRole.ForegroundRole, QColor(255, 255, 255))
             elif item.status == "uploading":
                 status_item.setBackground(QColor(52, 152, 219))  # Blue
                 status_item.setForeground(QColor(255, 255, 255))  # White text
+                status_item.setData(Qt.ItemDataRole.BackgroundRole, QColor(52, 152, 219))
+                status_item.setData(Qt.ItemDataRole.ForegroundRole, QColor(255, 255, 255))
             elif item.status == "paused":
                 status_item.setBackground(QColor(241, 196, 15))  # Yellow
                 status_item.setForeground(QColor(0, 0, 0))  # Black text
+                status_item.setData(Qt.ItemDataRole.BackgroundRole, QColor(241, 196, 15))
+                status_item.setData(Qt.ItemDataRole.ForegroundRole, QColor(0, 0, 0))
             elif item.status == "queued":
                 status_item.setBackground(QColor(189, 195, 199))  # Light gray
                 status_item.setForeground(QColor(0, 0, 0))  # Black text
+                status_item.setData(Qt.ItemDataRole.BackgroundRole, QColor(189, 195, 199))
+                status_item.setData(Qt.ItemDataRole.ForegroundRole, QColor(0, 0, 0))
             elif item.status == "ready":
                 # Default styling for ready items
                 pass
@@ -1524,8 +1969,11 @@ class ImxUploadGUI(QMainWindow):
         """Handle gallery start"""
         with QMutexLocker(self.queue_manager.mutex):
             if path in self.queue_manager.items:
-                self.queue_manager.items[path].total_images = total_images
-                self.queue_manager.items[path].uploaded_images = 0
+                item = self.queue_manager.items[path]
+                item.total_images = total_images
+                item.uploaded_images = 0
+                # Ensure status is set to uploading
+                item.status = "uploading"
         
         # Update display when status changes
         self.update_queue_display()
@@ -1603,7 +2051,7 @@ class ImxUploadGUI(QMainWindow):
             # Create BBCode content
             bbcode_content = ""
             for image_data in results.get('images', []):
-                bbcode_content += image_data.get('bbcode', '') + "\n"
+                bbcode_content += image_data.get('bbcode', '') + "  "
             
             # Create shortcut content
             shortcut_content = f"""[InternetShortcut]
@@ -1649,6 +2097,24 @@ URL=https://imx.to/g/{gallery_id}
         self.add_log_message(f"{timestamp()} Gallery URL: {gallery_url}")
         self.add_log_message(f"{timestamp()} Uploaded {successful_count} images ({total_size / (1024*1024):.1f} MB) in {upload_time:.1f}s")
     
+    def on_gallery_exists(self, gallery_name: str, existing_files: list):
+        """Handle existing gallery detection"""
+        message = f"Gallery '{gallery_name}' already exists with {len(existing_files)} files.\n\nContinue with upload anyway?"
+        reply = QMessageBox.question(
+            self,
+            "Gallery Already Exists",
+            message,
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No
+        )
+        
+        if reply != QMessageBox.StandardButton.Yes:
+            # Cancel the upload
+            self.add_log_message(f"{timestamp()} Upload cancelled by user due to existing gallery")
+            # TODO: Implement proper cancellation mechanism
+        else:
+            self.add_log_message(f"{timestamp()} User chose to continue with existing gallery")
+
     def on_gallery_failed(self, path: str, error_message: str):
         """Handle gallery failure"""
         with QMutexLocker(self.queue_manager.mutex):
@@ -1785,19 +2251,23 @@ URL=https://imx.to/g/{gallery_id}
         """Clear completed uploads from queue"""
         removed_count = self.queue_manager.clear_completed()
         if removed_count > 0:
-            self.queue_manager.save_persistent_queue()
             self.update_queue_display()
+            QApplication.processEvents()
+            self.queue_manager.save_persistent_queue()
             self.add_log_message(f"{timestamp()} Cleared {removed_count} completed uploads")
         else:
             self.add_log_message(f"{timestamp()} No completed uploads to clear")
     
     def delete_selected_items(self):
         """Delete selected items from the queue"""
+        self.add_log_message(f"{timestamp()} Delete method called")
+        
         selected_rows = set()
         for item in self.gallery_table.selectedItems():
             selected_rows.add(item.row())
         
         if not selected_rows:
+            self.add_log_message(f"{timestamp()} No rows selected")
             return
         
         # Get paths directly from the table cells to handle sorting correctly
@@ -1811,8 +2281,13 @@ URL=https://imx.to/g/{gallery_id}
                 if path:
                     selected_paths.append(path)
                     selected_names.append(name_item.text())
+                else:
+                    self.add_log_message(f"{timestamp()} No path data for row {row}")
+            else:
+                self.add_log_message(f"{timestamp()} No name item for row {row}")
         
         if not selected_paths:
+            self.add_log_message(f"{timestamp()} No valid paths found")
             return
         
         # Check if confirmation is needed
@@ -1831,14 +2306,45 @@ URL=https://imx.to/g/{gallery_id}
             )
             
             if reply != QMessageBox.StandardButton.Yes:
+                self.add_log_message(f"{timestamp()} User cancelled delete")
                 return
         
-        # Remove the items
-        removed_count = self.queue_manager.remove_items(selected_paths)
+        # Delete items using the working approach
+        removed_count = 0
+        for path in selected_paths:
+            # Check if item is currently uploading
+            item = self.queue_manager.get_item(path)
+            if item and item.status == "uploading":
+                self.add_log_message(f"{timestamp()} Skipping uploading item: {path}")
+                continue
+            
+            # Remove from memory
+            with QMutexLocker(self.queue_manager.mutex):
+                if path in self.queue_manager.items:
+                    del self.queue_manager.items[path]
+                    removed_count += 1
+                    self.add_log_message(f"{timestamp()} Deleted: {path}")
+                else:
+                    self.add_log_message(f"{timestamp()} Item not found: {path}")
+        
         if removed_count > 0:
-            self.queue_manager.save_persistent_queue()
+            # Renumber remaining items
+            self.queue_manager.renumber_insertion_orders()
+            
+            # Update display
             self.update_queue_display()
-            self.add_log_message(f"{timestamp()} Deleted {removed_count} items from queue")
+            self.add_log_message(f"{timestamp()} Updated display")
+            
+            # Force GUI update
+            QApplication.processEvents()
+            
+            # Save persistent storage
+            self.queue_manager.save_persistent_queue()
+            self.add_log_message(f"{timestamp()} ✓ Deleted {removed_count} items from queue")
+        else:
+            self.add_log_message(f"{timestamp()} ⚠ No items were deleted (some may be currently uploading)")
+    
+
     
     def restore_settings(self):
         """Restore window settings"""
