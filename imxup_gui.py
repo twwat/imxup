@@ -25,7 +25,7 @@ from PyQt6.QtWidgets import (
     QMessageBox, QSystemTrayIcon, QMenu, QFrame, QScrollArea,
     QGridLayout, QSizePolicy, QTabWidget, QFileDialog, QTableWidget,
     QTableWidgetItem, QHeaderView, QDialog, QDialogButtonBox, QPlainTextEdit,
-    QLineEdit, QInputDialog, QSpacerItem
+    QLineEdit, QInputDialog, QSpacerItem, QStyle
 )
 from PyQt6.QtCore import (
     Qt, QThread, pyqtSignal, QTimer, QMimeData, QUrl, 
@@ -1233,6 +1233,27 @@ class GalleryTableWidget(QTableWidget):
         from PyQt6.QtWidgets import QMenu
         
         menu = QMenu()
+
+        # Determine viewport-relative position for hit test
+        try:
+            sender_widget = self.sender()
+        except Exception:
+            sender_widget = None
+        if sender_widget is self.viewport():
+            viewport_pos = position
+            global_pos = self.viewport().mapToGlobal(position)
+        else:
+            viewport_pos = self.viewport().mapFrom(self, position)
+            global_pos = self.mapToGlobal(position)
+
+        # Select row under cursor if not already selected
+        index = self.indexAt(viewport_pos)
+        if index.isValid():
+            row = index.row()
+            selected_now = {it.row() for it in self.selectedItems()}
+            if row not in selected_now:
+                self.clearSelection()
+                self.selectRow(row)
         
         # Build selected rows set
         selected_rows = sorted({it.row() for it in self.selectedItems()})
@@ -1278,8 +1299,19 @@ class GalleryTableWidget(QTableWidget):
                 copy_action = menu.addAction("Copy BBCode")
                 copy_action.triggered.connect(lambda: self.copy_bbcode_via_menu_multi(completed_paths))
         
+        else:
+            # No selection: offer Add Folders via the same dialog as the toolbar button
+            add_action = menu.addAction("Add Folders...")
+            def _add_from_menu():
+                widget = self
+                while widget and not hasattr(widget, 'browse_for_folders'):
+                    widget = widget.parent()
+                if widget and hasattr(widget, 'browse_for_folders'):
+                    widget.browse_for_folders()
+            add_action.triggered.connect(_add_from_menu)
+
         if menu.actions():
-            menu.exec(self.mapToGlobal(position))
+            menu.exec(global_pos)
     
     def delete_selected_via_menu(self):
         """Delete selected items via context menu"""
@@ -1375,7 +1407,7 @@ class ActionButtonWidget(QWidget):
         
         
         self.start_btn = QPushButton("Start")
-        self.start_btn.setFixedSize(50, 25)
+        self.start_btn.setFixedSize(65, 25)
         
         #self.start_btn.setStyleSheet("""
         #    QPushButton {
@@ -1396,7 +1428,7 @@ class ActionButtonWidget(QWidget):
         
         self.stop_btn = QPushButton("Stop")
         
-        self.stop_btn.setFixedSize(50, 25)
+        self.stop_btn.setFixedSize(65, 25)
         self.stop_btn.setVisible(False)
         #self.stop_btn.setStyleSheet("""
         #    QPushButton {
@@ -1417,7 +1449,7 @@ class ActionButtonWidget(QWidget):
         #""")
         
         self.view_btn = QPushButton("View")
-        self.view_btn.setFixedSize(50, 25)
+        self.view_btn.setFixedSize(65, 25)
         self.view_btn.setVisible(False)
         #self.view_btn.setStyleSheet("""
         #    QPushButton {
@@ -1437,7 +1469,7 @@ class ActionButtonWidget(QWidget):
         #""")
         
         self.cancel_btn = QPushButton("Cancel")
-        self.cancel_btn.setFixedSize(50, 25)
+        self.cancel_btn.setFixedSize(65, 25)
         self.cancel_btn.setVisible(False)
         #self.cancel_btn.setStyleSheet("""
         #    QPushButton {
@@ -1548,6 +1580,10 @@ class CredentialSetupDialog(QDialog):
         username_status_layout.addWidget(self.username_status_label)
         username_status_layout.addStretch()
         self.username_change_btn = QPushButton("Change")
+        self.username_change_btn.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DialogApplyButton))
+        self.username_change_btn.setIconSize(QSize(16, 16))
+        if not self.username_change_btn.text().startswith(" "):
+            self.username_change_btn.setText(" " + self.username_change_btn.text())
         self.username_change_btn.clicked.connect(self.change_username_password)
         username_status_layout.addWidget(self.username_change_btn)
         status_layout.addLayout(username_status_layout)
@@ -1560,6 +1596,10 @@ class CredentialSetupDialog(QDialog):
         password_status_layout.addWidget(self.password_status_label)
         password_status_layout.addStretch()
         self.password_change_btn = QPushButton("Change")
+        self.password_change_btn.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DialogApplyButton))
+        self.password_change_btn.setIconSize(QSize(16, 16))
+        if not self.password_change_btn.text().startswith(" "):
+            self.password_change_btn.setText(" " + self.password_change_btn.text())
         self.password_change_btn.clicked.connect(self.change_username_password)
         password_status_layout.addWidget(self.password_change_btn)
         status_layout.addLayout(password_status_layout)
@@ -1572,6 +1612,10 @@ class CredentialSetupDialog(QDialog):
         api_key_status_layout.addWidget(self.api_key_status_label)
         api_key_status_layout.addStretch()
         self.api_key_change_btn = QPushButton("Change")
+        self.api_key_change_btn.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DialogApplyButton))
+        self.api_key_change_btn.setIconSize(QSize(16, 16))
+        if not self.api_key_change_btn.text().startswith(" "):
+            self.api_key_change_btn.setText(" " + self.api_key_change_btn.text())
         self.api_key_change_btn.clicked.connect(self.change_api_key)
         api_key_status_layout.addWidget(self.api_key_change_btn)
         status_layout.addLayout(api_key_status_layout)
@@ -1593,6 +1637,10 @@ class CredentialSetupDialog(QDialog):
         button_layout.addStretch()
         
         self.close_btn = QPushButton("Close")
+        self.close_btn.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DialogCloseButton))
+        self.close_btn.setIconSize(QSize(16, 16))
+        if not self.close_btn.text().startswith(" "):
+            self.close_btn.setText(" " + self.close_btn.text())
         self.close_btn.clicked.connect(self.validate_and_close)
         button_layout.addWidget(self.close_btn)
         
@@ -1674,10 +1722,26 @@ class CredentialSetupDialog(QDialog):
         button_layout.addStretch()
         
         save_btn = QPushButton("Save")
+        save_btn.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DialogSaveButton))
+        save_btn.setIconSize(QSize(16, 16))
+        if not save_btn.text().startswith(" "):
+            save_btn.setText(" " + save_btn.text())
+        save_btn.setIconSize(QSize(16, 16))
+        if not save_btn.text().startswith(" "):
+            save_btn.setText(" " + save_btn.text())
+        save_btn.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DialogSaveButton))
         save_btn.clicked.connect(dialog.accept)
         button_layout.addWidget(save_btn)
         
         cancel_btn = QPushButton("Cancel")
+        cancel_btn.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DialogCancelButton))
+        cancel_btn.setIconSize(QSize(16, 16))
+        if not cancel_btn.text().startswith(" "):
+            cancel_btn.setText(" " + cancel_btn.text())
+        cancel_btn.setIconSize(QSize(16, 16))
+        if not cancel_btn.text().startswith(" "):
+            cancel_btn.setText(" " + cancel_btn.text())
+        cancel_btn.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DialogCancelButton))
         cancel_btn.clicked.connect(dialog.reject)
         button_layout.addWidget(cancel_btn)
         
@@ -1821,6 +1885,10 @@ class BBCodeViewerDialog(QDialog):
         button_layout = QHBoxLayout()
         
         self.copy_btn = QPushButton("Copy to Clipboard")
+        self.copy_btn.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DialogApplyButton))
+        self.copy_btn.setIconSize(QSize(16, 16))
+        if not self.copy_btn.text().startswith(" "):
+            self.copy_btn.setText(" " + self.copy_btn.text())
         self.copy_btn.clicked.connect(self.copy_to_clipboard)
         button_layout.addWidget(self.copy_btn)
         
@@ -2208,6 +2276,10 @@ class ImxUploadGUI(QMainWindow):
         
         # Add folder button
         add_folder_btn = QPushButton("Browse for Folders...")
+        add_folder_btn.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DirOpenIcon))
+        add_folder_btn.setIconSize(QSize(18, 18))
+        if not add_folder_btn.text().startswith(" "):
+            add_folder_btn.setText(" " + add_folder_btn.text())
         add_folder_btn.clicked.connect(self.browse_for_folders)
         queue_layout.addWidget(add_folder_btn)
         
@@ -2226,6 +2298,10 @@ class ImxUploadGUI(QMainWindow):
         controls_layout = QHBoxLayout()
         
         self.start_all_btn = QPushButton("Start All")
+        self.start_all_btn.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_MediaPlay))
+        self.start_all_btn.setIconSize(QSize(18, 18))
+        if not self.start_all_btn.text().startswith(" "):
+            self.start_all_btn.setText(" " + self.start_all_btn.text())
         self.start_all_btn.clicked.connect(self.start_all_uploads)
         self.start_all_btn.setMinimumHeight(34)
         #self.start_all_btn.setStyleSheet("""
@@ -2248,11 +2324,19 @@ class ImxUploadGUI(QMainWindow):
         controls_layout.addWidget(self.start_all_btn)
         
         self.pause_all_btn = QPushButton("Pause All")
+        self.pause_all_btn.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_MediaPause))
+        self.pause_all_btn.setIconSize(QSize(18, 18))
+        if not self.pause_all_btn.text().startswith(" "):
+            self.pause_all_btn.setText(" " + self.pause_all_btn.text())
         self.pause_all_btn.clicked.connect(self.pause_all_uploads)
         self.pause_all_btn.setMinimumHeight(34)
         controls_layout.addWidget(self.pause_all_btn)
         
         self.clear_completed_btn = QPushButton("Clear Completed")
+        self.clear_completed_btn.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_TrashIcon))
+        self.clear_completed_btn.setIconSize(QSize(18, 18))
+        if not self.clear_completed_btn.text().startswith(" "):
+            self.clear_completed_btn.setText(" " + self.clear_completed_btn.text())
         self.clear_completed_btn.clicked.connect(self.clear_completed)
         self.clear_completed_btn.setMinimumHeight(34)
         controls_layout.addWidget(self.clear_completed_btn)
@@ -2357,6 +2441,10 @@ class ImxUploadGUI(QMainWindow):
         
         # Save settings button
         self.save_settings_btn = QPushButton("Save Settings")
+        self.save_settings_btn.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DialogSaveButton))
+        self.save_settings_btn.setIconSize(QSize(18, 18))
+        if not self.save_settings_btn.text().startswith(" "):
+            self.save_settings_btn.setText(" " + self.save_settings_btn.text())
         self.save_settings_btn.clicked.connect(self.save_upload_settings)
         self.save_settings_btn.setMinimumHeight(30)
         self.save_settings_btn.setMaximumHeight(34)
@@ -2386,6 +2474,10 @@ class ImxUploadGUI(QMainWindow):
         
         # Manage templates button
         self.manage_templates_btn = QPushButton("Manage BBCode Templates")
+        self.manage_templates_btn.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_FileDialogDetailedView))
+        self.manage_templates_btn.setIconSize(QSize(18, 18))
+        if not self.manage_templates_btn.text().startswith(" "):
+            self.manage_templates_btn.setText(" " + self.manage_templates_btn.text())
         self.manage_templates_btn.clicked.connect(self.manage_templates)
         self.manage_templates_btn.setMinimumHeight(30)
         self.manage_templates_btn.setMaximumHeight(34)
@@ -2407,6 +2499,10 @@ class ImxUploadGUI(QMainWindow):
         
         # Manage credentials button
         self.manage_credentials_btn = QPushButton("Manage Credentials")
+        self.manage_credentials_btn.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_FileDialogContentsView))
+        self.manage_credentials_btn.setIconSize(QSize(18, 18))
+        if not self.manage_credentials_btn.text().startswith(" "):
+            self.manage_credentials_btn.setText(" " + self.manage_credentials_btn.text())
         self.manage_credentials_btn.clicked.connect(self.manage_credentials)
         self.manage_credentials_btn.setMinimumHeight(30)
         self.manage_credentials_btn.setMaximumHeight(34)
@@ -2500,6 +2596,10 @@ class ImxUploadGUI(QMainWindow):
         help_group = QGroupBox("Help")
         help_layout = QVBoxLayout(help_group)
         self.help_btn = QPushButton("Open Help")
+        self.help_btn.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_MessageBoxInformation))
+        self.help_btn.setIconSize(QSize(18, 18))
+        if not self.help_btn.text().startswith(" "):
+            self.help_btn.setText(" " + self.help_btn.text())
         self.help_btn.setMinimumHeight(30)
         self.help_btn.setToolTip("Open program documentation")
         self.help_btn.clicked.connect(self.open_help_dialog)
@@ -3639,24 +3739,23 @@ def main():
     app.setQuitOnLastWindowClosed(True)  # Exit when window closes
     
     # Handle command line arguments
-    folder_to_add = None
+    folders_to_add = []
     if len(sys.argv) > 1:
-        folder_to_add = sys.argv[1]
-        if os.path.isdir(folder_to_add):
-            # Check if another instance is running
-            if check_single_instance(folder_to_add):
-                print(f"Added {folder_to_add} to existing instance")
-                return
-        else:
-            print(f"Invalid folder path: {folder_to_add}")
+        # Accept multiple folder args (Explorer passes all selections to %V)
+        for arg in sys.argv[1:]:
+            if os.path.isdir(arg):
+                folders_to_add.append(arg)
+        # If another instance is running, forward the first folder (server is single-path)
+        if folders_to_add and check_single_instance(folders_to_add[0]):
+            print(f"Added {folders_to_add[0]} to existing instance")
             return
     
     # Create main window
     window = ImxUploadGUI()
     
     # Add folder from command line if provided
-    if folder_to_add:
-        window.add_folders([folder_to_add])
+    if folders_to_add:
+        window.add_folders(folders_to_add)
     
     window.show()
     
@@ -3737,15 +3836,27 @@ class TemplateManagerDialog(QDialog):
         actions_layout = QVBoxLayout()
         
         self.new_btn = QPushButton("New Template")
+        self.new_btn.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_FileIcon))
+        self.new_btn.setIconSize(QSize(16, 16))
+        if not self.new_btn.text().startswith(" "):
+            self.new_btn.setText(" " + self.new_btn.text())
         self.new_btn.clicked.connect(self.create_new_template)
         actions_layout.addWidget(self.new_btn)
         
         self.rename_btn = QPushButton("Rename Template")
+        self.rename_btn.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_FileDialogNewFolder))
+        self.rename_btn.setIconSize(QSize(16, 16))
+        if not self.rename_btn.text().startswith(" "):
+            self.rename_btn.setText(" " + self.rename_btn.text())
         self.rename_btn.clicked.connect(self.rename_template)
         self.rename_btn.setEnabled(False)
         actions_layout.addWidget(self.rename_btn)
         
         self.delete_btn = QPushButton("Delete Template")
+        self.delete_btn.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_TrashIcon))
+        self.delete_btn.setIconSize(QSize(16, 16))
+        if not self.delete_btn.text().startswith(" "):
+            self.delete_btn.setText(" " + self.delete_btn.text())
         self.delete_btn.clicked.connect(self.delete_template)
         self.delete_btn.setEnabled(False)
         actions_layout.addWidget(self.delete_btn)
@@ -3777,6 +3888,10 @@ class TemplateManagerDialog(QDialog):
         
         for placeholder, label in placeholders:
             btn = QPushButton(label)
+            btn.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_ArrowRight))
+            btn.setIconSize(QSize(14, 14))
+            if not btn.text().startswith(" "):
+                btn.setText(" " + btn.text())
             btn.setToolTip(f"Insert {placeholder}")
             btn.clicked.connect(lambda checked, p=placeholder: self.insert_placeholder(p))
             btn.setStyleSheet("""
@@ -3806,6 +3921,10 @@ class TemplateManagerDialog(QDialog):
         button_layout = QHBoxLayout()
         
         self.save_btn = QPushButton("Save Template")
+        self.save_btn.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DialogSaveButton))
+        self.save_btn.setIconSize(QSize(16, 16))
+        if not self.save_btn.text().startswith(" "):
+            self.save_btn.setText(" " + self.save_btn.text())
         self.save_btn.clicked.connect(self.save_template)
         self.save_btn.setEnabled(False)
         button_layout.addWidget(self.save_btn)
@@ -3813,6 +3932,10 @@ class TemplateManagerDialog(QDialog):
         button_layout.addStretch()
         
         self.close_btn = QPushButton("Close")
+        self.close_btn.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DialogCloseButton))
+        self.close_btn.setIconSize(QSize(16, 16))
+        if not self.close_btn.text().startswith(" "):
+            self.close_btn.setText(" " + self.close_btn.text())
         self.close_btn.clicked.connect(self.accept)
         button_layout.addWidget(self.close_btn)
         

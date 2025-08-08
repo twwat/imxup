@@ -43,38 +43,69 @@ def timestamp():
 def create_windows_context_menu():
     """Create Windows context menu integration"""
     try:
-        # Get the path to the executable
-        exe_path = os.path.abspath(sys.argv[0])
-        if exe_path.endswith('.py'):
-            # If running as script, use the compiled exe
-            exe_path = os.path.join(os.path.dirname(exe_path), 'imx2.exe')
+        # Resolve Python executables and scripts
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        cli_script = os.path.join(script_dir, 'imxup.py')
+        gui_script = os.path.join(script_dir, 'launch_gui.py')
+        # Prefer python.exe for CLI and pythonw.exe for GUI
+        python_exe = sys.executable or 'python.exe'
+        if python_exe.lower().endswith('pythonw.exe'):
+            pythonw_exe = python_exe
+            python_cli_exe = python_exe[:-1]  # replace 'w' -> ''
+            if not os.path.exists(python_cli_exe):
+                python_cli_exe = python_exe  # best effort
+        else:
+            python_cli_exe = python_exe
+            pythonw_exe = python_exe.replace('python.exe', 'pythonw.exe')
+            if not os.path.exists(pythonw_exe):
+                pythonw_exe = python_exe  # fallback to python.exe if pythonw not present
         
-        # Create registry entries for command line upload
-        key_path = r"Directory\Background\shell\UploadToImx"
-        key = winreg.CreateKey(winreg.HKEY_CLASSES_ROOT, key_path)
-        winreg.SetValue(key, "", winreg.REG_SZ, "Upload to imx.to")
-        
-        # Create command
-        command_key = winreg.CreateKey(key, "command")
-        winreg.SetValue(command_key, "", winreg.REG_SZ, f'"{exe_path}" "%V"')
-        
-        winreg.CloseKey(command_key)
-        winreg.CloseKey(key)
-        
-        # Create registry entries for GUI mode
-        gui_key_path = r"Directory\Background\shell\UploadToImxGUI"
-        gui_key = winreg.CreateKey(winreg.HKEY_CLASSES_ROOT, gui_key_path)
-        winreg.SetValue(gui_key, "", winreg.REG_SZ, "Upload to imx.to (GUI)")
-        
-        # Create GUI command
-        gui_command_key = winreg.CreateKey(gui_key, "command")
-        winreg.SetValue(gui_command_key, "", winreg.REG_SZ, f'"{exe_path}" --gui "%V"')
-        
-        winreg.CloseKey(gui_command_key)
-        winreg.CloseKey(gui_key)
+        # Create registry entries for command line upload (background right-click)
+        key_path_bg = r"Directory\Background\shell\UploadToImx"
+        key_bg = winreg.CreateKey(winreg.HKEY_CLASSES_ROOT, key_path_bg)
+        winreg.SetValue(key_bg, "", winreg.REG_SZ, "Upload to imx.to")
+        command_key_bg = winreg.CreateKey(key_bg, "command")
+        winreg.SetValue(command_key_bg, "", winreg.REG_SZ, f'"{python_cli_exe}" "{cli_script}" "%V"')
+        winreg.CloseKey(command_key_bg)
+        winreg.CloseKey(key_bg)
+
+        # Create registry entries for GUI mode (background right-click)
+        gui_key_path_bg = r"Directory\Background\shell\UploadToImxGUI"
+        gui_key_bg = winreg.CreateKey(winreg.HKEY_CLASSES_ROOT, gui_key_path_bg)
+        winreg.SetValue(gui_key_bg, "", winreg.REG_SZ, "Upload to imx.to (GUI)")
+        gui_command_key_bg = winreg.CreateKey(gui_key_bg, "command")
+        winreg.SetValue(gui_command_key_bg, "", winreg.REG_SZ, f'"{pythonw_exe}" "{gui_script}" "%V"')
+        winreg.CloseKey(gui_command_key_bg)
+        winreg.CloseKey(gui_key_bg)
+
+        # Create entries for right-click on folders (selected items)
+        key_path_dir = r"Directory\shell\UploadToImx"
+        key_dir = winreg.CreateKey(winreg.HKEY_CLASSES_ROOT, key_path_dir)
+        winreg.SetValue(key_dir, "", winreg.REG_SZ, "Upload to imx.to")
+        # Enable multi-select model (Explorer passes all selections to %V)
+        try:
+            winreg.SetValueEx(key_dir, "MultiSelectModel", 0, winreg.REG_SZ, "Document")
+        except Exception:
+            pass
+        command_key_dir = winreg.CreateKey(key_dir, "command")
+        winreg.SetValue(command_key_dir, "", winreg.REG_SZ, f'"{python_cli_exe}" "{cli_script}" "%V"')
+        winreg.CloseKey(command_key_dir)
+        winreg.CloseKey(key_dir)
+
+        gui_key_path_dir = r"Directory\shell\UploadToImxGUI"
+        gui_key_dir = winreg.CreateKey(winreg.HKEY_CLASSES_ROOT, gui_key_path_dir)
+        winreg.SetValue(gui_key_dir, "", winreg.REG_SZ, "Upload to imx.to (GUI)")
+        try:
+            winreg.SetValueEx(gui_key_dir, "MultiSelectModel", 0, winreg.REG_SZ, "Document")
+        except Exception:
+            pass
+        gui_command_key_dir = winreg.CreateKey(gui_key_dir, "command")
+        winreg.SetValue(gui_command_key_dir, "", winreg.REG_SZ, f'"{pythonw_exe}" "{gui_script}" "%V"')
+        winreg.CloseKey(gui_command_key_dir)
+        winreg.CloseKey(gui_key_dir)
         
         print(f"Context menu created successfully!")
-        print(f"Right-click on any folder and select:")
+        print(f"Right-click on any folder (or background) and select:")
         print(f"  - 'Upload to imx.to' for command line mode")
         print(f"  - 'Upload to imx.to (GUI)' for graphical interface")
         return True
@@ -86,21 +117,37 @@ def create_windows_context_menu():
 def remove_windows_context_menu():
     """Remove Windows context menu integration"""
     try:
-        # Remove command line context menu
+        # Remove command line context menu (background)
         try:
-            key_path = r"Directory\Background\shell\UploadToImx"
-            winreg.DeleteKey(winreg.HKEY_CLASSES_ROOT, key_path + r"\command")
-            winreg.DeleteKey(winreg.HKEY_CLASSES_ROOT, key_path)
+            key_path_bg = r"Directory\Background\shell\UploadToImx"
+            winreg.DeleteKey(winreg.HKEY_CLASSES_ROOT, key_path_bg + r"\command")
+            winreg.DeleteKey(winreg.HKEY_CLASSES_ROOT, key_path_bg)
         except FileNotFoundError:
             pass  # Key doesn't exist
         
-        # Remove GUI context menu
+        # Remove GUI context menu (background)
         try:
-            gui_key_path = r"Directory\Background\shell\UploadToImxGUI"
-            winreg.DeleteKey(winreg.HKEY_CLASSES_ROOT, gui_key_path + r"\command")
-            winreg.DeleteKey(winreg.HKEY_CLASSES_ROOT, gui_key_path)
+            gui_key_path_bg = r"Directory\Background\shell\UploadToImxGUI"
+            winreg.DeleteKey(winreg.HKEY_CLASSES_ROOT, gui_key_path_bg + r"\command")
+            winreg.DeleteKey(winreg.HKEY_CLASSES_ROOT, gui_key_path_bg)
         except FileNotFoundError:
             pass  # Key doesn't exist
+
+        # Remove command line context menu (directory items)
+        try:
+            key_path_dir = r"Directory\shell\UploadToImx"
+            winreg.DeleteKey(winreg.HKEY_CLASSES_ROOT, key_path_dir + r"\command")
+            winreg.DeleteKey(winreg.HKEY_CLASSES_ROOT, key_path_dir)
+        except FileNotFoundError:
+            pass
+
+        # Remove GUI context menu (directory items)
+        try:
+            gui_key_path_dir = r"Directory\shell\UploadToImxGUI"
+            winreg.DeleteKey(winreg.HKEY_CLASSES_ROOT, gui_key_path_dir + r"\command")
+            winreg.DeleteKey(winreg.HKEY_CLASSES_ROOT, gui_key_path_dir)
+        except FileNotFoundError:
+            pass
         
         print("Context menu removed successfully!")
         return True
