@@ -11,9 +11,9 @@ from dotenv import load_dotenv
 import argparse
 import sys
 from pathlib import Path
-import re
-import asyncio
-import aiohttp
+#import re
+#import asyncio
+
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import concurrent.futures
@@ -22,11 +22,11 @@ from tqdm import tqdm
 import configparser
 import hashlib
 import getpass
-import subprocess
-import tempfile
+#import subprocess
+#import tempfile
 import json
-import zipfile
-import urllib.request
+#import zipfile
+#import urllib.request
 import platform
 import sqlite3
 #import shutil
@@ -886,9 +886,7 @@ class ImxToUploader:
             'failed_count': len(failed_images)
         })
         
-        # Create gallery folder and files
-        gallery_folder = os.path.join(folder_path, f"gallery_{gallery_id}")
-        os.makedirs(gallery_folder, exist_ok=True)
+        # Ensure .uploaded exists; do not create separate gallery_{id} folder
         uploaded_subdir = os.path.join(folder_path, ".uploaded")
         os.makedirs(uploaded_subdir, exist_ok=True)
         
@@ -1324,9 +1322,7 @@ URL=https://imx.to/g/{gallery_id}
             'failed_count': len(failed_images)
         })
         
-        # Create gallery folder and files
-        gallery_folder = os.path.join(folder_path, f"gallery_{gallery_id}")
-        os.makedirs(gallery_folder, exist_ok=True)
+        # Ensure .uploaded exists; do not create separate gallery_{id} folder
         uploaded_subdir = os.path.join(folder_path, ".uploaded")
         os.makedirs(uploaded_subdir, exist_ok=True)
         

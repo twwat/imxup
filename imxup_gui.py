@@ -14,7 +14,7 @@ import configparser
 from pathlib import Path
 from datetime import datetime
 from queue import Queue, Empty
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import List, Optional, Dict, Any
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -31,7 +31,7 @@ from PyQt6.QtCore import (
     Qt, QThread, pyqtSignal, QTimer, QMimeData, QUrl, 
     QMutex, QMutexLocker, QSettings, QSize, QObject
 )
-from PyQt6.QtGui import QDragEnterEvent, QDropEvent, QIcon, QFont, QPixmap, QPainter, QColor, QSyntaxHighlighter, QTextCharFormat
+from PyQt6.QtGui import QDragEnterEvent, QDropEvent, QIcon, QFont, QPixmap, QPainter, QColor, QSyntaxHighlighter, QTextCharFormat, QDesktopServices
 
 # Import the core uploader functionality
 from imxup import ImxToUploader, load_user_defaults, timestamp, sanitize_gallery_name, encrypt_password, decrypt_password
@@ -65,7 +65,7 @@ class GalleryQueueItem:
     """Represents a gallery in the upload queue"""
     path: str
     name: Optional[str] = None
-    status: str = "ready"  # ready, queued, uploading, completed, failed, paused
+    status: str = "ready"  # ready, queued, uploading, completed, failed, paused, incomplete
     progress: int = 0
     total_images: int = 0
     uploaded_images: int = 0
@@ -84,6 +84,9 @@ class GalleryQueueItem:
     avg_width: float = 0.0
     avg_height: float = 0.0
     scan_complete: bool = False
+    # Resume support
+    uploaded_files: set = field(default_factory=set)
+    uploaded_images_data: list = field(default_factory=list)
     
 class GUIImxToUploader(ImxToUploader):
     """Custom uploader for GUI that doesn't block on user input"""
@@ -104,20 +107,28 @@ class GUIImxToUploader(ImxToUploader):
         
         # Get all image files in folder
         image_extensions = ('.jpg', '.jpeg', '.png', '.gif')
-        image_files = [f for f in os.listdir(folder_path) if f.lower().endswith(image_extensions) and os.path.isfile(os.path.join(folder_path, f))]
+        all_image_files = [f for f in os.listdir(folder_path) if f.lower().endswith(image_extensions) and os.path.isfile(os.path.join(folder_path, f))]
+        # If resuming, skip already uploaded files
+        current_item = self.worker_thread.current_item if self.worker_thread else None
+        already_uploaded = set()
+        if current_item and getattr(current_item, 'uploaded_files', None):
+            already_uploaded = set(current_item.uploaded_files)
+        image_files = [f for f in all_image_files if f not in already_uploaded]
+        # Maintain the original total for progress/percent
+        original_total_images = len(all_image_files)
         
-        # Pre-scan dimensions and total size for GUI stats
-        image_dimensions = []
+        # Pre-scan dimensions and total size for GUI stats (use ALL images for consistency on resume)
+        image_dimensions_map = {}
         total_size = 0
-        for f in image_files:
+        for f in all_image_files:
             fp = os.path.join(folder_path, f)
             try:
                 from PIL import Image
                 with Image.open(fp) as img:
                     width, height = img.size
-                    image_dimensions.append((width, height))
+                    image_dimensions_map[f] = (width, height)
             except Exception:
-                image_dimensions.append((0, 0))
+                image_dimensions_map[f] = (0, 0)
             try:
                 total_size += os.path.getsize(fp)
             except OSError:
@@ -126,9 +137,9 @@ class GUIImxToUploader(ImxToUploader):
         if not image_files:
             raise ValueError(f"No image files found in {folder_path}")
         
-        # Signal gallery start with image count (no extra log here; worker logs once)
+        # Signal gallery start with original total count (for accurate resume progress)
         if self.worker_thread:
-            self.worker_thread.gallery_started.emit(folder_path, len(image_files))
+            self.worker_thread.gallery_started.emit(folder_path, original_total_images)
         
         # Create gallery name (default to folder name if not provided)
         if not gallery_name:
@@ -141,8 +152,14 @@ class GUIImxToUploader(ImxToUploader):
         if original_name != gallery_name and self.worker_thread:
             self.worker_thread.log_message.emit(f"{timestamp()} Sanitized gallery name: '{original_name}' -> '{gallery_name}'")
         
-        # Create gallery (skip login since it's already done)
-        gallery_id = self.create_gallery_with_name(gallery_name, public_gallery, skip_login=True)
+        # Use existing gallery if resuming; otherwise create a new one (skip login since it's already done)
+        gallery_id = None
+        if current_item and current_item.gallery_id:
+            gallery_id = current_item.gallery_id
+            if self.worker_thread:
+                self.worker_thread.log_message.emit(f"{timestamp()} Resuming existing gallery {gallery_id}")
+        else:
+            gallery_id = self.create_gallery_with_name(gallery_name, public_gallery, skip_login=True)
         
         if not gallery_id:
             print("Failed to create named gallery, falling back to API-only upload...")
@@ -182,6 +199,11 @@ class GUIImxToUploader(ImxToUploader):
         # Upload images with retries, maintaining order
         uploaded_images = []
         failed_images = []
+        # Seed uploaded_images with already uploaded data for correct progress and final aggregation
+        if current_item and current_item.uploaded_images_data:
+            uploaded_images.extend([(fname, data) for fname, data in current_item.uploaded_images_data])
+        # Position map for stable ordering without fragile index lookups
+        file_position = {fname: idx for idx, fname in enumerate(all_image_files)}
         
         # Rolling concurrency
         import concurrent.futures, queue
@@ -202,6 +224,13 @@ class GUIImxToUploader(ImxToUploader):
                     image_file, image_data, error = fut.result()
                     if image_data:
                         uploaded_images.append((image_file, image_data))
+                        # Track uploaded file for resume capability
+                        if self.worker_thread and self.worker_thread.current_item and self.worker_thread.current_item.path == folder_path:
+                            try:
+                                self.worker_thread.current_item.uploaded_files.add(image_file)
+                                self.worker_thread.current_item.uploaded_images_data.append((image_file, image_data))
+                            except Exception:
+                                pass
                         if self.worker_thread:
                             self.worker_thread.log_message.emit(f"{timestamp()} ✓ Uploaded: {image_file}")
                     else:
@@ -211,20 +240,28 @@ class GUIImxToUploader(ImxToUploader):
                     
                     # Update progress
                     completed_count = len(uploaded_images)
-                    progress_percent = int((completed_count / len(image_files)) * 100)
+                    progress_percent = int((completed_count / max(original_total_images, 1)) * 100)
                     if self.worker_thread:
                         self.worker_thread.progress_updated.emit(
-                            folder_path, completed_count, len(image_files), progress_percent, image_file
+                            folder_path, completed_count, original_total_images, progress_percent, image_file
                         )
-                        self.worker_thread.log_message.emit(f"{timestamp()} Progress: {completed_count}/{len(image_files)} ({progress_percent}%)")
+                        self.worker_thread.log_message.emit(f"{timestamp()} Progress: {completed_count}/{original_total_images} ({progress_percent}%)")
                     
+                    # Only submit new uploads if no soft stop has been requested for this item
                     if not remaining.empty():
-                        nxt = remaining.get()
-                        futures_map[executor.submit(upload_single_image, nxt, 1)] = nxt
+                        soft_stop = False
+                        if self.worker_thread and self.worker_thread.current_item and self.worker_thread.current_item.path == folder_path:
+                            soft_stop = getattr(self.worker_thread, '_soft_stop_requested_for', None) == folder_path
+                        if not soft_stop:
+                            nxt = remaining.get()
+                            futures_map[executor.submit(upload_single_image, nxt, 1)] = nxt
         
-        # Retry failed uploads with parallel processing
+        # Retry failed uploads with parallel processing (skip if soft stop requested)
         retry_count = 0
-        while failed_images and retry_count < max_retries:
+        soft_stop_requested = False
+        if self.worker_thread and self.worker_thread.current_item and self.worker_thread.current_item.path == folder_path:
+            soft_stop_requested = getattr(self.worker_thread, '_soft_stop_requested_for', None) == folder_path
+        while failed_images and retry_count < max_retries and not soft_stop_requested:
             retry_count += 1
             retry_failed = []
             
@@ -249,6 +286,13 @@ class GUIImxToUploader(ImxToUploader):
                         image_file, image_data, error = fut.result()
                         if image_data:
                             uploaded_images.append((image_file, image_data))
+                            # Track uploaded file for resume capability (retry path)
+                            if self.worker_thread and self.worker_thread.current_item and self.worker_thread.current_item.path == folder_path:
+                                try:
+                                    self.worker_thread.current_item.uploaded_files.add(image_file)
+                                    self.worker_thread.current_item.uploaded_images_data.append((image_file, image_data))
+                                except Exception:
+                                    pass
                             if self.worker_thread:
                                 self.worker_thread.log_message.emit(f"{timestamp()} ✓ Retry successful: {image_file}")
                         else:
@@ -257,19 +301,23 @@ class GUIImxToUploader(ImxToUploader):
                                 self.worker_thread.log_message.emit(f"{timestamp()} ✗ Retry failed: {image_file} - {error}")
                         
                         completed_count = len(uploaded_images)
-                        progress_percent = int((completed_count / len(image_files)) * 100)
+                        progress_percent = int((completed_count / max(original_total_images, 1)) * 100)
                         if self.worker_thread:
                             self.worker_thread.progress_updated.emit(
-                                folder_path, completed_count, len(image_files), progress_percent, image_file
+                                folder_path, completed_count, original_total_images, progress_percent, image_file
                             )
                         if not remaining.empty():
                             nxt = remaining.get()
                             futures_map[executor.submit(upload_single_image, nxt, retry_count + 1)] = nxt
             
+            # Re-evaluate soft stop each iteration
+            soft_stop_requested = False
+            if self.worker_thread and self.worker_thread.current_item and self.worker_thread.current_item.path == folder_path:
+                soft_stop_requested = getattr(self.worker_thread, '_soft_stop_requested_for', None) == folder_path
             failed_images = retry_failed
         
-        # Sort uploaded images by original file order
-        uploaded_images.sort(key=lambda x: image_files.index(x[0]))
+        # Sort uploaded images by original file order (use position map; unknowns go last)
+        uploaded_images.sort(key=lambda x: file_position.get(x[0], 10**9))
         
         # Add to results in correct order
         for _, image_data in uploaded_images:
@@ -279,16 +327,25 @@ class GUIImxToUploader(ImxToUploader):
         end_time = time.time()
         upload_time = end_time - start_time
         
-        # Calculate transfer speed
-        uploaded_size = sum(os.path.getsize(os.path.join(folder_path, img_file)) 
-                           for img_file, _ in uploaded_images)
+        # Calculate transfer speed and dimension stats (robust to edge cases)
+        try:
+            uploaded_size = sum(os.path.getsize(os.path.join(folder_path, img_file))
+                               for img_file, _ in uploaded_images)
+        except Exception:
+            uploaded_size = 0
         transfer_speed = uploaded_size / upload_time if upload_time > 0 else 0
         
-        # Calculate image dimension statistics
-        successful_dimensions = [image_dimensions[image_files.index(img_file)] 
-                               for img_file, _ in uploaded_images]
-        avg_width = sum(w for w, h in successful_dimensions) / len(successful_dimensions) if successful_dimensions else 0
-        avg_height = sum(h for w, h in successful_dimensions) / len(successful_dimensions) if successful_dimensions else 0
+        try:
+            successful_dimensions = []
+            for img_file, _ in uploaded_images:
+                w, h = image_dimensions_map.get(img_file, (0, 0))
+                if w > 0 and h > 0:
+                    successful_dimensions.append((w, h))
+            avg_width = sum(w for w, h in successful_dimensions) / len(successful_dimensions) if successful_dimensions else 0
+            avg_height = sum(h for w, h in successful_dimensions) / len(successful_dimensions) if successful_dimensions else 0
+        except Exception:
+            avg_width = 0
+            avg_height = 0
         
         # Add statistics to results
         results.update({
@@ -301,12 +358,11 @@ class GUIImxToUploader(ImxToUploader):
             'avg_width': avg_width,
             'avg_height': avg_height,
             'successful_count': len(uploaded_images),
-            'failed_count': len(failed_images)
+            'failed_count': len(failed_images),
+            'failed_details': failed_images
         })
         
-        # Create gallery folder and files
-        gallery_folder = os.path.join(folder_path, f"gallery_{gallery_id}")
-        os.makedirs(gallery_folder, exist_ok=True)
+        # Ensure .uploaded exists; do not create a separate gallery_{id} folder here
         uploaded_subdir = os.path.join(folder_path, ".uploaded")
         os.makedirs(uploaded_subdir, exist_ok=True)
         
@@ -378,31 +434,27 @@ URL=https://imx.to/g/{gallery_id}
                 error_msg = f"Network error: {str(e)}"
                 return image_file, None, error_msg
         
-        # Upload remaining images with parallel processing
+        # Upload remaining images with rolling concurrency
         uploaded_images = []
         failed_images = []
-        
-        # Process remaining images in batches for concurrent uploads
-        remaining_images = image_files[1:]  # Start from 1 since first image is already uploaded
-        
-        for i in range(0, len(remaining_images), parallel_batch_size):
-            batch = remaining_images[i:i + parallel_batch_size]
-            
-            if self.worker_thread:
-                self.worker_thread.log_message.emit(f"{timestamp()} Processing batch {i//parallel_batch_size + 1}/{(len(remaining_images) + parallel_batch_size - 1)//parallel_batch_size}")
-            
-            # Upload batch concurrently
-            with ThreadPoolExecutor(max_workers=parallel_batch_size) as executor:
-                # Submit all uploads in the batch and track them in order
-                futures = []
-                for image_file in batch:
-                    future = executor.submit(upload_single_image, image_file, 1)
-                    futures.append((future, image_file))
-                
-                # Collect results in the order they were submitted
-                for future, image_file in futures:
-                    image_file, image_data, error = future.result()
-                    
+        remaining_images = image_files[1:]  # Skip first (already uploaded)
+
+        import concurrent.futures, queue
+        with ThreadPoolExecutor(max_workers=parallel_batch_size) as executor:
+            remaining = queue.Queue()
+            for f in remaining_images:
+                remaining.put(f)
+            futures_map = {}
+            # Prime pool
+            for _ in range(min(parallel_batch_size, remaining.qsize())):
+                img = remaining.get()
+                futures_map[executor.submit(upload_single_image, img, 1)] = img
+            # Process as they complete
+            while futures_map:
+                done, _ = concurrent.futures.wait(list(futures_map.keys()), return_when=concurrent.futures.FIRST_COMPLETED)
+                for fut in done:
+                    img = futures_map.pop(fut)
+                    image_file, image_data, error = fut.result()
                     if image_data:
                         uploaded_images.append((image_file, image_data))
                         if self.worker_thread:
@@ -411,18 +463,24 @@ URL=https://imx.to/g/{gallery_id}
                         failed_images.append((image_file, error))
                         if self.worker_thread:
                             self.worker_thread.log_message.emit(f"{timestamp()} ✗ Failed: {image_file} - {error}")
-                    
-                    # Update progress after each image
-                    completed_count = len(uploaded_images) + 1  # +1 for first image
-                    progress_percent = int((completed_count / len(image_files)) * 100)
-                    
+                    # Update progress (include the first image in counts)
+                    completed_count = len(uploaded_images) + 1
+                    progress_percent = int((completed_count / max(len(image_files), 1)) * 100)
                     if self.worker_thread:
                         self.worker_thread.progress_updated.emit(
                             folder_path, completed_count, len(image_files), progress_percent, image_file
                         )
                         self.worker_thread.log_message.emit(f"{timestamp()} Progress: {completed_count}/{len(image_files)} ({progress_percent}%)")
+                    # Refill if not soft-stopped
+                    if not remaining.empty():
+                        soft_stop = False
+                        if self.worker_thread and self.worker_thread.current_item and self.worker_thread.current_item.path == folder_path:
+                            soft_stop = getattr(self.worker_thread, '_soft_stop_requested_for', None) == folder_path
+                        if not soft_stop:
+                            nxt = remaining.get()
+                            futures_map[executor.submit(upload_single_image, nxt, 1)] = nxt
         
-        # Retry failed uploads with parallel processing
+        # Retry failed uploads with rolling concurrency
         retry_count = 0
         while failed_images and retry_count < max_retries:
             retry_count += 1
@@ -431,20 +489,21 @@ URL=https://imx.to/g/{gallery_id}
             if self.worker_thread:
                 self.worker_thread.log_message.emit(f"{timestamp()} Retrying {len(failed_images)} failed uploads (attempt {retry_count}/{max_retries})")
             
-            # Process retries in batches
-            for i in range(0, len(failed_images), parallel_batch_size):
-                retry_batch = failed_images[i:i + parallel_batch_size]
-                
-                with ThreadPoolExecutor(max_workers=parallel_batch_size) as executor:
-                    # Submit retries in order
-                    futures = []
-                    for image_file, _ in retry_batch:
-                        future = executor.submit(upload_single_image, image_file, retry_count + 1)
-                        futures.append((future, image_file))
-                    
-                    # Collect results in order
-                    for future, image_file in futures:
-                        image_file, image_data, error = future.result()
+            # Rolling retries
+            import concurrent.futures, queue
+            with ThreadPoolExecutor(max_workers=parallel_batch_size) as executor:
+                remaining = queue.Queue()
+                for img, _ in failed_images:
+                    remaining.put(img)
+                futures_map = {}
+                for _ in range(min(parallel_batch_size, remaining.qsize())):
+                    img = remaining.get()
+                    futures_map[executor.submit(upload_single_image, img, retry_count + 1)] = img
+                while futures_map:
+                    done, _ = concurrent.futures.wait(list(futures_map.keys()), return_when=concurrent.futures.FIRST_COMPLETED)
+                    for fut in done:
+                        img = futures_map.pop(fut)
+                        image_file, image_data, error = fut.result()
                         if image_data:
                             uploaded_images.append((image_file, image_data))
                             if self.worker_thread:
@@ -453,24 +512,23 @@ URL=https://imx.to/g/{gallery_id}
                             retry_failed.append((image_file, error))
                             if self.worker_thread:
                                 self.worker_thread.log_message.emit(f"{timestamp()} ✗ Retry failed: {image_file} - {error}")
-                        
-                        # Update progress during retries
-                        completed_count = len(uploaded_images) + 1  # +1 for first image
-                        progress_percent = int((completed_count / len(image_files)) * 100)
-                        
+                        completed_count = len(uploaded_images) + 1
+                        progress_percent = int((completed_count / max(len(image_files), 1)) * 100)
                         if self.worker_thread:
                             self.worker_thread.progress_updated.emit(
                                 folder_path, completed_count, len(image_files), progress_percent, image_file
                             )
+                        if not remaining.empty():
+                            nxt = remaining.get()
+                            futures_map[executor.submit(upload_single_image, nxt, retry_count + 1)] = nxt
             
             failed_images = retry_failed
         
         # Sort uploaded images by original file order
         uploaded_images.sort(key=lambda x: image_files.index(x[0]))
         
-        # Add to results in correct order
-        for _, image_data in uploaded_images:
-            results['images'].append(image_data)
+        # Add to results in correct order (includes previously uploaded + new ones)
+        results['images'] = [image_data for _, image_data in uploaded_images]
         
         # Calculate statistics
         end_time = time.time()
@@ -511,17 +569,22 @@ class UploadWorker(QThread):
         self.uploader = None
         self.running = True
         self.current_item = None
+        self._soft_stop_requested_for = None
         
     def stop(self):
         self.running = False
         self.wait()
+    
+    def request_soft_stop_current(self):
+        """Request to stop the current item after in-flight uploads finish."""
+        if self.current_item:
+            self._soft_stop_requested_for = self.current_item.path
         
     def run(self):
         """Main worker thread loop"""
         try:
             # Initialize custom GUI uploader with reference to this worker
             self.uploader = GUIImxToUploader(worker_thread=self)
-            self.log_message.emit(f"{timestamp()} Worker thread started")
             
             # Login once for session reuse
             self.log_message.emit(f"{timestamp()} Logging in...")
@@ -555,6 +618,8 @@ class UploadWorker(QThread):
     def upload_gallery(self, item: GalleryQueueItem):
         """Upload a single gallery"""
         try:
+            # Clear any previous soft-stop request when starting a new item
+            self._soft_stop_requested_for = None
             self.log_message.emit(f"{timestamp()} Starting upload: {item.name or os.path.basename(item.path)}")
             
             # Set status to uploading and update display
@@ -564,6 +629,9 @@ class UploadWorker(QThread):
             
             # Emit signal to update display immediately
             self.gallery_started.emit(item.path, item.total_images or 0)
+            # If soft stop already requested by the time we start, reflect status to incomplete in UI
+            if getattr(self, '_soft_stop_requested_for', None) == item.path:
+                self.queue_manager.update_item_status(item.path, "incomplete")
             
             # Get default settings
             defaults = load_user_defaults()
@@ -589,12 +657,34 @@ class UploadWorker(QThread):
                 item.end_time = time.time()
                 item.gallery_url = results.get('gallery_url', '')
                 item.gallery_id = results.get('gallery_id', '')
-                self.queue_manager.update_item_status(item.path, "completed")
-                self.gallery_completed.emit(item.path, results)
-                self.log_message.emit(f"{timestamp()} Completed: {item.name} -> {item.gallery_url}")
+                # If soft stop requested and not all images uploaded, mark as incomplete
+                if self._soft_stop_requested_for == item.path and results.get('successful_count', 0) < (item.total_images or 0):
+                    self.queue_manager.update_item_status(item.path, "incomplete")
+                    item.status = "incomplete"
+                    self.log_message.emit(f"{timestamp()} Marked incomplete: {item.name}")
+                    # Do not emit gallery_failed; just return to allow next item
+                    return
+                else:
+                    # If some images failed, mark failed but still emit completed to generate BBCode for successes
+                    failed_count = results.get('failed_count', 0)
+                    if failed_count and results.get('successful_count', 0) > 0:
+                        self.queue_manager.update_item_status(item.path, "failed")
+                        # Still generate files and show as failed with partial content
+                        self.gallery_completed.emit(item.path, results)
+                        self.log_message.emit(f"{timestamp()} Completed with failures: {item.name} -> {item.gallery_url}")
+                    else:
+                        self.queue_manager.update_item_status(item.path, "completed")
+                        self.gallery_completed.emit(item.path, results)
+                        self.log_message.emit(f"{timestamp()} Completed: {item.name} -> {item.gallery_url}")
             else:
-                self.queue_manager.update_item_status(item.path, "failed")
-                self.gallery_failed.emit(item.path, "Upload failed")
+                # If soft stop was requested, do NOT mark failed; mark incomplete instead
+                if self._soft_stop_requested_for == item.path:
+                    self.queue_manager.update_item_status(item.path, "incomplete")
+                    item.status = "incomplete"
+                    self.log_message.emit(f"{timestamp()} Marked incomplete: {item.name}")
+                else:
+                    self.queue_manager.update_item_status(item.path, "failed")
+                    self.gallery_failed.emit(item.path, "Upload failed")
                 
         except Exception as e:
             error_msg = str(e)
@@ -629,7 +719,7 @@ class QueueManager:
         queue_data = []
         for item in self.items.values():
             # Save all items except failed ones (unless they're completed)
-            if item.status in ["ready", "queued", "paused", "completed"]:
+            if item.status in ["ready", "queued", "paused", "completed", "incomplete"]:
                 queue_data.append({
                     'path': item.path,
                     'name': item.name,
@@ -641,7 +731,9 @@ class QueueManager:
                     'total_images': item.total_images,
                     'insertion_order': item.insertion_order,
                     'added_time': item.added_time,
-                    'finished_time': item.finished_time
+                    'finished_time': item.finished_time,
+                    'uploaded_files': list(getattr(item, 'uploaded_files', set())),
+                    'uploaded_images_data': list(getattr(item, 'uploaded_images_data', []))
                 })
         
         self.settings.setValue("queue_items", queue_data)
@@ -700,6 +792,14 @@ class QueueManager:
                                 insertion_order=item_data.get('insertion_order', self._next_order),
                                 added_time=item_data.get('added_time')
                             )
+                            # Restore uploaded_files if present
+                            uploaded_files = set(item_data.get('uploaded_files', []))
+                            if uploaded_files:
+                                item.uploaded_files = uploaded_files
+                            # Restore uploaded_images_data if present
+                            uploaded_images_data = item_data.get('uploaded_images_data', [])
+                            if uploaded_images_data:
+                                item.uploaded_images_data = uploaded_images_data
                             self._next_order = max(self._next_order, item.insertion_order + 1)
                             self.items[path] = item
                             #print(f"DEBUG: Loaded item: {path}")
@@ -822,7 +922,7 @@ class QueueManager:
     def start_item(self, path: str) -> bool:
         """Start a specific item in the queue"""
         with QMutexLocker(self.mutex):
-            if path in self.items and self.items[path].status in ["ready", "paused"]:
+            if path in self.items and self.items[path].status in ["ready", "paused", "incomplete"]:
                 self.items[path].status = "queued"
                 self.queue.put(self.items[path])
                 self.save_persistent_queue()
@@ -871,6 +971,11 @@ class QueueManager:
         with QMutexLocker(self.mutex):
             if path in self.items:
                 self.items[path].status = status
+                # Persist and bump version so GUI refreshes promptly
+                try:
+                    self.save_persistent_queue()
+                finally:
+                    self._inc_version()
     
     def get_all_items(self) -> List[GalleryQueueItem]:
         """Get all items, sorted by insertion order"""
@@ -1108,20 +1213,20 @@ class GalleryTableWidget(QTableWidget):
                         widget = widget.parent()
     
     def handle_copy_bbcode(self):
-        """Handle Ctrl+C for copying BBCode to clipboard"""
-        current_row = self.currentRow()
-        if current_row >= 0:
-            name_item = self.item(current_row, 1)  # Gallery name is now column 1
+        """Handle Ctrl+C for copying BBCode for all selected completed items"""
+        # Collect selected completed item paths
+        selected_rows = sorted({it.row() for it in self.selectedItems()})
+        paths = []
+        for row in selected_rows:
+            name_item = self.item(row, 1)
             if name_item:
                 path = name_item.data(Qt.ItemDataRole.UserRole)
                 if path:
-                    # Find the main GUI window and copy BBCode
-                    widget = self
-                    while widget:
-                        if hasattr(widget, 'copy_bbcode_to_clipboard'):
-                            widget.copy_bbcode_to_clipboard(path)
-                            return
-                        widget = widget.parent()
+                    paths.append(path)
+        if not paths:
+            return
+        # Delegate to the multi-copy helper to aggregate
+        self.copy_bbcode_via_menu_multi(paths)
     
     def show_context_menu(self, position):
         """Show context menu for table items"""
@@ -1129,37 +1234,49 @@ class GalleryTableWidget(QTableWidget):
         
         menu = QMenu()
         
-        # Get selected rows
-        selected_rows = set()
-        for item in self.selectedItems():
-            selected_rows.add(item.row())
-        
-        if selected_rows:
-            # Add delete action
+        # Build selected rows set
+        selected_rows = sorted({it.row() for it in self.selectedItems()})
+        selected_paths = []
+        for row in selected_rows:
+            name_item = self.item(row, 1)
+            if name_item:
+                path = name_item.data(Qt.ItemDataRole.UserRole)
+                if path:
+                    selected_paths.append(path)
+
+        if selected_paths:
+            # Delete
             delete_action = menu.addAction("Delete Selected")
             delete_action.triggered.connect(self.delete_selected_via_menu)
-            
-            # Add copy BBCode action for completed items
-            completed_items = []
-            for row in selected_rows:
-                name_item = self.item(row, 1)
-                if name_item:
-                    path = name_item.data(Qt.ItemDataRole.UserRole)
-                    if path:
-                        # Find the main GUI window to check item status
-                        widget = self
-                        while widget:
-                            if hasattr(widget, 'queue_manager'):
-                                item = widget.queue_manager.get_item(path)
-                                if item and item.status == "completed":
-                                    completed_items.append(path)
-                                break
-                            widget = widget.parent()
-            
-            if completed_items:
-                menu.addSeparator()
+
+            # Open Folder (always available for selected items)
+            open_action = menu.addAction("Open Folder")
+            open_action.triggered.connect(lambda: self.open_folders_via_menu(selected_paths))
+
+            # Cancel (for queued items)
+            queued_paths = []
+            widget = self
+            while widget and not hasattr(widget, 'queue_manager'):
+                widget = widget.parent()
+            if widget and hasattr(widget, 'queue_manager'):
+                for path in selected_paths:
+                    item = widget.queue_manager.get_item(path)
+                    if item and item.status == "queued":
+                        queued_paths.append(path)
+            if queued_paths:
+                cancel_action = menu.addAction("Cancel Upload")
+                cancel_action.triggered.connect(lambda: self.cancel_selected_via_menu(queued_paths))
+
+            # Copy BBCode (for completed items)
+            completed_paths = []
+            if widget and hasattr(widget, 'queue_manager'):
+                for path in selected_paths:
+                    item = widget.queue_manager.get_item(path)
+                    if item and item.status == "completed":
+                        completed_paths.append(path)
+            if completed_paths:
                 copy_action = menu.addAction("Copy BBCode")
-                copy_action.triggered.connect(lambda: self.copy_bbcode_via_menu(completed_items[0]))
+                copy_action.triggered.connect(lambda: self.copy_bbcode_via_menu_multi(completed_paths))
         
         if menu.actions():
             menu.exec(self.mapToGlobal(position))
@@ -1174,15 +1291,79 @@ class GalleryTableWidget(QTableWidget):
                 return
             widget = widget.parent()
     
-    def copy_bbcode_via_menu(self, path):
-        """Copy BBCode via context menu"""
+    def open_folders_via_menu(self, paths):
+        """Open the given gallery folders in the OS file manager"""
+        for path in paths:
+            if os.path.isdir(path):
+                QDesktopServices.openUrl(QUrl.fromLocalFile(path))
+
+    def cancel_selected_via_menu(self, queued_paths):
+        """Cancel upload for selected queued items"""
+        widget = self
+        while widget and not hasattr(widget, 'cancel_single_item'):
+            widget = widget.parent()
+        if widget and hasattr(widget, 'cancel_single_item'):
+            for path in queued_paths:
+                widget.cancel_single_item(path)
+
+    def copy_bbcode_via_menu_multi(self, paths):
+        """Copy BBCode for multiple completed items (concatenated with separators)"""
         # Find the main GUI window
         widget = self
-        while widget:
-            if hasattr(widget, 'copy_bbcode_to_clipboard'):
-                widget.copy_bbcode_to_clipboard(path)
-                return
+        while widget and not hasattr(widget, 'copy_bbcode_to_clipboard'):
             widget = widget.parent()
+        if not widget:
+            return
+        # Aggregate BBCode contents; reuse copy function to centralize path lookup
+        contents = []
+        for path in paths:
+            item = widget.queue_manager.get_item(path)
+            if not item or item.status != "completed":
+                continue
+            # Inline read similar to copy_bbcode_to_clipboard to avoid changing it
+            folder_name = os.path.basename(path)
+            from imxup import get_central_storage_path, build_gallery_filenames
+            central_path = get_central_storage_path()
+            if item.gallery_id and (item.name or folder_name):
+                _, _, bbcode_filename = build_gallery_filenames(item.name or folder_name, item.gallery_id)
+                central_bbcode = os.path.join(central_path, bbcode_filename)
+            else:
+                central_bbcode = os.path.join(central_path, f"{folder_name}_bbcode.txt")
+            text = ""
+            if os.path.exists(central_bbcode):
+                try:
+                    with open(central_bbcode, 'r', encoding='utf-8') as f:
+                        text = f.read().strip()
+                except Exception:
+                    text = ""
+            if text:
+                contents.append(text)
+        num_posts = len(contents)
+        if num_posts:
+            QApplication.clipboard().setText("\n\n".join(contents))
+            # Notify user via log and brief status message
+            try:
+                message = f"Copied BBCode to clipboard for {num_posts} post" + ("s" if num_posts != 1 else "")
+                # Log
+                if hasattr(widget, 'add_log_message'):
+                    from imxup import timestamp
+                    widget.add_log_message(f"{timestamp()} {message}")
+                # Status bar brief message
+                if hasattr(widget, 'statusBar') and widget.statusBar():
+                    widget.statusBar().showMessage(message, 2500)
+            except Exception:
+                pass
+        else:
+            # Inform user nothing was copied
+            try:
+                message = "No completed posts selected to copy BBCode"
+                if hasattr(widget, 'add_log_message'):
+                    from imxup import timestamp
+                    widget.add_log_message(f"{timestamp()} {message}")
+                if hasattr(widget, 'statusBar') and widget.statusBar():
+                    widget.statusBar().showMessage(message, 2500)
+            except Exception:
+                pass
 
 class ActionButtonWidget(QWidget):
     """Action buttons widget for table cells"""
@@ -1196,88 +1377,84 @@ class ActionButtonWidget(QWidget):
         self.start_btn = QPushButton("Start")
         self.start_btn.setFixedSize(50, 25)
         
-        self.start_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #3498db;
-                color: black;
-                border: 1px solid #184c6f;
-                border-radius: 3px;
-                font-size: 9px;
-                font-weight: bold;
-            }
-            QPushButton:hover {
-                background-color: #219150;
-                border: 1px solid #1e874a;
-            }
-            QPushButton:pressed {
-                background-color: #229954;
-            }
-        """)
+        #self.start_btn.setStyleSheet("""
+        #    QPushButton {
+        #        background-color: #d8f0e2;
+        #        border: 1px solid #85a190;
+        #        border-radius: 3px;
+        #        font-size: 12px;
+        #    }
+        #    QPushButton:hover {
+        #        background-color: #bee6cf;
+        #        border: 1px solid #85a190;
+        #    }
+        #    QPushButton:pressed {
+        #        background-color: #6495ed;
+        #        border: 1px solid #1e2c47;
+        #    }
+        #""")
         
         self.stop_btn = QPushButton("Stop")
         
         self.stop_btn.setFixedSize(50, 25)
         self.stop_btn.setVisible(False)
-        self.stop_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #e74c3c;
-                color: white;
-                border: 1px solid #c0392b;
-                border-radius: 3px;
-                font-size: 9px;
-                font-weight: bold;
-            }
-            QPushButton:hover {
-                background-color: #c0392b;
-            }
-            QPushButton:pressed {
-                background-color: #a93226;
-                border: 1px solid #8b291a;
-            }
-        """)
+        #self.stop_btn.setStyleSheet("""
+        #    QPushButton {
+        #        background-color: #f0938a;
+
+        #        border: 1px solid #cf4436;
+        #        border-radius: 3px;
+        #        font-size: 12px;
+
+        #    }
+        #    QPushButton:hover {
+        #        background-color: #c0392b;
+        #    }
+        #    QPushButton:pressed {
+        #        background-color: #a93226;
+        #        border: 1px solid #8b291a;
+        #    }
+        #""")
         
         self.view_btn = QPushButton("View")
         self.view_btn.setFixedSize(50, 25)
         self.view_btn.setVisible(False)
-        self.view_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #27ae60;
-                color: color;
-                border: 1px solid #135730;
-                border-radius: 3px;
-                font-size: 10px;
-                font-weight: bold;
-                padding: 0 8px;
-            }
-            QPushButton:hover {
-                background-color: #2980b9;
-                border: 1px solid #21618c;
-            }
-            QPushButton:pressed {
-                background-color: #21618c;
-            }
-        """)
+        #self.view_btn.setStyleSheet("""
+        #    QPushButton {
+        #        background-color: #dfe9fb;
+        #        border: 1px solid #999;
+        #        border-radius: 3px;
+        #        font-size: 12px;
+
+        #    }
+        #    QPushButton:hover {
+        #        background-color: #c8d9f8;
+        #        border: 1px solid #7b8dac;
+        #    }
+        #    QPushButton:pressed {
+        #        background-color: #072213;
+        #    }
+        #""")
         
         self.cancel_btn = QPushButton("Cancel")
         self.cancel_btn.setFixedSize(50, 25)
         self.cancel_btn.setVisible(False)
-        self.cancel_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #f39c12;
-                color: black;
-                border: 1px solid #c0392b;
-                border-radius: 3px;
-                font-size: 9px;
-                font-weight: bold;
-            }
-            QPushButton:hover {
-                background-color: #c0392b;
-                border: 1px solid #a93226;
-            }
-            QPushButton:pressed {
-                background-color: #a93226;
-            }
-        """)
+        #self.cancel_btn.setStyleSheet("""
+        #    QPushButton {
+        #        background-color: #f7c370;
+        #        border: 1px solid #aa6d0c;
+        #        border-radius: 3px;
+        #        font-size: 12px;
+        #    }
+        #    QPushButton:hover {
+        #        background-color: #f5af41;
+        #        border: 1px solid #794e09;
+        #    }
+        #    QPushButton:pressed {
+        #        background-color: #f39c12;
+        #        border: 1px solid #482e05;
+        #    }
+        #""")
         
         layout.addStretch()  # Left stretch
         layout.addWidget(self.start_btn)
@@ -1310,6 +1487,12 @@ class ActionButtonWidget(QWidget):
             self.stop_btn.setVisible(False)
             self.view_btn.setVisible(False)
             self.cancel_btn.setVisible(False)
+        elif status == "incomplete":
+            self.start_btn.setVisible(True)
+            self.start_btn.setText("Resume")
+            self.stop_btn.setVisible(False)
+            self.view_btn.setVisible(False)
+            self.cancel_btn.setVisible(False)
         elif status == "completed":
             self.start_btn.setVisible(False)
             self.stop_btn.setVisible(False)
@@ -1335,8 +1518,8 @@ class CredentialSetupDialog(QDialog):
         # Info text
         info_text = QLabel(
             "IMX.to Gallery Uploader credentials:\n\n"
-            "• API Key: Required for uploading files\n"
-            "• Username & Password: Required for naming galleries\n\n"
+            "<b>• API Key:</b> Required for uploading files\n"
+            "<b>• Username & Password:</b> Required for naming galleries\n\n"
             "Without username/password, all galleries will be named \'untitled gallery\'\n\n"
             "Credentials are stored in your home directory, encrypted with AES-128-CBC via Fernet using system's hostname/username as the encryption key.\n\n"
             "This means:\n"
@@ -1756,6 +1939,60 @@ class BBCodeViewerDialog(QDialog):
         except Exception as e:
             QMessageBox.warning(self, "Save Error", f"Error saving files: {str(e)}")
 
+class HelpDialog(QDialog):
+    """Dialog to display program documentation in tabs"""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Help & Documentation")
+        self.setModal(True)
+        self.resize(800, 600)
+
+        layout = QVBoxLayout(self)
+
+        self.tabs = QTabWidget()
+        layout.addWidget(self.tabs)
+
+        # Candidate documentation files in preferred order
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        doc_candidates = [
+            ("GUI Guide", os.path.join(base_dir, "GUI_README.md")),
+            ("Quick Start (GUI)", os.path.join(base_dir, "QUICK_START_GUI.md")),
+            ("README", os.path.join(base_dir, "README.md")),
+            ("Troubleshooting Drag & Drop", os.path.join(base_dir, "TROUBLESHOOT_DRAG_DROP.md")),
+            ("GUI Improvements", os.path.join(base_dir, "GUI_IMPROVEMENTS.md")),
+        ]
+
+        any_docs_loaded = False
+        for title, path in doc_candidates:
+            if os.path.exists(path):
+                any_docs_loaded = True
+                editor = QTextEdit()
+                editor.setReadOnly(True)
+                editor.setFont(QFont("Consolas", 10))
+                try:
+                    # Prefer Markdown rendering if available
+                    editor.setMarkdown(open(path, "r", encoding="utf-8").read())
+                except Exception:
+                    # Fallback to plain text
+                    try:
+                        with open(path, "r", encoding="utf-8") as f:
+                            editor.setPlainText(f.read())
+                    except Exception as e:
+                        editor.setPlainText(f"Failed to load {path}: {e}")
+                self.tabs.addTab(editor, title)
+
+        if not any_docs_loaded:
+            info = QTextEdit()
+            info.setReadOnly(True)
+            info.setPlainText("No documentation files found in the application directory.")
+            self.tabs.addTab(info, "Info")
+
+        # Close button
+        button_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        button_box.rejected.connect(self.reject)
+        button_box.accepted.connect(self.accept)
+        layout.addWidget(button_box)
+
 class TableProgressWidget(QWidget):
     """Progress bar widget for table cells - properly centered and sized"""
     
@@ -1800,14 +2037,14 @@ class TableProgressWidget(QWidget):
         if status == "completed":
             self.progress_bar.setStyleSheet("""
                 QProgressBar {
-                    border: 1px solid #27ae60;
+                    border: 1px solid #67C58F;
                     border-radius: 3px;
                     text-align: center;
                     font-size: 11px;
                     font-weight: bold;
                 }
                 QProgressBar::chunk {
-                    background-color: #27ae60;
+                    background-color: #67C58F;
                     border-radius: 2px;
                 }
             """)
@@ -1828,14 +2065,14 @@ class TableProgressWidget(QWidget):
         elif status == "uploading":
             self.progress_bar.setStyleSheet("""
                 QProgressBar {
-                    border: 1px solid #3498db;
+                    border: 1px solid #48a2de;
                     border-radius: 3px;
                     text-align: center;
                     font-size: 12px;
                     font-weight: bold;
                 }
                 QProgressBar::chunk {
-                    background-color: #3498db;
+                    background-color: #48a2de;
                     border-radius: 2px;
                 }
             """)
@@ -1991,6 +2228,23 @@ class ImxUploadGUI(QMainWindow):
         self.start_all_btn = QPushButton("Start All")
         self.start_all_btn.clicked.connect(self.start_all_uploads)
         self.start_all_btn.setMinimumHeight(34)
+        #self.start_all_btn.setStyleSheet("""
+        #    QPushButton {
+        #        background-color: #bee6cf;
+        #        border: 1px solid #5f7367;
+        #        border-radius: 3px;
+
+        #    }
+        #    QPushButton:hover {
+        #        background-color: #abcfba;
+        #        border: 1px solid #5f7367;
+                
+        #    }
+        #    QPushButton:pressed {
+        #        background-color: #6495ed;
+        #        border: 1px solid #1e2c47;
+        #    }
+        #""")
         controls_layout.addWidget(self.start_all_btn)
         
         self.pause_all_btn = QPushButton("Pause All")
@@ -2052,9 +2306,9 @@ class ImxUploadGUI(QMainWindow):
         settings_layout.addWidget(self.max_retries_spin, 2, 1)
         
         # Parallel upload batch size
-        settings_layout.addWidget(QLabel("Parallel Upload Batch Size:"), 3, 0)
+        settings_layout.addWidget(QLabel("Concurrent Uploads:"), 3, 0)
         self.batch_size_spin = QSpinBox()
-        self.batch_size_spin.setRange(1, 8)
+        self.batch_size_spin.setRange(1, 20)
         self.batch_size_spin.setValue(defaults.get('parallel_batch_size', 4))
         self.batch_size_spin.setToolTip("Number of images to upload simultaneously. Higher values = faster uploads but more server load.")
         self.batch_size_spin.valueChanged.connect(self.on_setting_changed)
@@ -2196,27 +2450,78 @@ class ImxUploadGUI(QMainWindow):
         
         main_layout.addLayout(top_layout)
         
-        # Bottom section - Overall progress (full width)
+        # Bottom section - Overall progress (left) and Help (right)
+        bottom_layout = QHBoxLayout()
+
+        # Overall progress group (left)
         progress_group = QGroupBox("Overall Progress")
         progress_layout = QVBoxLayout(progress_group)
-        
-        # Overall progress
+
         overall_layout = QHBoxLayout()
         overall_layout.addWidget(QLabel("Overall:"))
         self.overall_progress = QProgressBar()
+        self.overall_progress.setMinimum(0)
+        self.overall_progress.setMaximum(100)
         self.overall_progress.setTextVisible(True)
         self.overall_progress.setFormat("Ready")
-        self.overall_progress.setMinimumHeight(25)
+        self.overall_progress.setMinimumHeight(24)
+        self.overall_progress.setMaximumHeight(26)
+        self.overall_progress.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        # Style to match other progress meters
+        self.overall_progress.setStyleSheet("""
+            QProgressBar {
+                border: 1px solid #ccc;
+                border-radius: 3px;
+                text-align: center;
+                font-size: 11px;
+                font-weight: bold;
+                margin: 0px;
+                padding: 0px;
+            }
+            QProgressBar::chunk {
+                border-radius: 2px;
+            }
+        """)
         overall_layout.addWidget(self.overall_progress)
         progress_layout.addLayout(overall_layout)
-        
+
         # Statistics
         self.stats_label = QLabel("Ready to upload galleries")
         self.stats_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.stats_label.setStyleSheet("color: #666; font-style: italic;")
         progress_layout.addWidget(self.stats_label)
-        
-        main_layout.addWidget(progress_group)
+
+        # Keep bottom short like the original progress box
+        progress_group.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        progress_group.setMaximumHeight(100)
+        bottom_layout.addWidget(progress_group, 3)  # Match left/right ratio (3:1)
+
+        # Help group (right)
+        help_group = QGroupBox("Help")
+        help_layout = QVBoxLayout(help_group)
+        self.help_btn = QPushButton("Open Help")
+        self.help_btn.setMinimumHeight(30)
+        self.help_btn.setToolTip("Open program documentation")
+        self.help_btn.clicked.connect(self.open_help_dialog)
+        # Center the button
+        btn_row = QHBoxLayout()
+        btn_row.addStretch()
+        btn_row.addWidget(self.help_btn)
+        btn_row.addStretch()
+        help_layout.addLayout(btn_row)
+        # Keep bottom short like the original progress box
+        help_group.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
+        help_group.setMaximumHeight(100)
+
+        bottom_layout.addWidget(help_group, 1)
+
+        main_layout.addLayout(bottom_layout)
+        # Ensure the top section takes remaining space and bottom stays compact
+        try:
+            main_layout.setStretch(0, 1)  # top_layout
+            main_layout.setStretch(1, 0)  # bottom_layout
+        except Exception:
+            pass
         
     def check_credentials(self):
         """Check for stored credentials and prompt if missing"""
@@ -2268,6 +2573,11 @@ class ImxUploadGUI(QMainWindow):
             self.add_log_message(f"{timestamp()} Credentials updated successfully")
         else:
             self.add_log_message(f"{timestamp()} Credential management cancelled")
+
+    def open_help_dialog(self):
+        """Open the help/documentation dialog"""
+        dialog = HelpDialog(self)
+        dialog.exec()
 
     def setup_system_tray(self):
         """Setup system tray icon"""
@@ -2423,6 +2733,8 @@ class ImxUploadGUI(QMainWindow):
                 status_text = "Uploading"
             elif item.status == "scanning":
                 status_text = "Scanning"
+            elif item.status == "incomplete":
+                status_text = "Incomplete"
             else:
                 status_text = item.status.title()
             status_item = QTableWidgetItem(status_text)
@@ -2448,6 +2760,11 @@ class ImxUploadGUI(QMainWindow):
             elif item.status == "paused":
                 status_item.setBackground(QColor(241, 196, 15))  # Yellow
                 status_item.setForeground(QColor(0, 0, 0))  # Black text
+                status_item.setData(Qt.ItemDataRole.BackgroundRole, QColor(241, 196, 15))
+                status_item.setData(Qt.ItemDataRole.ForegroundRole, QColor(0, 0, 0))
+            elif item.status == "incomplete":
+                status_item.setBackground(QColor(241, 196, 15))  # Yellow (same as paused)
+                status_item.setForeground(QColor(0, 0, 0))
                 status_item.setData(Qt.ItemDataRole.BackgroundRole, QColor(241, 196, 15))
                 status_item.setData(Qt.ItemDataRole.ForegroundRole, QColor(0, 0, 0))
             elif item.status == "queued":
@@ -2503,6 +2820,18 @@ class ImxUploadGUI(QMainWindow):
         # Restore scroll position
         scrollbar = self.gallery_table.verticalScrollBar()
         scrollbar.setValue(scroll_position)
+        
+        # Enable/disable top-level controls based on item statuses
+        try:
+            has_ready = any(item.status == "ready" for item in items)
+            has_queued = any(item.status == "queued" for item in items)
+            # Consider 'incomplete' as resumable
+            has_resumable = any(item.status == "incomplete" for item in items)
+            self.start_all_btn.setEnabled(has_ready or has_resumable)
+            self.pause_all_btn.setEnabled(has_queued)
+        except Exception:
+            # Controls may not be initialized yet during early calls
+            pass
     
     def update_progress_display(self):
         """Update overall progress and statistics"""
@@ -2511,25 +2840,97 @@ class ImxUploadGUI(QMainWindow):
         if not items:
             self.overall_progress.setValue(0)
             self.overall_progress.setFormat("Ready")
+            # Blue for active/ready
+            self.overall_progress.setStyleSheet(
+                """
+                QProgressBar {
+                    border: 1px solid #48a2de;
+                    border-radius: 3px;
+                    text-align: center;
+                    font-size: 11px;
+                    font-weight: bold;
+                }
+                QProgressBar::chunk {
+                    background-color: #48a2de;
+                    border-radius: 2px;
+                }
+                """
+            )
             self.stats_label.setText("Ready to upload galleries")
             return
         
-        # Calculate overall progress
+        # Calculate overall progress (account for resumed items' previously uploaded files)
         total_images = sum(item.total_images for item in items if item.total_images > 0)
-        uploaded_images = sum(item.uploaded_images for item in items)
+        uploaded_images = 0
+        for item in items:
+            if item.total_images > 0:
+                base_uploaded = item.uploaded_images
+                if hasattr(item, 'uploaded_files') and item.uploaded_files:
+                    base_uploaded = max(base_uploaded, len(item.uploaded_files))
+                uploaded_images += base_uploaded
         
         if total_images > 0:
             overall_percent = int((uploaded_images / total_images) * 100)
             self.overall_progress.setValue(overall_percent)
             self.overall_progress.setFormat(f"{overall_percent}% ({uploaded_images}/{total_images})")
+            # Blue while in progress, green when 100%
+            if overall_percent >= 100:
+                self.overall_progress.setStyleSheet(
+                    """
+                    QProgressBar {
+                        border: 1px solid #67C58F;
+                        border-radius: 3px;
+                        text-align: center;
+                        font-size: 11px;
+                        font-weight: bold;
+                    }
+                    QProgressBar::chunk {
+                        background-color: #67C58F;
+                        border-radius: 2px;
+                    }
+                    """
+                )
+            else:
+                self.overall_progress.setStyleSheet(
+                    """
+                    QProgressBar {
+                        border: 1px solid #48a2de;
+                        border-radius: 3px;
+                        text-align: center;
+                        font-size: 11px;
+                        font-weight: bold;
+                    }
+                    QProgressBar::chunk {
+                        background-color: #48a2de;
+                        border-radius: 2px;
+                    }
+                    """
+                )
         else:
             self.overall_progress.setValue(0)
             self.overall_progress.setFormat("Preparing...")
+            # Blue while preparing
+            self.overall_progress.setStyleSheet(
+                """
+                QProgressBar {
+                    border: 1px solid #48a2de;
+                    border-radius: 3px;
+                    text-align: center;
+                    font-size: 11px;
+                    font-weight: bold;
+                }
+                QProgressBar::chunk {
+                    background-color: #48a2de;
+                    border-radius: 2px;
+                }
+                """
+            )
         
         # Update statistics
         completed = sum(1 for item in items if item.status == "completed")
         uploading = sum(1 for item in items if item.status == "uploading")
         failed = sum(1 for item in items if item.status == "failed")
+        incomplete = sum(1 for item in items if item.status == "incomplete")
         queued = len(items) - completed - uploading - failed
         
         stats_parts = []
@@ -2541,6 +2942,8 @@ class ImxUploadGUI(QMainWindow):
             stats_parts.append(f"{completed} completed")
         if failed > 0:
             stats_parts.append(f"{failed} failed")
+        if incomplete > 0:
+            stats_parts.append(f"{incomplete} incomplete")
         
         if stats_parts:
             self.stats_label.setText(" • ".join(stats_parts))
@@ -2555,7 +2958,9 @@ class ImxUploadGUI(QMainWindow):
                 item.total_images = total_images
                 item.uploaded_images = 0
                 # Ensure status is set to uploading
-                item.status = "uploading"
+                # Respect pre-set statuses like 'incomplete' from a soft stop request
+                if item.status not in ["paused", "incomplete"]:
+                    item.status = "uploading"
         
         # Update only the specific row status instead of full table refresh
         for row in range(self.gallery_table.rowCount()):
@@ -2568,20 +2973,28 @@ class ImxUploadGUI(QMainWindow):
                 uploaded_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
                 self.gallery_table.setItem(row, 2, uploaded_item)
                 
-                # Update status to Uploading
-                status_item = QTableWidgetItem("Uploading")
+                # Update status cell based on current item status
+                current_status = item.status
+                if current_status == "incomplete":
+                    status_item = QTableWidgetItem("Incomplete")
+                    status_item.setBackground(QColor(241, 196, 15))
+                    status_item.setForeground(QColor(0, 0, 0))
+                    status_item.setData(Qt.ItemDataRole.BackgroundRole, QColor(241, 196, 15))
+                    status_item.setData(Qt.ItemDataRole.ForegroundRole, QColor(0, 0, 0))
+                else:
+                    status_item = QTableWidgetItem("Uploading")
+                    status_item.setBackground(QColor(52, 152, 219))
+                    status_item.setForeground(QColor(0, 0, 0))
+                    status_item.setData(Qt.ItemDataRole.BackgroundRole, QColor(52, 152, 219))
+                    status_item.setData(Qt.ItemDataRole.ForegroundRole, QColor(0, 0, 0))
                 status_item.setFlags(status_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
                 status_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-                status_item.setBackground(QColor(52, 152, 219))  # Blue background
-                status_item.setForeground(QColor(0, 0, 0))  # Black text
-                status_item.setData(Qt.ItemDataRole.BackgroundRole, QColor(52, 152, 219))
-                status_item.setData(Qt.ItemDataRole.ForegroundRole, QColor(0, 0, 0))
                 self.gallery_table.setItem(row, 4, status_item)
                 
                 # Update action buttons
                 action_widget = self.gallery_table.cellWidget(row, 7)
                 if isinstance(action_widget, ActionButtonWidget):
-                    action_widget.update_buttons("uploading")
+                    action_widget.update_buttons(current_status)
                 break
     
     def on_progress_updated(self, path: str, completed: int, total: int, progress_percent: int, current_image: str):
@@ -2595,7 +3008,7 @@ class ImxUploadGUI(QMainWindow):
                 item.current_image = current_image
                 
                 # Ensure status is uploading during progress updates
-                if item.status != "completed" and item.status != "failed":
+                if item.status not in ["completed", "failed", "incomplete"]:
                     item.status = "uploading"
                 
                 # Find and update the correct row in the table
@@ -2619,41 +3032,59 @@ class ImxUploadGUI(QMainWindow):
                             progress_widget.update_progress(progress_percent, item.status)
                             self.gallery_table.setCellWidget(row, 3, progress_widget)  # Progress is now column 3
                         
-                        # ALWAYS show "Uploading" if there's any progress
+                        # Show appropriate status if incomplete requested; otherwise show Uploading
                         if progress_percent > 0 and progress_percent < 100:
-                            status_item = QTableWidgetItem("Uploading")
-                            status_item.setFlags(status_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
-                            status_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-                            status_item.setBackground(QColor(52, 152, 219))  # Blue background
-                            status_item.setForeground(QColor(0, 0, 0))  # Black text
-                            status_item.setData(Qt.ItemDataRole.BackgroundRole, QColor(52, 152, 219))
-                            status_item.setData(Qt.ItemDataRole.ForegroundRole, QColor(0, 0, 0))
-                            self.gallery_table.setItem(row, 4, status_item)  # Status is now column 4
+                            if item.status == "incomplete":
+                                status_item = QTableWidgetItem("Incomplete")
+                                status_item.setFlags(status_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                                status_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                                status_item.setBackground(QColor(241, 196, 15))
+                                status_item.setForeground(QColor(0, 0, 0))
+                                status_item.setData(Qt.ItemDataRole.BackgroundRole, QColor(241, 196, 15))
+                                status_item.setData(Qt.ItemDataRole.ForegroundRole, QColor(0, 0, 0))
+                            else:
+                                status_item = QTableWidgetItem("Uploading")
+                                status_item.setFlags(status_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                                status_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                                status_item.setBackground(QColor(52, 152, 219))  # Blue background
+                                status_item.setForeground(QColor(0, 0, 0))  # Black text
+                                status_item.setData(Qt.ItemDataRole.BackgroundRole, QColor(52, 152, 219))
+                                status_item.setData(Qt.ItemDataRole.ForegroundRole, QColor(0, 0, 0))
+                            self.gallery_table.setItem(row, 4, status_item)
                         
-                        # Update status if it's completed (100%)
-                        if progress_percent >= 100:
-                            # Set finished timestamp if not already set
-                            if not item.finished_time:
-                                item.finished_time = time.time()
-                            
-                            # Update status to completed
-                            item.status = "completed"
-                            status_item = QTableWidgetItem("Completed")
-                            status_item.setFlags(status_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
-                            status_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-                            status_item.setBackground(QColor(46, 204, 113))  # Green background
-                            status_item.setForeground(QColor(0, 0, 0))  # Black text
-                            self.gallery_table.setItem(row, 4, status_item)  # Status is now column 4
-                            
-                            # Update the finished time column
-                            finished_dt = datetime.fromtimestamp(item.finished_time)
-                            finished_text = finished_dt.strftime("%Y-%m-%d %H:%M:%S")
-                            finished_item = QTableWidgetItem(finished_text)
-                            finished_item.setFlags(finished_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
-                            finished_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-                            finished_item.setFont(QFont("Arial", 8))  # Smaller font
-                            self.gallery_table.setItem(row, 6, finished_item)
-                        break
+                # Update status if it's completed (100%)
+                if progress_percent >= 100:
+                    # Set finished timestamp if not already set
+                    if not item.finished_time:
+                        item.finished_time = time.time()
+                    
+                    # If there were failures (based on item.uploaded_images vs total), show Failed; else Completed
+                    final_status_text = "Completed"
+                    row_failed = False
+                    if item.total_images and item.uploaded_images is not None and item.uploaded_images < item.total_images:
+                        final_status_text = "Failed"
+                        row_failed = True
+                    item.status = "completed" if not row_failed else "failed"
+                    status_item = QTableWidgetItem(final_status_text)
+                    status_item.setFlags(status_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                    status_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                    if row_failed:
+                        status_item.setBackground(QColor(231, 76, 60))
+                        status_item.setForeground(QColor(255, 255, 255))
+                    else:
+                        status_item.setBackground(QColor(46, 204, 113))  # Green background
+                        status_item.setForeground(QColor(0, 0, 0))  # Black text
+                    self.gallery_table.setItem(row, 4, status_item)  # Status is now column 4
+                    
+                    # Update the finished time column
+                    finished_dt = datetime.fromtimestamp(item.finished_time)
+                    finished_text = finished_dt.strftime("%Y-%m-%d %H:%M:%S")
+                    finished_item = QTableWidgetItem(finished_text)
+                    finished_item.setFlags(finished_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                    finished_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                    finished_item.setFont(QFont("Arial", 8))  # Smaller font
+                    self.gallery_table.setItem(row, 6, finished_item)
+                    return
     
     def on_gallery_completed(self, path: str, results: dict):
         """Handle gallery completion"""
@@ -2674,29 +3105,39 @@ class ImxUploadGUI(QMainWindow):
             # Import template functions
             from imxup import generate_bbcode_from_template
             
-            # Prepare template data
-            all_images_bbcode = ""
-            for image_data in results.get('images', []):
-                all_images_bbcode += image_data.get('bbcode', '') + "  "
-            
-            # Calculate statistics
-            total_size = results.get('total_size', 0) or item.total_size
-            folder_size = f"{(total_size) / (1024*1024):.1f} MB"
-            avg_width = item.avg_width or results.get('avg_width', 0)
-            avg_height = item.avg_height or results.get('avg_height', 0)
-            
-            # Get most common extension from uploaded images
-            extensions = []
-            for image_data in results.get('images', []):
-                if 'image_url' in image_data:
-                    # Extract extension from URL or use default
-                    url = image_data['image_url']
-                    if '.' in url:
-                        ext = url.split('.')[-1].upper()
-                        if ext in ['JPG', 'PNG', 'GIF', 'BMP', 'WEBP']:
-                            extensions.append(ext)
-            extension = max(set(extensions), key=extensions.count) if extensions else "JPG"
-            
+        # Prepare template data (include successes; failed shown separately)
+        all_images_bbcode = ""
+        for image_data in results.get('images', []):
+            all_images_bbcode += image_data.get('bbcode', '') + "  "
+        failed_details = results.get('failed_details', [])
+        failed_summary = ""
+        if failed_details:
+            failed_summary_lines = [f"[b]Failed ({len(failed_details)}):[/b]"]
+            for fname, reason in failed_details[:20]:
+                failed_summary_lines.append(f"- {fname}: {reason}")
+            if len(failed_details) > 20:
+                failed_summary_lines.append(f"... and {len(failed_details) - 20} more")
+            failed_summary = "\n" + "\n".join(failed_summary_lines)
+
+        # Calculate statistics (always, not only when failures exist)
+        queue_item = self.queue_manager.get_item(path)
+        total_size = results.get('total_size', 0) or (queue_item.total_size if queue_item and getattr(queue_item, 'total_size', 0) else 0)
+        folder_size = f"{(total_size) / (1024*1024):.1f} MB"
+        avg_width = (queue_item.avg_width if queue_item and getattr(queue_item, 'avg_width', 0) else 0) or results.get('avg_width', 0)
+        avg_height = (queue_item.avg_height if queue_item and getattr(queue_item, 'avg_height', 0) else 0) or results.get('avg_height', 0)
+
+        # Get most common extension from uploaded images
+        extensions = []
+        for image_data in results.get('images', []):
+            if 'image_url' in image_data:
+                url = image_data['image_url']
+                if '.' in url:
+                    ext = url.split('.')[-1].upper()
+                    if ext in ['JPG', 'PNG', 'GIF', 'BMP', 'WEBP']:
+                        extensions.append(ext)
+        extension = max(set(extensions), key=extensions.count) if extensions else "JPG"
+
+        if gallery_id and gallery_name:
             # Prepare template data
             template_data = {
                 'folder_name': gallery_name,
@@ -2707,7 +3148,7 @@ class ImxUploadGUI(QMainWindow):
                 'picture_count': len(results.get('images', [])),
                 'folder_size': folder_size,
                 'gallery_link': f"https://imx.to/g/{gallery_id}",
-                'all_images': all_images_bbcode.strip()
+                'all_images': (all_images_bbcode.strip() + ("\n\n" + failed_summary if failed_summary else "")).strip()
             }
             
             # Get template name from the item
@@ -2815,15 +3256,17 @@ URL=https://imx.to/g/{gallery_id}
             self.add_log_message(f"{timestamp()} Failed to pause: {os.path.basename(path)}")
     
     def stop_single_item(self, path: str):
-        """Stop a single uploading item"""
-        with QMutexLocker(self.queue_manager.mutex):
-            if path in self.queue_manager.items:
-                item = self.queue_manager.items[path]
-                if item.status == "uploading":
-                    item.status = "failed"
-                    item.error_message = "Stopped by user"
-                    self.add_log_message(f"{timestamp()} Stopped upload: {os.path.basename(path)}")
-        
+        """Mark current uploading item to finish in-flight transfers, then become incomplete."""
+        if self.worker and self.worker.current_item and self.worker.current_item.path == path:
+            self.worker.request_soft_stop_current()
+            # Optimistically reflect intent in UI without persisting as failed later
+            self.queue_manager.update_item_status(path, "incomplete")
+            self.update_queue_display()
+            self.add_log_message(f"{timestamp()} Will stop after current transfers: {os.path.basename(path)}")
+        else:
+            # If not the actively uploading one, nothing to do
+            self.add_log_message(f"{timestamp()} Stop requested but item not currently uploading: {os.path.basename(path)}")
+        # Ensure controls reflect latest state promptly
         self.update_queue_display()
     
     def cancel_single_item(self, path: str):
@@ -2907,7 +3350,7 @@ URL=https://imx.to/g/{gallery_id}
         items = self.queue_manager.get_all_items()
         started_count = 0
         for item in items:
-            if item.status == "ready" or item.status == "paused":
+            if item.status in ("ready", "paused", "incomplete"):
                 if self.queue_manager.start_item(item.path):
                     started_count += 1
         
@@ -2918,19 +3361,20 @@ URL=https://imx.to/g/{gallery_id}
             self.add_log_message(f"{timestamp()} No items to start")
     
     def pause_all_uploads(self):
-        """Pause all uploads"""
+        """Reset all queued items back to ready (acts like Cancel for queued)"""
         items = self.queue_manager.get_all_items()
-        paused_count = 0
-        for item in items:
-            if item.status == "uploading":
-                if self.queue_manager.pause_item(item.path):
-                    paused_count += 1
+        reset_count = 0
+        with QMutexLocker(self.queue_manager.mutex):
+            for item in items:
+                if item.status == "queued" and item.path in self.queue_manager.items:
+                    self.queue_manager.items[item.path].status = "ready"
+                    reset_count += 1
         
-        if paused_count > 0:
-            self.add_log_message(f"{timestamp()} Paused {paused_count} uploads")
+        if reset_count > 0:
+            self.add_log_message(f"{timestamp()} Reset {reset_count} queued item(s) to Ready")
             self.update_queue_display()
         else:
-            self.add_log_message(f"{timestamp()} No items to pause")
+            self.add_log_message(f"{timestamp()} No queued items to reset")
     
     def clear_completed(self):
         """Clear completed uploads from queue"""
