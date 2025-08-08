@@ -16,6 +16,7 @@ from datetime import datetime
 from queue import Queue, Empty
 from dataclasses import dataclass
 from typing import List, Optional, Dict, Any
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
@@ -24,13 +25,13 @@ from PyQt6.QtWidgets import (
     QMessageBox, QSystemTrayIcon, QMenu, QFrame, QScrollArea,
     QGridLayout, QSizePolicy, QTabWidget, QFileDialog, QTableWidget,
     QTableWidgetItem, QHeaderView, QDialog, QDialogButtonBox, QPlainTextEdit,
-    QLineEdit
+    QLineEdit, QInputDialog, QSpacerItem
 )
 from PyQt6.QtCore import (
     Qt, QThread, pyqtSignal, QTimer, QMimeData, QUrl, 
-    QMutex, QMutexLocker, QSettings, QSize
+    QMutex, QMutexLocker, QSettings, QSize, QObject
 )
-from PyQt6.QtGui import QDragEnterEvent, QDropEvent, QIcon, QFont, QPixmap, QPainter, QColor
+from PyQt6.QtGui import QDragEnterEvent, QDropEvent, QIcon, QFont, QPixmap, QPainter, QColor, QSyntaxHighlighter, QTextCharFormat
 
 # Import the core uploader functionality
 from imxup import ImxToUploader, load_user_defaults, timestamp, sanitize_gallery_name, encrypt_password, decrypt_password
@@ -46,10 +47,17 @@ def check_stored_credentials():
     if os.path.exists(config_file):
         config.read(config_file)
         if 'CREDENTIALS' in config:
-            username = config.get('CREDENTIALS', 'username', fallback='')
-            encrypted_password = config.get('CREDENTIALS', 'password', fallback='')
-            if username and encrypted_password:
-                return True
+            auth_type = config.get('CREDENTIALS', 'auth_type', fallback='username_password')
+            
+            if auth_type == 'username_password':
+                username = config.get('CREDENTIALS', 'username', fallback='')
+                encrypted_password = config.get('CREDENTIALS', 'password', fallback='')
+                if username and encrypted_password:
+                    return True
+            elif auth_type == 'api_key':
+                encrypted_api_key = config.get('CREDENTIALS', 'api_key', fallback='')
+                if encrypted_api_key:
+                    return True
     return False
 
 @dataclass
@@ -70,6 +78,12 @@ class GalleryQueueItem:
     insertion_order: int = 0  # For maintaining insertion order
     added_time: Optional[float] = None  # When item was added to queue
     finished_time: Optional[float] = None  # When item was completed
+    template_name: str = "default"  # Template to use for bbcode generation
+    # Pre-scan metadata
+    total_size: int = 0
+    avg_width: float = 0.0
+    avg_height: float = 0.0
+    scan_complete: bool = False
     
 class GUIImxToUploader(ImxToUploader):
     """Custom uploader for GUI that doesn't block on user input"""
@@ -79,7 +93,7 @@ class GUIImxToUploader(ImxToUploader):
         self.gui_mode = True
         self.worker_thread = worker_thread
     
-    def upload_folder(self, folder_path, gallery_name=None, thumbnail_size=3, thumbnail_format=2, max_retries=3, public_gallery=1):
+    def upload_folder(self, folder_path, gallery_name=None, thumbnail_size=3, thumbnail_format=2, max_retries=3, public_gallery=1, parallel_batch_size=4, template_name="default"):
         """
         Upload folder without interactive prompts
         """
@@ -88,39 +102,35 @@ class GUIImxToUploader(ImxToUploader):
         if not os.path.exists(folder_path):
             raise FileNotFoundError(f"Folder not found: {folder_path}")
         
-        # Get all image files in folder and calculate total size
+        # Get all image files in folder
         image_extensions = ('.jpg', '.jpeg', '.png', '.gif')
-        image_files = []
-        total_size = 0
-        image_dimensions = []
+        image_files = [f for f in os.listdir(folder_path) if f.lower().endswith(image_extensions) and os.path.isfile(os.path.join(folder_path, f))]
         
-        for f in os.listdir(folder_path):
-            if f.lower().endswith(image_extensions) and os.path.isfile(os.path.join(folder_path, f)):
-                image_files.append(f)
-                file_path = os.path.join(folder_path, f)
-                file_size = os.path.getsize(file_path)
-                total_size += file_size
-                
-                # Get image dimensions using PIL
-                try:
-                    from PIL import Image
-                    with Image.open(file_path) as img:
-                        width, height = img.size
-                        image_dimensions.append((width, height))
-                except ImportError:
-                    image_dimensions.append((0, 0))  # PIL not available
-                except Exception:
-                    image_dimensions.append((0, 0))  # Error reading image
+        # Pre-scan dimensions and total size for GUI stats
+        image_dimensions = []
+        total_size = 0
+        for f in image_files:
+            fp = os.path.join(folder_path, f)
+            try:
+                from PIL import Image
+                with Image.open(fp) as img:
+                    width, height = img.size
+                    image_dimensions.append((width, height))
+            except Exception:
+                image_dimensions.append((0, 0))
+            try:
+                total_size += os.path.getsize(fp)
+            except OSError:
+                pass
         
         if not image_files:
             raise ValueError(f"No image files found in {folder_path}")
         
-        # Signal gallery start with image count
+        # Signal gallery start with image count (no extra log here; worker logs once)
         if self.worker_thread:
             self.worker_thread.gallery_started.emit(folder_path, len(image_files))
-            self.worker_thread.log_message.emit(f"{timestamp()} Starting gallery '{os.path.basename(folder_path)}' with {len(image_files)} images")
         
-        # Create gallery with name (default to folder name if not provided)
+        # Create gallery name (default to folder name if not provided)
         if not gallery_name:
             gallery_name = os.path.basename(folder_path)
         
@@ -128,13 +138,8 @@ class GUIImxToUploader(ImxToUploader):
         from imxup import sanitize_gallery_name
         original_name = gallery_name
         gallery_name = sanitize_gallery_name(gallery_name)
-        if original_name != gallery_name:
-            if self.worker_thread:
-                self.worker_thread.log_message.emit(f"{timestamp()} Sanitized gallery name: '{original_name}' -> '{gallery_name}'")
-        
-        # Gallery name is already validated at add time, so we can proceed
-        if self.worker_thread:
-            self.worker_thread.log_message.emit(f"{timestamp()} Starting upload for gallery: {gallery_name}")
+        if original_name != gallery_name and self.worker_thread:
+            self.worker_thread.log_message.emit(f"{timestamp()} Sanitized gallery name: '{original_name}' -> '{gallery_name}'")
         
         # Create gallery (skip login since it's already done)
         gallery_id = self.create_gallery_with_name(gallery_name, public_gallery, skip_login=True)
@@ -142,7 +147,7 @@ class GUIImxToUploader(ImxToUploader):
         if not gallery_id:
             print("Failed to create named gallery, falling back to API-only upload...")
             # Fallback to API-only upload (no gallery naming)
-            return self._upload_without_named_gallery(folder_path, image_files, thumbnail_size, thumbnail_format, max_retries)
+            return self._upload_without_named_gallery(folder_path, image_files, thumbnail_size, thumbnail_format, max_retries, parallel_batch_size)
         
         gallery_url = f"https://imx.to/g/{gallery_id}"
         
@@ -178,44 +183,88 @@ class GUIImxToUploader(ImxToUploader):
         uploaded_images = []
         failed_images = []
         
-        # Upload images sequentially for progress tracking
-        for i, image_file in enumerate(image_files):
-            if self.worker_thread:
-                self.worker_thread.log_message.emit(f"{timestamp()} [{i+1}/{len(image_files)}] Uploading: {image_file}")
+        # Rolling concurrency
+        import concurrent.futures, queue
+        with ThreadPoolExecutor(max_workers=parallel_batch_size) as executor:
+            remaining = queue.Queue()
+            for f in image_files:
+                remaining.put(f)
+            futures_map = {}
+            # Prime pool
+            for _ in range(min(parallel_batch_size, remaining.qsize())):
+                img = remaining.get()
+                futures_map[executor.submit(upload_single_image, img, 1)] = img
             
-            image_file_result, image_data, error = upload_single_image(image_file)
-            
-            if image_data:
-                uploaded_images.append((image_file_result, image_data))
-                if self.worker_thread:
-                    self.worker_thread.log_message.emit(f"{timestamp()} ✓ Uploaded: {image_file}")
-            else:
-                failed_images.append((image_file_result, error))
-                if self.worker_thread:
-                    self.worker_thread.log_message.emit(f"{timestamp()} ✗ Failed: {image_file} - {error}")
-            
-            # Update progress after each image
-            completed_count = len(uploaded_images)
-            progress_percent = int((completed_count / len(image_files)) * 100)
-            
-            if self.worker_thread:
-                self.worker_thread.progress_updated.emit(
-                    folder_path, completed_count, len(image_files), progress_percent, image_file
-                )
-                self.worker_thread.log_message.emit(f"{timestamp()} Progress: {completed_count}/{len(image_files)} ({progress_percent}%)")
+            while futures_map:
+                done, _ = concurrent.futures.wait(list(futures_map.keys()), return_when=concurrent.futures.FIRST_COMPLETED)
+                for fut in done:
+                    img = futures_map.pop(fut)
+                    image_file, image_data, error = fut.result()
+                    if image_data:
+                        uploaded_images.append((image_file, image_data))
+                        if self.worker_thread:
+                            self.worker_thread.log_message.emit(f"{timestamp()} ✓ Uploaded: {image_file}")
+                    else:
+                        failed_images.append((image_file, error))
+                        if self.worker_thread:
+                            self.worker_thread.log_message.emit(f"{timestamp()} ✗ Failed: {image_file} - {error}")
+                    
+                    # Update progress
+                    completed_count = len(uploaded_images)
+                    progress_percent = int((completed_count / len(image_files)) * 100)
+                    if self.worker_thread:
+                        self.worker_thread.progress_updated.emit(
+                            folder_path, completed_count, len(image_files), progress_percent, image_file
+                        )
+                        self.worker_thread.log_message.emit(f"{timestamp()} Progress: {completed_count}/{len(image_files)} ({progress_percent}%)")
+                    
+                    if not remaining.empty():
+                        nxt = remaining.get()
+                        futures_map[executor.submit(upload_single_image, nxt, 1)] = nxt
         
-        # Retry failed uploads
+        # Retry failed uploads with parallel processing
         retry_count = 0
         while failed_images and retry_count < max_retries:
             retry_count += 1
             retry_failed = []
             
-            for image_file, _ in failed_images:
-                image_file_result, image_data, error = upload_single_image(image_file, retry_count + 1)
-                if image_data:
-                    uploaded_images.append((image_file_result, image_data))
-                else:
-                    retry_failed.append((image_file_result, error))
+            if self.worker_thread:
+                self.worker_thread.log_message.emit(f"{timestamp()} Retrying {len(failed_images)} failed uploads (attempt {retry_count}/{max_retries})")
+            
+            # Rolling retries
+            import concurrent.futures, queue
+            with ThreadPoolExecutor(max_workers=parallel_batch_size) as executor:
+                remaining = queue.Queue()
+                for img, _ in failed_images:
+                    remaining.put(img)
+                futures_map = {}
+                for _ in range(min(parallel_batch_size, remaining.qsize())):
+                    img = remaining.get()
+                    futures_map[executor.submit(upload_single_image, img, retry_count + 1)] = img
+                
+                while futures_map:
+                    done, _ = concurrent.futures.wait(list(futures_map.keys()), return_when=concurrent.futures.FIRST_COMPLETED)
+                    for fut in done:
+                        img = futures_map.pop(fut)
+                        image_file, image_data, error = fut.result()
+                        if image_data:
+                            uploaded_images.append((image_file, image_data))
+                            if self.worker_thread:
+                                self.worker_thread.log_message.emit(f"{timestamp()} ✓ Retry successful: {image_file}")
+                        else:
+                            retry_failed.append((image_file, error))
+                            if self.worker_thread:
+                                self.worker_thread.log_message.emit(f"{timestamp()} ✗ Retry failed: {image_file} - {error}")
+                        
+                        completed_count = len(uploaded_images)
+                        progress_percent = int((completed_count / len(image_files)) * 100)
+                        if self.worker_thread:
+                            self.worker_thread.progress_updated.emit(
+                                folder_path, completed_count, len(image_files), progress_percent, image_file
+                            )
+                        if not remaining.empty():
+                            nxt = remaining.get()
+                            futures_map[executor.submit(upload_single_image, nxt, retry_count + 1)] = nxt
             
             failed_images = retry_failed
         
@@ -258,13 +307,17 @@ class GUIImxToUploader(ImxToUploader):
         # Create gallery folder and files
         gallery_folder = os.path.join(folder_path, f"gallery_{gallery_id}")
         os.makedirs(gallery_folder, exist_ok=True)
+        uploaded_subdir = os.path.join(folder_path, ".uploaded")
+        os.makedirs(uploaded_subdir, exist_ok=True)
         
-        # Create shortcut file (.url) to the gallery
+        # Create shortcut file (.url) to the gallery in .uploaded using standardized naming
+        from imxup import build_gallery_filenames
         shortcut_content = f"""[InternetShortcut]
 URL=https://imx.to/g/{gallery_id}
 """
-        shortcut_path = os.path.join(gallery_folder, f"gallery_{gallery_id}.url")
-        with open(shortcut_path, 'w', encoding='utf-8') as f:
+        _, url_filename, _ = build_gallery_filenames(gallery_name, gallery_id)
+        uploaded_shortcut_path = os.path.join(uploaded_subdir, url_filename)
+        with open(uploaded_shortcut_path, 'w', encoding='utf-8') as f:
             f.write(shortcut_content)
         
         # Files will be created in on_gallery_completed when gallery_id is available
@@ -272,7 +325,7 @@ URL=https://imx.to/g/{gallery_id}
         
         return results
     
-    def _upload_without_named_gallery(self, folder_path, image_files, thumbnail_size, thumbnail_format, max_retries):
+    def _upload_without_named_gallery(self, folder_path, image_files, thumbnail_size, thumbnail_format, max_retries, parallel_batch_size=4):
         """Override to add progress tracking for GUI"""
         start_time = time.time()
         
@@ -325,48 +378,90 @@ URL=https://imx.to/g/{gallery_id}
                 error_msg = f"Network error: {str(e)}"
                 return image_file, None, error_msg
         
-        # Upload remaining images sequentially for progress tracking
+        # Upload remaining images with parallel processing
         uploaded_images = []
         failed_images = []
         
-        # Upload images sequentially for progress tracking
-        for i, image_file in enumerate(image_files[1:], 1):  # Start from 1 since first image is already uploaded
-            if self.worker_thread:
-                self.worker_thread.log_message.emit(f"{timestamp()} [{i+1}/{len(image_files)}] Uploading: {image_file}")
-            
-            image_file_result, image_data, error = upload_single_image(image_file)
-            
-            if image_data:
-                uploaded_images.append((image_file_result, image_data))
-                if self.worker_thread:
-                    self.worker_thread.log_message.emit(f"{timestamp()} ✓ Uploaded: {image_file}")
-            else:
-                failed_images.append((image_file_result, error))
-                if self.worker_thread:
-                    self.worker_thread.log_message.emit(f"{timestamp()} ✗ Failed: {image_file} - {error}")
-            
-            # Update progress after each image
-            completed_count = len(uploaded_images) + 1  # +1 for first image
-            progress_percent = int((completed_count / len(image_files)) * 100)
-            
-            if self.worker_thread:
-                self.worker_thread.progress_updated.emit(
-                    folder_path, completed_count, len(image_files), progress_percent, image_file
-                )
-                self.worker_thread.log_message.emit(f"{timestamp()} Progress: {completed_count}/{len(image_files)} ({progress_percent}%)")
+        # Process remaining images in batches for concurrent uploads
+        remaining_images = image_files[1:]  # Start from 1 since first image is already uploaded
         
-        # Retry failed uploads
+        for i in range(0, len(remaining_images), parallel_batch_size):
+            batch = remaining_images[i:i + parallel_batch_size]
+            
+            if self.worker_thread:
+                self.worker_thread.log_message.emit(f"{timestamp()} Processing batch {i//parallel_batch_size + 1}/{(len(remaining_images) + parallel_batch_size - 1)//parallel_batch_size}")
+            
+            # Upload batch concurrently
+            with ThreadPoolExecutor(max_workers=parallel_batch_size) as executor:
+                # Submit all uploads in the batch and track them in order
+                futures = []
+                for image_file in batch:
+                    future = executor.submit(upload_single_image, image_file, 1)
+                    futures.append((future, image_file))
+                
+                # Collect results in the order they were submitted
+                for future, image_file in futures:
+                    image_file, image_data, error = future.result()
+                    
+                    if image_data:
+                        uploaded_images.append((image_file, image_data))
+                        if self.worker_thread:
+                            self.worker_thread.log_message.emit(f"{timestamp()} ✓ Uploaded: {image_file}")
+                    else:
+                        failed_images.append((image_file, error))
+                        if self.worker_thread:
+                            self.worker_thread.log_message.emit(f"{timestamp()} ✗ Failed: {image_file} - {error}")
+                    
+                    # Update progress after each image
+                    completed_count = len(uploaded_images) + 1  # +1 for first image
+                    progress_percent = int((completed_count / len(image_files)) * 100)
+                    
+                    if self.worker_thread:
+                        self.worker_thread.progress_updated.emit(
+                            folder_path, completed_count, len(image_files), progress_percent, image_file
+                        )
+                        self.worker_thread.log_message.emit(f"{timestamp()} Progress: {completed_count}/{len(image_files)} ({progress_percent}%)")
+        
+        # Retry failed uploads with parallel processing
         retry_count = 0
         while failed_images and retry_count < max_retries:
             retry_count += 1
             retry_failed = []
             
-            for image_file, _ in failed_images:
-                image_file_result, image_data, error = upload_single_image(image_file, retry_count + 1)
-                if image_data:
-                    uploaded_images.append((image_file_result, image_data))
-                else:
-                    retry_failed.append((image_file_result, error))
+            if self.worker_thread:
+                self.worker_thread.log_message.emit(f"{timestamp()} Retrying {len(failed_images)} failed uploads (attempt {retry_count}/{max_retries})")
+            
+            # Process retries in batches
+            for i in range(0, len(failed_images), parallel_batch_size):
+                retry_batch = failed_images[i:i + parallel_batch_size]
+                
+                with ThreadPoolExecutor(max_workers=parallel_batch_size) as executor:
+                    # Submit retries in order
+                    futures = []
+                    for image_file, _ in retry_batch:
+                        future = executor.submit(upload_single_image, image_file, retry_count + 1)
+                        futures.append((future, image_file))
+                    
+                    # Collect results in order
+                    for future, image_file in futures:
+                        image_file, image_data, error = future.result()
+                        if image_data:
+                            uploaded_images.append((image_file, image_data))
+                            if self.worker_thread:
+                                self.worker_thread.log_message.emit(f"{timestamp()} ✓ Retry successful: {image_file}")
+                        else:
+                            retry_failed.append((image_file, error))
+                            if self.worker_thread:
+                                self.worker_thread.log_message.emit(f"{timestamp()} ✗ Retry failed: {image_file} - {error}")
+                        
+                        # Update progress during retries
+                        completed_count = len(uploaded_images) + 1  # +1 for first image
+                        progress_percent = int((completed_count / len(image_files)) * 100)
+                        
+                        if self.worker_thread:
+                            self.worker_thread.progress_updated.emit(
+                                folder_path, completed_count, len(image_files), progress_percent, image_file
+                            )
             
             failed_images = retry_failed
         
@@ -480,7 +575,9 @@ class UploadWorker(QThread):
                 thumbnail_size=defaults.get('thumbnail_size', 3),
                 thumbnail_format=defaults.get('thumbnail_format', 2),
                 max_retries=defaults.get('max_retries', 3),
-                public_gallery=defaults.get('public_gallery', 1)
+                public_gallery=defaults.get('public_gallery', 1),
+                parallel_batch_size=defaults.get('parallel_batch_size', 4),
+                template_name=item.template_name
             )
             
             # Check if item was paused during upload
@@ -517,7 +614,15 @@ class QueueManager:
         self.mutex = QMutex()
         self.settings = QSettings("ImxUploader", "QueueManager")
         self._next_order = 0  # Track insertion order
+        self._version = 0  # Bumped on any change for cheap UI polling
         self.load_persistent_queue()
+
+    def _inc_version(self):
+        self._version += 1
+
+    def get_version(self) -> int:
+        with QMutexLocker(self.mutex):
+            return self._version
     
     def save_persistent_queue(self):
         """Save queue state to persistent storage"""
@@ -542,8 +647,8 @@ class QueueManager:
         self.settings.setValue("queue_items", queue_data)
         self.settings.sync()  # Force sync to disk
         print(f"DEBUG: Saved {len(queue_data)} items to persistent storage")
-        print(f"DEBUG: Current items in memory: {list(self.items.keys())}")
-        print(f"DEBUG: Items being saved: {[item['path'] for item in queue_data]}")
+        #print(f"DEBUG: Current items in memory: {list(self.items.keys())}")
+        #print(f"DEBUG: Items being saved: {[item['path'] for item in queue_data]}")
     
     def load_persistent_queue(self):
         """Load queue state from persistent storage"""
@@ -554,7 +659,7 @@ class QueueManager:
                 path = item_data.get('path', '')
                 status = item_data.get('status', 'ready')
                 
-                print(f"DEBUG: Loading item: {path} (status: {status})")
+                #print(f"DEBUG: Loading item: {path} (status: {status})")
                 
                 # For completed items, don't check if path exists (might be moved/deleted)
                 if status == "completed" or (os.path.exists(path) and os.path.isdir(path)):
@@ -575,7 +680,7 @@ class QueueManager:
                         )
                         self._next_order = max(self._next_order, item.insertion_order + 1)
                         self.items[path] = item
-                        print(f"DEBUG: Loaded completed item: {path}")
+                        #print(f"DEBUG: Loaded completed item: {path}")
                     else:
                         # Check for images and count them for non-completed items
                         image_extensions = ('.jpg', '.jpeg', '.png', '.gif')
@@ -597,7 +702,7 @@ class QueueManager:
                             )
                             self._next_order = max(self._next_order, item.insertion_order + 1)
                             self.items[path] = item
-                            print(f"DEBUG: Loaded item: {path}")
+                            #print(f"DEBUG: Loaded item: {path}")
                         else:
                             print(f"DEBUG: Skipped item (no images): {path}")
                 else:
@@ -611,7 +716,7 @@ class QueueManager:
         self.settings.sync()
         print("DEBUG: Cleared persistent queue storage")
         
-    def add_item(self, path: str, name: Optional[str] = None) -> bool:
+    def add_item(self, path: str, name: Optional[str] = None, template_name: str = "default") -> bool:
         """Add a gallery to the queue"""
         with QMutexLocker(self.mutex):
             if path in self.items:
@@ -640,20 +745,79 @@ class QueueManager:
                 # Return special value to indicate duplicate
                 return "duplicate"
                 
+            # Create item in scanning state; start background scan after releasing lock
             item = GalleryQueueItem(
                 path=path,
                 name=gallery_name,
-                status="ready",  # Items start as ready
-                total_images=len(image_files),  # Set the total count immediately
+                status="scanning",
+                total_images=len(image_files),
                 insertion_order=self._next_order,
-                added_time=time.time()  # Current timestamp
+                added_time=time.time(),
+                template_name=template_name,
+                scan_complete=False
             )
             self._next_order += 1
             
             self.items[path] = item
             # Don't add to queue automatically - wait for manual start
             self.save_persistent_queue()
-            return True
+            self._inc_version()
+        # Launch background scan outside the lock
+        threading.Thread(target=self._scan_item_metadata, args=(path,), daemon=True).start()
+        return True
+
+    def _scan_item_metadata(self, path: str):
+        """Scan image dimensions and total size without blocking UI, then mark ready."""
+        try:
+            image_extensions = ('.jpg', '.jpeg', '.png', '.gif')
+            files = [f for f in os.listdir(path) if f.lower().endswith(image_extensions) and os.path.isfile(os.path.join(path, f))]
+            if not files:
+                with QMutexLocker(self.mutex):
+                    if path in self.items:
+                        self.items[path].status = "failed"
+                        self.items[path].error_message = "No images found during scan"
+                return
+            total_size = 0
+            dims: List[tuple[int, int]] = []
+            sampled = 0
+            for f in files:
+                fp = os.path.join(path, f)
+                try:
+                    total_size += os.path.getsize(fp)
+                    # Sample a limited number of images for dimensions to keep scan fast
+                    if sampled < 25:
+                        from PIL import Image
+                        with Image.open(fp) as img:
+                            w, h = img.size
+                            dims.append((w, h))
+                            sampled += 1
+                except Exception:
+                    # Skip unreadable files
+                    continue
+            avg_w = sum(w for w, _ in dims) / len(dims) if dims else 0.0
+            avg_h = sum(h for _, h in dims) / len(dims) if dims else 0.0
+            with QMutexLocker(self.mutex):
+                if path in self.items:
+                    item = self.items[path]
+                    item.total_size = total_size
+                    item.avg_width = avg_w
+                    item.avg_height = avg_h
+                    item.scan_complete = True
+                    # Only flip to ready if not already moved forward
+                    if item.status == "scanning":
+                        item.status = "ready"
+            # Persist update
+            self.save_persistent_queue()
+            self._inc_version()
+            # Emit a GUI refresh if available
+            # Note: avoid calling into GUI from worker thread; GUI polls or reacts to signals
+        except Exception:
+            with QMutexLocker(self.mutex):
+                if path in self.items:
+                    self.items[path].status = "ready"  # Fail open to allow start
+                    self.items[path].scan_complete = False
+            self.save_persistent_queue()
+            self._inc_version()
     
     def start_item(self, path: str) -> bool:
         """Start a specific item in the queue"""
@@ -662,6 +826,7 @@ class QueueManager:
                 self.items[path].status = "queued"
                 self.queue.put(self.items[path])
                 self.save_persistent_queue()
+                self._inc_version()
                 return True
             return False
     
@@ -671,6 +836,7 @@ class QueueManager:
             if path in self.items and self.items[path].status == "uploading":
                 self.items[path].status = "paused"
                 self.save_persistent_queue()
+                self._inc_version()
                 return True
             return False
     
@@ -683,6 +849,7 @@ class QueueManager:
                     return False
                 del self.items[path]
                 self.renumber_insertion_orders()
+                self._inc_version()
                 return True
             return False
     
@@ -750,41 +917,41 @@ class QueueManager:
         """Remove specific items from the queue"""
         with QMutexLocker(self.mutex):
             removed_count = 0
-            print(f"DEBUG: remove_items called with paths: {paths}")
-            print(f"DEBUG: Current items: {list(self.items.keys())}")
+            #print(f"DEBUG: remove_items called with paths: {paths}")
+            #print(f"DEBUG: Current items: {list(self.items.keys())}")
             
             for path in paths:
-                print(f"DEBUG: Checking path: {path}")
+                #print(f"DEBUG: Checking path: {path}")
                 if path in self.items:
-                    print(f"DEBUG: Path found, status: {self.items[path].status}")
+                    #print(f"DEBUG: Path found, status: {self.items[path].status}")
                     # Only prevent deletion of currently uploading items
                     if self.items[path].status == "uploading":
                         print(f"DEBUG: Skipping uploading item: {path}")
                         continue
-                    print(f"DEBUG: Deleting item: {path}")
+                    #print(f"DEBUG: Deleting item: {path}")
                     del self.items[path]
                     removed_count += 1
                 else:
                     print(f"DEBUG: Path not found: {path}")
             
-            print(f"DEBUG: Removed count: {removed_count}")
-            print(f"DEBUG: Items remaining after deletion: {list(self.items.keys())}")
+            #print(f"DEBUG: Removed count: {removed_count}")
+            print(f"DEBUG: {removed_count} items remaining after deletion: {list(self.items.keys())}")
             
             # Verify deletion actually worked
             for path in paths:
                 if path in self.items:
                     print(f"ERROR: Item {path} was NOT actually deleted!")
                 else:
-                    print(f"SUCCESS: Item {path} was actually deleted")
+                    print(f"Item {path} deleted")
             
             # Renumber remaining items (don't save persistent queue yet - let GUI handle it)
             if removed_count > 0:
                 self.renumber_insertion_orders()
-                print(f"DEBUG: Renumbered items after deletion")
+                #print(f"DEBUG: Renumbered items after deletion")
             
             return removed_count
     
-    def _force_add_item(self, path: str, name: str):
+    def _force_add_item(self, path: str, name: str, template_name: str = "default"):
         """Force add an item (for duplicate handling)"""
         with QMutexLocker(self.mutex):
             # Check for images and count them
@@ -803,7 +970,8 @@ class QueueManager:
                 status="ready",  # Items start as ready
                 total_images=len(image_files),  # Set the total count immediately
                 insertion_order=self._next_order,
-                added_time=time.time()  # Current timestamp
+                added_time=time.time(),  # Current timestamp
+                template_name=template_name
             )
             self._next_order += 1
             
@@ -853,7 +1021,7 @@ class GalleryTableWidget(QTableWidget):
                 gridline-color: rgba(128, 128, 128, 0.1);
                 alternate-background-color: rgba(240, 240, 240, 0.3);
                 border: 1px solid #ccc;
-                border-radius: 5px;
+                border-radius: 4px;
                 background-color: white;
             }
             QTableWidget::item {
@@ -1030,13 +1198,12 @@ class ActionButtonWidget(QWidget):
         
         self.start_btn.setStyleSheet("""
             QPushButton {
-                background-color: #27ae60;
-                color: white;
-                border: 1px solid #135730;
+                background-color: #3498db;
+                color: black;
+                border: 1px solid #184c6f;
                 border-radius: 3px;
-                font-size: 10px;
+                font-size: 9px;
                 font-weight: bold;
-                padding: 0 8px;
             }
             QPushButton:hover {
                 background-color: #219150;
@@ -1047,25 +1214,25 @@ class ActionButtonWidget(QWidget):
             }
         """)
         
-        self.pause_btn = QPushButton("Pause")
+        self.stop_btn = QPushButton("Stop")
         
-        self.pause_btn.setFixedSize(50, 25)
-        self.pause_btn.setVisible(False)
-        self.pause_btn.setStyleSheet("""
+        self.stop_btn.setFixedSize(50, 25)
+        self.stop_btn.setVisible(False)
+        self.stop_btn.setStyleSheet("""
             QPushButton {
-                background-color: #f39c12;
-                color: black;
-                border: 1px solid #744a08;
+                background-color: #e74c3c;
+                color: white;
+                border: 1px solid #c0392b;
                 border-radius: 3px;
                 font-size: 9px;
                 font-weight: bold;
             }
             QPushButton:hover {
-                background-color: #da8c10;
+                background-color: #c0392b;
             }
             QPushButton:pressed {
-                background-color: #c27c0e;
-                border: 1px solid #915d0a;
+                background-color: #a93226;
+                border: 1px solid #8b291a;
             }
         """)
         
@@ -1074,12 +1241,13 @@ class ActionButtonWidget(QWidget):
         self.view_btn.setVisible(False)
         self.view_btn.setStyleSheet("""
             QPushButton {
-                background-color: #3498db;
-                color: white;
-                border: 1px solid #184c6f;
+                background-color: #27ae60;
+                color: color;
+                border: 1px solid #135730;
                 border-radius: 3px;
-                font-size: 9px;
+                font-size: 10px;
                 font-weight: bold;
+                padding: 0 8px;
             }
             QPushButton:hover {
                 background-color: #2980b9;
@@ -1090,10 +1258,32 @@ class ActionButtonWidget(QWidget):
             }
         """)
         
+        self.cancel_btn = QPushButton("Cancel")
+        self.cancel_btn.setFixedSize(50, 25)
+        self.cancel_btn.setVisible(False)
+        self.cancel_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #f39c12;
+                color: black;
+                border: 1px solid #c0392b;
+                border-radius: 3px;
+                font-size: 9px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #c0392b;
+                border: 1px solid #a93226;
+            }
+            QPushButton:pressed {
+                background-color: #a93226;
+            }
+        """)
+        
         layout.addStretch()  # Left stretch
         layout.addWidget(self.start_btn)
-        layout.addWidget(self.pause_btn)
+        layout.addWidget(self.stop_btn)
         layout.addWidget(self.view_btn)
+        layout.addWidget(self.cancel_btn)
         layout.addStretch()  # Right stretch
     
     def update_buttons(self, status: str):
@@ -1101,29 +1291,35 @@ class ActionButtonWidget(QWidget):
         if status == "ready":
             self.start_btn.setVisible(True)
             self.start_btn.setText("Start")
-            self.pause_btn.setVisible(False)
+            self.stop_btn.setVisible(False)
             self.view_btn.setVisible(False)
+            self.cancel_btn.setVisible(False)
         elif status == "queued":
             self.start_btn.setVisible(False)
-            self.pause_btn.setVisible(False)  # No buttons when queued (waiting in line)
+            self.stop_btn.setVisible(False)
             self.view_btn.setVisible(False)
+            self.cancel_btn.setVisible(True)
         elif status == "uploading":
             self.start_btn.setVisible(False)
-            self.pause_btn.setVisible(True)
+            self.stop_btn.setVisible(True)
             self.view_btn.setVisible(False)
+            self.cancel_btn.setVisible(False)
         elif status == "paused":
             self.start_btn.setVisible(True)
             self.start_btn.setText("Resume")
-            self.pause_btn.setVisible(False)
+            self.stop_btn.setVisible(False)
             self.view_btn.setVisible(False)
+            self.cancel_btn.setVisible(False)
         elif status == "completed":
             self.start_btn.setVisible(False)
-            self.pause_btn.setVisible(False)
+            self.stop_btn.setVisible(False)
             self.view_btn.setVisible(True)
+            self.cancel_btn.setVisible(False)
         else:  # failed
             self.start_btn.setVisible(False)
-            self.pause_btn.setVisible(False)
+            self.stop_btn.setVisible(False)
             self.view_btn.setVisible(False)
+            self.cancel_btn.setVisible(False)
 
 class CredentialSetupDialog(QDialog):
     """Dialog for setting up secure credentials"""
@@ -1132,88 +1328,281 @@ class CredentialSetupDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("Setup Secure Credentials")
         self.setModal(True)
-        self.resize(500, 300)
+        self.resize(500, 430)
         
         layout = QVBoxLayout(self)
         
         # Info text
         info_text = QLabel(
-            "IMX.to Gallery Uploader needs your credentials to upload galleries.\n\n"
-            "Your credentials will be stored securely encrypted using:\n"
-            "• Your system's username and hostname as the encryption key\n"
-            "• AES-128 encryption via Fernet\n"
-            "• The encrypted data is tied to your specific computer\n\n"
+            "IMX.to Gallery Uploader credentials:\n\n"
+            "• API Key: Required for uploading files\n"
+            "• Username & Password: Required for naming galleries\n\n"
+            "Without username/password, all galleries will be named \'untitled gallery\'\n\n"
+            "Credentials are stored in your home directory, encrypted with AES-128-CBC via Fernet using system's hostname/username as the encryption key.\n\n"
             "This means:\n"
-            "• Your password cannot be recovered if you forget it\n"
+            "• They cannot be recovered if forgotten (you'll have to reset on imx.to)\n"
             "• The encrypted data won't work on other computers\n"
-            "• Your credentials are protected from other users on this system"
+            "• Credentials are obfuscated from other users on this system\n\n"
+            "Get your API key from: https://imx.to/user/api"
+            
+            
         )
         info_text.setWordWrap(True)
         info_text.setStyleSheet("padding: 10px; background-color: #f0f8ff; border: 1px solid #ccc; border-radius: 5px;")
         layout.addWidget(info_text)
         
+
+        
+        # Credential status display
+        status_group = QGroupBox("Current Credentials")
+        status_layout = QVBoxLayout(status_group)
+        
+        # Username status
+        username_status_layout = QHBoxLayout()
+        username_status_layout.addWidget(QLabel("Username:"))
+        self.username_status_label = QLabel("NOT SET")
+        self.username_status_label.setStyleSheet("color: #666; font-style: italic;")
+        username_status_layout.addWidget(self.username_status_label)
+        username_status_layout.addStretch()
+        self.username_change_btn = QPushButton("Change")
+        self.username_change_btn.clicked.connect(self.change_username_password)
+        username_status_layout.addWidget(self.username_change_btn)
+        status_layout.addLayout(username_status_layout)
+        
+        # Password status
+        password_status_layout = QHBoxLayout()
+        password_status_layout.addWidget(QLabel("Password:"))
+        self.password_status_label = QLabel("NOT SET")
+        self.password_status_label.setStyleSheet("color: #666; font-style: italic;")
+        password_status_layout.addWidget(self.password_status_label)
+        password_status_layout.addStretch()
+        self.password_change_btn = QPushButton("Change")
+        self.password_change_btn.clicked.connect(self.change_username_password)
+        password_status_layout.addWidget(self.password_change_btn)
+        status_layout.addLayout(password_status_layout)
+        
+        # API Key status
+        api_key_status_layout = QHBoxLayout()
+        api_key_status_layout.addWidget(QLabel("API Key:"))
+        self.api_key_status_label = QLabel("NOT SET")
+        self.api_key_status_label.setStyleSheet("color: #666; font-style: italic;")
+        api_key_status_layout.addWidget(self.api_key_status_label)
+        api_key_status_layout.addStretch()
+        self.api_key_change_btn = QPushButton("Change")
+        self.api_key_change_btn.clicked.connect(self.change_api_key)
+        api_key_status_layout.addWidget(self.api_key_change_btn)
+        status_layout.addLayout(api_key_status_layout)
+        
+        layout.addWidget(status_group)
+        
+        # Hidden input fields for editing
+        self.username_edit = QLineEdit()
+        self.password_edit = QLineEdit()
+        self.password_edit.setEchoMode(QLineEdit.EchoMode.Password)
+        self.api_key_edit = QLineEdit()
+        self.api_key_edit.setEchoMode(QLineEdit.EchoMode.Password)
+        
+        # Load current credentials
+        self.load_current_credentials()
+        
+        # Buttons
+        button_layout = QHBoxLayout()
+        button_layout.addStretch()
+        
+        self.close_btn = QPushButton("Close")
+        self.close_btn.clicked.connect(self.validate_and_close)
+        button_layout.addWidget(self.close_btn)
+        
+        layout.addLayout(button_layout)
+        
+
+    
+    def load_current_credentials(self):
+        """Load and display current credentials"""
+        config = configparser.ConfigParser()
+        config_file = os.path.join(os.path.expanduser("~"), ".imxup.ini")
+        
+        if os.path.exists(config_file):
+            config.read(config_file)
+            if 'CREDENTIALS' in config:
+                # Check username/password
+                username = config.get('CREDENTIALS', 'username', fallback='')
+                password = config.get('CREDENTIALS', 'password', fallback='')
+                
+                if username:
+                    self.username_status_label.setText(username)
+                    self.username_status_label.setStyleSheet("color: #27ae60; font-weight: bold;")
+                else:
+                    self.username_status_label.setText("NOT SET")
+                    self.username_status_label.setStyleSheet("color: #666; font-style: italic;")
+                
+                if password:
+                    self.password_status_label.setText("********")
+                    self.password_status_label.setStyleSheet("color: #27ae60; font-weight: bold;")
+                else:
+                    self.password_status_label.setText("NOT SET")
+                    self.password_status_label.setStyleSheet("color: #666; font-style: italic;")
+                
+                # Check API key
+                encrypted_api_key = config.get('CREDENTIALS', 'api_key', fallback='')
+                if encrypted_api_key:
+                    try:
+                        api_key = decrypt_password(encrypted_api_key)
+                        if api_key and len(api_key) > 8:
+                            masked_key = api_key[:4] + "*" * 20 + api_key[-4:]
+                            self.api_key_status_label.setText(masked_key)
+                            self.api_key_status_label.setStyleSheet("color: #27ae60; font-weight: bold;")
+                        else:
+                            self.api_key_status_label.setText("SET")
+                            self.api_key_status_label.setStyleSheet("color: #27ae60; font-weight: bold;")
+                    except:
+                        self.api_key_status_label.setText("SET")
+                        self.api_key_status_label.setStyleSheet("color: #27ae60; font-weight: bold;")
+                else:
+                    self.api_key_status_label.setText("NOT SET")
+                    self.api_key_status_label.setStyleSheet("color: #666; font-style: italic;")
+    
+    def change_username_password(self):
+        """Open dialog to change username/password"""
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Change Username & Password")
+        dialog.setModal(True)
+        dialog.resize(400, 200)
+        
+        layout = QVBoxLayout(dialog)
+        
         # Username input
         username_layout = QHBoxLayout()
         username_layout.addWidget(QLabel("Username:"))
-        self.username_edit = QLineEdit()
-        username_layout.addWidget(self.username_edit)
+        username_edit = QLineEdit()
+        username_layout.addWidget(username_edit)
         layout.addLayout(username_layout)
         
         # Password input
         password_layout = QHBoxLayout()
         password_layout.addWidget(QLabel("Password:"))
-        self.password_edit = QLineEdit()
-        self.password_edit.setEchoMode(QLineEdit.EchoMode.Password)
-        password_layout.addWidget(self.password_edit)
+        password_edit = QLineEdit()
+        password_edit.setEchoMode(QLineEdit.EchoMode.Password)
+        password_layout.addWidget(password_edit)
         layout.addLayout(password_layout)
         
         # Buttons
         button_layout = QHBoxLayout()
         button_layout.addStretch()
         
-        self.save_btn = QPushButton("Save Credentials")
-        self.save_btn.clicked.connect(self.save_credentials)
-        button_layout.addWidget(self.save_btn)
+        save_btn = QPushButton("Save")
+        save_btn.clicked.connect(dialog.accept)
+        button_layout.addWidget(save_btn)
         
-        self.cancel_btn = QPushButton("Cancel")
-        self.cancel_btn.clicked.connect(self.reject)
-        button_layout.addWidget(self.cancel_btn)
+        cancel_btn = QPushButton("Cancel")
+        cancel_btn.clicked.connect(dialog.reject)
+        button_layout.addWidget(cancel_btn)
         
         layout.addLayout(button_layout)
+        
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            username = username_edit.text().strip()
+            password = password_edit.text()
+            
+            if username and password:
+                try:
+                    config = configparser.ConfigParser()
+                    config_file = os.path.join(os.path.expanduser("~"), ".imxup.ini")
+                    
+                    if os.path.exists(config_file):
+                        config.read(config_file)
+                    
+                    if 'CREDENTIALS' not in config:
+                        config['CREDENTIALS'] = {}
+                    
+                    config['CREDENTIALS']['username'] = username
+                    config['CREDENTIALS']['password'] = encrypt_password(password)
+                    # Don't clear API key - allow both to exist
+                    
+                    with open(config_file, 'w') as f:
+                        config.write(f)
+                    
+                    self.load_current_credentials()
+                    QMessageBox.information(self, "Success", "Username and password saved successfully!")
+                    
+                except Exception as e:
+                    QMessageBox.critical(self, "Error", f"Failed to save credentials: {str(e)}")
+            else:
+                QMessageBox.warning(self, "Missing Information", "Please enter both username and password.")
+    
+    def change_api_key(self):
+        """Open dialog to change API key"""
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Change API Key")
+        dialog.setModal(True)
+        dialog.resize(400, 150)
+        
+        layout = QVBoxLayout(dialog)
+        
+        # API Key input
+        api_key_layout = QHBoxLayout()
+        api_key_layout.addWidget(QLabel("API Key:"))
+        api_key_edit = QLineEdit()
+        api_key_edit.setEchoMode(QLineEdit.EchoMode.Password)
+        api_key_layout.addWidget(api_key_edit)
+        layout.addLayout(api_key_layout)
+        
+        # Info label
+        info_label = QLabel("Get your API key from: https://imx.to/user/api")
+        info_label.setStyleSheet("color: #666; font-size: 11px;")
+        layout.addWidget(info_label)
+        
+        # Buttons
+        button_layout = QHBoxLayout()
+        button_layout.addStretch()
+        
+        save_btn = QPushButton("Save")
+        save_btn.clicked.connect(dialog.accept)
+        button_layout.addWidget(save_btn)
+        
+        cancel_btn = QPushButton("Cancel")
+        cancel_btn.clicked.connect(dialog.reject)
+        button_layout.addWidget(cancel_btn)
+        
+        layout.addLayout(button_layout)
+        
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            api_key = api_key_edit.text().strip()
+            
+            if api_key:
+                try:
+                    config = configparser.ConfigParser()
+                    config_file = os.path.join(os.path.expanduser("~"), ".imxup.ini")
+                    
+                    if os.path.exists(config_file):
+                        config.read(config_file)
+                    
+                    if 'CREDENTIALS' not in config:
+                        config['CREDENTIALS'] = {}
+                    
+                    config['CREDENTIALS']['api_key'] = encrypt_password(api_key)
+                    # Don't clear username/password - allow both to exist
+                    
+                    with open(config_file, 'w') as f:
+                        config.write(f)
+                    
+                    self.load_current_credentials()
+                    QMessageBox.information(self, "Success", "API key saved successfully!")
+                    
+                except Exception as e:
+                    QMessageBox.critical(self, "Error", f"Failed to save API key: {str(e)}")
+            else:
+                QMessageBox.warning(self, "Missing Information", "Please enter your API key.")
+    
+
+    
+    def validate_and_close(self):
+        """Close the dialog - no validation required"""
+        self.accept()
     
     def save_credentials(self):
-        """Save credentials securely"""
-        username = self.username_edit.text().strip()
-        password = self.password_edit.text()
-        
-        if not username or not password:
-            QMessageBox.warning(self, "Missing Information", "Please enter both username and password.")
-            return
-        
-        try:
-            # Save credentials
-            config = configparser.ConfigParser()
-            config_file = os.path.join(os.path.expanduser("~"), ".imxup.ini")
-            
-            if os.path.exists(config_file):
-                config.read(config_file)
-            
-            if 'CREDENTIALS' not in config:
-                config['CREDENTIALS'] = {}
-            
-            config['CREDENTIALS']['username'] = username
-            config['CREDENTIALS']['password'] = encrypt_password(password)
-            
-            with open(config_file, 'w') as f:
-                config.write(f)
-            
-            QMessageBox.information(self, "Success", 
-                                  f"Credentials saved securely to {config_file}\n\n"
-                                  "Your password is encrypted and tied to this computer.")
-            self.accept()
-            
-        except Exception as e:
-            QMessageBox.critical(self, "Error", f"Failed to save credentials: {str(e)}")
+        """Save credentials securely - this is now handled by individual change buttons"""
+        self.accept()
 
 class BBCodeViewerDialog(QDialog):
     """Dialog for viewing and editing BBCode text files"""
@@ -1282,23 +1671,27 @@ class BBCodeViewerDialog(QDialog):
                 break
             widget = widget.parent()
         
-        # Central location files - try new format first, then fallback to old
+        # Central location files in standardized naming (fallback to legacy if not found)
+        from imxup import build_gallery_filenames
         if gallery_id and gallery_name:
-            safe_gallery_name = sanitize_gallery_name(gallery_name)
-            central_bbcode = os.path.join(self.central_path, f"{safe_gallery_name}_{gallery_id}_bbcode.txt")
-            central_url = os.path.join(self.central_path, f"{safe_gallery_name}_{gallery_id}.url")
+            _, url_filename, bbcode_filename = build_gallery_filenames(gallery_name, gallery_id)
+            central_bbcode = os.path.join(self.central_path, bbcode_filename)
+            central_url = os.path.join(self.central_path, url_filename)
         else:
-            # Fallback to old format for existing files
+            # Fallback to legacy naming detection for read-only purposes
             central_bbcode = os.path.join(self.central_path, f"{self.folder_name}_bbcode.txt")
             central_url = os.path.join(self.central_path, f"{self.folder_name}.url")
-        
-        # Folder location files (with glob pattern)
+
+        # Folder location files: standardized names under .uploaded (fallback to legacy glob)
         import glob
-        folder_bbcode_pattern = os.path.join(self.folder_path, "gallery_*_bbcode.txt")
-        folder_url_pattern = os.path.join(self.folder_path, "gallery_*.url")
-        
-        folder_bbcode_files = glob.glob(folder_bbcode_pattern)
-        folder_url_files = glob.glob(folder_url_pattern)
+        uploaded_dir = os.path.join(self.folder_path, ".uploaded")
+        if gallery_id and gallery_name:
+            _, url_filename, bbcode_filename = build_gallery_filenames(gallery_name, gallery_id)
+            folder_bbcode_files = glob.glob(os.path.join(uploaded_dir, bbcode_filename))
+            folder_url_files = glob.glob(os.path.join(uploaded_dir, url_filename))
+        else:
+            folder_bbcode_files = glob.glob(os.path.join(uploaded_dir, f"{self.folder_name}_bbcode.txt"))
+            folder_url_files = glob.glob(os.path.join(uploaded_dir, f"{self.folder_name}.url"))
         
         return {
             'central_bbcode': central_bbcode,
@@ -1535,9 +1928,17 @@ class ImxUploadGUI(QMainWindow):
         self.gallery_table.setFocus()
         
         # Update timer
+        # Lightweight periodic update only when queue version changes
         self.update_timer = QTimer()
-        self.update_timer.timeout.connect(self.update_progress_display)
-        self.update_timer.start(500)  # Update every 500ms
+        self._last_queue_version = self.queue_manager.get_version()
+        def _tick():
+            current = self.queue_manager.get_version()
+            if current != self._last_queue_version:
+                self._last_queue_version = current
+                self.update_queue_display()
+            self.update_progress_display()
+        self.update_timer.timeout.connect(_tick)
+        self.update_timer.start(1000)  # Low-frequency tick
         
     def setup_ui(self):
         self.setWindowTitle("IMX.to Gallery Uploader")
@@ -1579,7 +1980,7 @@ class ImxUploadGUI(QMainWindow):
         queue_layout.addWidget(self.gallery_table, 1)  # Give it stretch priority
         
         # Add keyboard shortcut hint
-        shortcut_hint = QLabel("💡 Tip: Press Delete key to remove selected items")
+        shortcut_hint = QLabel("💡 Tips: Press Delete key to remove selected items / drag and drop to add folders")
         shortcut_hint.setStyleSheet("color: #666; font-size: 11px; font-style: italic;")
         shortcut_hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
         queue_layout.addWidget(shortcut_hint)
@@ -1589,14 +1990,17 @@ class ImxUploadGUI(QMainWindow):
         
         self.start_all_btn = QPushButton("Start All")
         self.start_all_btn.clicked.connect(self.start_all_uploads)
+        self.start_all_btn.setMinimumHeight(34)
         controls_layout.addWidget(self.start_all_btn)
         
         self.pause_all_btn = QPushButton("Pause All")
         self.pause_all_btn.clicked.connect(self.pause_all_uploads)
+        self.pause_all_btn.setMinimumHeight(34)
         controls_layout.addWidget(self.pause_all_btn)
         
         self.clear_completed_btn = QPushButton("Clear Completed")
         self.clear_completed_btn.clicked.connect(self.clear_completed)
+        self.clear_completed_btn.setMinimumHeight(34)
         controls_layout.addWidget(self.clear_completed_btn)
         
 
@@ -1613,6 +2017,8 @@ class ImxUploadGUI(QMainWindow):
         # Settings section
         settings_group = QGroupBox("Settings")
         settings_layout = QGridLayout(settings_group)
+        settings_layout.setVerticalSpacing(3)
+        settings_layout.setHorizontalSpacing(10)
         
         # Load defaults
         defaults = load_user_defaults()
@@ -1624,6 +2030,7 @@ class ImxUploadGUI(QMainWindow):
             "100x100", "180x180", "250x250", "300x300", "150x150"
         ])
         self.thumbnail_size_combo.setCurrentIndex(defaults.get('thumbnail_size', 3) - 1)
+        self.thumbnail_size_combo.currentIndexChanged.connect(self.on_setting_changed)
         settings_layout.addWidget(self.thumbnail_size_combo, 0, 1)
         
         # Thumbnail format
@@ -1633,6 +2040,7 @@ class ImxUploadGUI(QMainWindow):
             "Fixed width", "Proportional", "Square", "Fixed height"
         ])
         self.thumbnail_format_combo.setCurrentIndex(defaults.get('thumbnail_format', 2) - 1)
+        self.thumbnail_format_combo.currentIndexChanged.connect(self.on_setting_changed)
         settings_layout.addWidget(self.thumbnail_format_combo, 1, 1)
         
         # Max retries
@@ -1640,19 +2048,133 @@ class ImxUploadGUI(QMainWindow):
         self.max_retries_spin = QSpinBox()
         self.max_retries_spin.setRange(1, 10)
         self.max_retries_spin.setValue(defaults.get('max_retries', 3))
+        self.max_retries_spin.valueChanged.connect(self.on_setting_changed)
         settings_layout.addWidget(self.max_retries_spin, 2, 1)
+        
+        # Parallel upload batch size
+        settings_layout.addWidget(QLabel("Parallel Upload Batch Size:"), 3, 0)
+        self.batch_size_spin = QSpinBox()
+        self.batch_size_spin.setRange(1, 8)
+        self.batch_size_spin.setValue(defaults.get('parallel_batch_size', 4))
+        self.batch_size_spin.setToolTip("Number of images to upload simultaneously. Higher values = faster uploads but more server load.")
+        self.batch_size_spin.valueChanged.connect(self.on_setting_changed)
+        settings_layout.addWidget(self.batch_size_spin, 3, 1)
+        
+        # Template selection
+        settings_layout.addWidget(QLabel("BBCode Template:"), 4, 0)
+        self.template_combo = QComboBox()
+        self.template_combo.setToolTip("Template to use for generating bbcode files")
+        # Load available templates
+        from imxup import load_templates
+        templates = load_templates()
+        for template_name in templates.keys():
+            self.template_combo.addItem(template_name)
+        # Set the saved template
+        saved_template = defaults.get('template_name', 'default')
+        template_index = self.template_combo.findText(saved_template)
+        if template_index >= 0:
+            self.template_combo.setCurrentIndex(template_index)
+        self.template_combo.currentIndexChanged.connect(self.on_setting_changed)
+        settings_layout.addWidget(self.template_combo, 4, 1)
+
+        # Watch template directory for changes and refresh dropdown automatically
+        try:
+            from PyQt6.QtCore import QFileSystemWatcher
+            from imxup import get_template_path
+            self._template_watcher = QFileSystemWatcher([get_template_path()])
+            self._template_watcher.directoryChanged.connect(self._on_templates_directory_changed)
+        except Exception:
+            # If watcher isn't available, we simply won't auto-refresh
+            self._template_watcher = None
         
         # Public gallery
         self.public_gallery_check = QCheckBox("Make galleries public")
         self.public_gallery_check.setChecked(defaults.get('public_gallery', 1) == 1)
-        settings_layout.addWidget(self.public_gallery_check, 3, 0, 1, 2)
+        self.public_gallery_check.toggled.connect(self.on_setting_changed)
+        settings_layout.addWidget(self.public_gallery_check, 5, 0)
         
         # Confirm delete
         self.confirm_delete_check = QCheckBox("Confirm before deleting items")
-        self.confirm_delete_check.setChecked(True)  # Default checked
-        settings_layout.addWidget(self.confirm_delete_check, 4, 0, 1, 2)
+        self.confirm_delete_check.setChecked(defaults.get('confirm_delete', True))  # Load from defaults
+        self.confirm_delete_check.toggled.connect(self.on_setting_changed)
+        settings_layout.addWidget(self.confirm_delete_check, 5, 1)
+        
+
+        
+        # Save settings button
+        self.save_settings_btn = QPushButton("Save Settings")
+        self.save_settings_btn.clicked.connect(self.save_upload_settings)
+        self.save_settings_btn.setMinimumHeight(30)
+        self.save_settings_btn.setMaximumHeight(34)
+        self.save_settings_btn.setEnabled(False)  # Initially disabled
+        #self.save_settings_btn.setStyleSheet("""
+        #    QPushButton {
+        #        background-color: #ffe4b2;
+        #        color: black;
+        #        border: 1px solid #e67e22;
+        #        border-radius: 3px;
+        #    }
+        #    QPushButton:hover {
+        #        background-color: #ffdb99;
+        #    }
+        #    QPushButton:pressed {
+        #        background-color: #ffdb99;
+        #    }
+        #    QPushButton:disabled {
+        #        background-color: #f0f0f0;
+        #        color: #999999;
+        #        border-color: #bdc3c7;
+        #        font-weight: normal;
+        #        opacity: 0.2;
+        #    }
+        #""")
+        settings_layout.addWidget(self.save_settings_btn, 6, 0, 1, 2)
+        
+        # Manage templates button
+        self.manage_templates_btn = QPushButton("Manage BBCode Templates")
+        self.manage_templates_btn.clicked.connect(self.manage_templates)
+        self.manage_templates_btn.setMinimumHeight(30)
+        self.manage_templates_btn.setMaximumHeight(34)
+        #self.manage_templates_btn.setStyleSheet("""
+        #    QPushButton {
+        #        xbackground-color: #27ae60;
+        #        color: black;
+        #        border: 1px solid #229954;
+        #        border-radius: 3px;
+        #    }
+        #    QPushButton:hover {
+        #        xbackground-color: #229954;
+        #    }
+        #    QPushButton:pressed {
+        #        xbackground-color: #1e8449;
+        #    }
+        #""")
+        settings_layout.addWidget(self.manage_templates_btn, 7, 0, 1, 2)
+        
+        # Manage credentials button
+        self.manage_credentials_btn = QPushButton("Manage Credentials")
+        self.manage_credentials_btn.clicked.connect(self.manage_credentials)
+        self.manage_credentials_btn.setMinimumHeight(30)
+        self.manage_credentials_btn.setMaximumHeight(34)
+        #self.manage_credentials_btn.setStyleSheet("""
+        #    QPushButton {
+        #        xbackground-color: #3498db;
+        #        color: black;
+        #        border: 1px solid #2980b9;
+        #        border-radius: 3px;
+        #    }
+        #    QPushButton:hover {
+        #        xbackground-color: #2980b9;
+        #    }
+        #    QPushButton:pressed {
+        #        xbackground-color: #21618c;
+        #    }
+        #""")
+        settings_layout.addWidget(self.manage_credentials_btn, 8, 0, 1, 2)
         
         right_layout.addWidget(settings_group)
+        
+
         
         # Log section
         log_group = QGroupBox("Log")
@@ -1661,6 +2183,11 @@ class ImxUploadGUI(QMainWindow):
         self.log_text = QTextEdit()
         self.log_text.setMinimumHeight(300)  # Much taller
         self.log_text.setFont(QFont("Consolas", 9))  # Slightly larger font
+        # Keep a long history in the GUI log
+        try:
+            self.log_text.document().setMaximumBlockCount(200000)  # ~200k lines
+        except Exception:
+            pass
         log_layout.addWidget(self.log_text)
         
         right_layout.addWidget(log_group, 1)  # Give it stretch priority
@@ -1694,25 +2221,53 @@ class ImxUploadGUI(QMainWindow):
     def check_credentials(self):
         """Check for stored credentials and prompt if missing"""
         if not check_stored_credentials():
-            reply = QMessageBox.question(
-                self,
-                "Setup Required",
-                "No stored credentials found. Would you like to set up secure credential storage now?\n\n"
-                "This will encrypt and store your IMX.to username and password using your system's unique encryption key.",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                QMessageBox.StandardButton.Yes
-            )
-            
-            if reply == QMessageBox.StandardButton.Yes:
-                dialog = CredentialSetupDialog(self)
-                if dialog.exec() == QDialog.DialogCode.Accepted:
-                    self.add_log_message(f"{timestamp()} Credentials saved securely")
-                else:
-                    self.add_log_message(f"{timestamp()} Credential setup cancelled")
+            # Show credential setup dialog directly instead of confirmation
+            dialog = CredentialSetupDialog(self)
+            if dialog.exec() == QDialog.DialogCode.Accepted:
+                self.add_log_message(f"{timestamp()} Credentials saved securely")
             else:
-                self.add_log_message(f"{timestamp()} Credential setup skipped")
+                self.add_log_message(f"{timestamp()} Credential setup cancelled")
         else:
             self.add_log_message(f"{timestamp()} Using stored credentials")
+    
+    def manage_templates(self):
+        """Open template management dialog"""
+        # Get current template from combo box
+        current_template = self.template_combo.currentText()
+        dialog = TemplateManagerDialog(self, current_template)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            # Refresh template combo box and keep selection when possible
+            self.refresh_template_combo(preferred=current_template)
+
+    def _on_templates_directory_changed(self, _path):
+        """Handle updates to the templates directory by refreshing the combo box."""
+        self.refresh_template_combo()
+
+    def refresh_template_combo(self, preferred: str | None = None):
+        """Reload templates into the dropdown, preserving selection when possible."""
+        from imxup import load_templates
+        templates = load_templates()
+        current = preferred if preferred is not None else self.template_combo.currentText()
+        self.template_combo.blockSignals(True)
+        self.template_combo.clear()
+        for template_name in templates.keys():
+            self.template_combo.addItem(template_name)
+        # Restore selection if available, else default
+        index = self.template_combo.findText(current)
+        if index < 0:
+            index = self.template_combo.findText('default')
+        if index >= 0:
+            self.template_combo.setCurrentIndex(index)
+        self.template_combo.blockSignals(False)
+    
+    def manage_credentials(self):
+        """Open credential management dialog"""
+        dialog = CredentialSetupDialog(self)
+        
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            self.add_log_message(f"{timestamp()} Credentials updated successfully")
+        else:
+            self.add_log_message(f"{timestamp()} Credential management cancelled")
 
     def setup_system_tray(self):
         """Setup system tray icon"""
@@ -1754,6 +2309,7 @@ class ImxUploadGUI(QMainWindow):
             self.worker.gallery_exists.connect(self.on_gallery_exists)
             self.worker.log_message.connect(self.add_log_message)
             self.worker.start()
+            self.add_log_message(f"{timestamp()} Worker started")
     
     def browse_for_folders(self):
         """Open folder browser to select galleries"""
@@ -1770,8 +2326,11 @@ class ImxUploadGUI(QMainWindow):
     def add_folders(self, folder_paths: List[str]):
         """Add folders to the upload queue"""
         added_count = 0
+        # Get selected template
+        template_name = self.template_combo.currentText()
+        
         for path in folder_paths:
-            result = self.queue_manager.add_item(path)
+            result = self.queue_manager.add_item(path, template_name=template_name)
             if result == True:
                 added_count += 1
                 self.add_log_message(f"{timestamp()} Added to queue: {os.path.basename(path)}")
@@ -1792,7 +2351,7 @@ class ImxUploadGUI(QMainWindow):
                 
                 if reply == QMessageBox.StandardButton.Yes:
                     # Force add the item
-                    self.queue_manager._force_add_item(path, gallery_name)
+                    self.queue_manager._force_add_item(path, gallery_name, template_name)
                     added_count += 1
                     self.add_log_message(f"{timestamp()} Added to queue (user confirmed): {os.path.basename(path)}")
                 else:
@@ -1818,6 +2377,10 @@ class ImxUploadGUI(QMainWindow):
         items = self.queue_manager.get_all_items()
         print(f"DEBUG: update_queue_display called with {len(items)} items")
         print(f"DEBUG: Item paths: {[item.path for item in items]}")
+        
+        # Preserve scroll position
+        scrollbar = self.gallery_table.verticalScrollBar()
+        scroll_position = scrollbar.value()
         
         # Clear the table first
         self.gallery_table.clearContents()
@@ -1854,8 +2417,15 @@ class ImxUploadGUI(QMainWindow):
             progress_widget.update_progress(item.progress, item.status)
             self.gallery_table.setCellWidget(row, 3, progress_widget)
             
-            # Status
-            status_item = QTableWidgetItem(item.status.title())
+            # Status - force "Uploading" if item is actually uploading
+            # Status text mapping
+            if item.status == "uploading":
+                status_text = "Uploading"
+            elif item.status == "scanning":
+                status_text = "Scanning"
+            else:
+                status_text = item.status.title()
+            status_item = QTableWidgetItem(status_text)
             status_item.setFlags(status_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
             status_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             
@@ -1872,9 +2442,9 @@ class ImxUploadGUI(QMainWindow):
                 status_item.setData(Qt.ItemDataRole.ForegroundRole, QColor(255, 255, 255))
             elif item.status == "uploading":
                 status_item.setBackground(QColor(52, 152, 219))  # Blue
-                status_item.setForeground(QColor(255, 255, 255))  # White text
+                status_item.setForeground(QColor(0, 0, 0))  # Black text
                 status_item.setData(Qt.ItemDataRole.BackgroundRole, QColor(52, 152, 219))
-                status_item.setData(Qt.ItemDataRole.ForegroundRole, QColor(255, 255, 255))
+                status_item.setData(Qt.ItemDataRole.ForegroundRole, QColor(0, 0, 0))
             elif item.status == "paused":
                 status_item.setBackground(QColor(241, 196, 15))  # Yellow
                 status_item.setForeground(QColor(0, 0, 0))  # Black text
@@ -1884,6 +2454,11 @@ class ImxUploadGUI(QMainWindow):
                 status_item.setBackground(QColor(189, 195, 199))  # Light gray
                 status_item.setForeground(QColor(0, 0, 0))  # Black text
                 status_item.setData(Qt.ItemDataRole.BackgroundRole, QColor(189, 195, 199))
+                status_item.setData(Qt.ItemDataRole.ForegroundRole, QColor(0, 0, 0))
+            elif item.status == "scanning":
+                status_item.setBackground(QColor(200, 200, 200))  # Neutral gray
+                status_item.setForeground(QColor(0, 0, 0))
+                status_item.setData(Qt.ItemDataRole.BackgroundRole, QColor(200, 200, 200))
                 status_item.setData(Qt.ItemDataRole.ForegroundRole, QColor(0, 0, 0))
             elif item.status == "ready":
                 # Default styling for ready items
@@ -1895,32 +2470,39 @@ class ImxUploadGUI(QMainWindow):
             added_text = ""
             if item.added_time:
                 added_dt = datetime.fromtimestamp(item.added_time)
-                added_text = added_dt.strftime("%Y-%m-%d %H:%M")
+                added_text = added_dt.strftime("%Y-%m-%d %H:%M:%S")
             added_item = QTableWidgetItem(added_text)
             added_item.setFlags(added_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
             added_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-            added_item.setFont(QFont("Arial", 9))
+            added_item.setFont(QFont("Arial", 8))  # Smaller font
             self.gallery_table.setItem(row, 5, added_item)
             
             # Finished time
             finished_text = ""
             if item.finished_time:
                 finished_dt = datetime.fromtimestamp(item.finished_time)
-                finished_text = finished_dt.strftime("%Y-%m-%d %H:%M")
+                finished_text = finished_dt.strftime("%Y-%m-%d %H:%M:%S")
             finished_item = QTableWidgetItem(finished_text)
             finished_item.setFlags(finished_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
             finished_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-            finished_item.setFont(QFont("Arial", 9))
+            finished_item.setFont(QFont("Arial", 8))  # Smaller font
             self.gallery_table.setItem(row, 6, finished_item)
             
             # Action buttons - always create fresh widget to avoid sorting issues
             action_widget = ActionButtonWidget()
             # Connect button signals with proper closure capture
+            # Disable Start while scanning
+            action_widget.start_btn.setEnabled(item.status != "scanning")
             action_widget.start_btn.clicked.connect(lambda checked, path=item.path: self.start_single_item(path))
-            action_widget.pause_btn.clicked.connect(lambda checked, path=item.path: self.pause_single_item(path))
+            action_widget.stop_btn.clicked.connect(lambda checked, path=item.path: self.stop_single_item(path))
             action_widget.view_btn.clicked.connect(lambda checked, path=item.path: self.view_bbcode_files(path))
+            action_widget.cancel_btn.clicked.connect(lambda checked, path=item.path: self.cancel_single_item(path))
             action_widget.update_buttons(item.status)
             self.gallery_table.setCellWidget(row, 7, action_widget)
+        
+        # Restore scroll position
+        scrollbar = self.gallery_table.verticalScrollBar()
+        scrollbar.setValue(scroll_position)
     
     def update_progress_display(self):
         """Update overall progress and statistics"""
@@ -1975,8 +2557,32 @@ class ImxUploadGUI(QMainWindow):
                 # Ensure status is set to uploading
                 item.status = "uploading"
         
-        # Update display when status changes
-        self.update_queue_display()
+        # Update only the specific row status instead of full table refresh
+        for row in range(self.gallery_table.rowCount()):
+            name_item = self.gallery_table.item(row, 1)
+            if name_item and name_item.data(Qt.ItemDataRole.UserRole) == path:
+                # Update uploaded count
+                uploaded_text = f"0/{total_images}"
+                uploaded_item = QTableWidgetItem(uploaded_text)
+                uploaded_item.setFlags(uploaded_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                uploaded_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                self.gallery_table.setItem(row, 2, uploaded_item)
+                
+                # Update status to Uploading
+                status_item = QTableWidgetItem("Uploading")
+                status_item.setFlags(status_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                status_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                status_item.setBackground(QColor(52, 152, 219))  # Blue background
+                status_item.setForeground(QColor(0, 0, 0))  # Black text
+                status_item.setData(Qt.ItemDataRole.BackgroundRole, QColor(52, 152, 219))
+                status_item.setData(Qt.ItemDataRole.ForegroundRole, QColor(0, 0, 0))
+                self.gallery_table.setItem(row, 4, status_item)
+                
+                # Update action buttons
+                action_widget = self.gallery_table.cellWidget(row, 7)
+                if isinstance(action_widget, ActionButtonWidget):
+                    action_widget.update_buttons("uploading")
+                break
     
     def on_progress_updated(self, path: str, completed: int, total: int, progress_percent: int, current_image: str):
         """Handle progress updates from worker"""
@@ -1987,6 +2593,10 @@ class ImxUploadGUI(QMainWindow):
                 item.total_images = total
                 item.progress = progress_percent
                 item.current_image = current_image
+                
+                # Ensure status is uploading during progress updates
+                if item.status != "completed" and item.status != "failed":
+                    item.status = "uploading"
                 
                 # Find and update the correct row in the table
                 for row in range(self.gallery_table.rowCount()):
@@ -2009,12 +2619,25 @@ class ImxUploadGUI(QMainWindow):
                             progress_widget.update_progress(progress_percent, item.status)
                             self.gallery_table.setCellWidget(row, 3, progress_widget)  # Progress is now column 3
                         
+                        # ALWAYS show "Uploading" if there's any progress
+                        if progress_percent > 0 and progress_percent < 100:
+                            status_item = QTableWidgetItem("Uploading")
+                            status_item.setFlags(status_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                            status_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                            status_item.setBackground(QColor(52, 152, 219))  # Blue background
+                            status_item.setForeground(QColor(0, 0, 0))  # Black text
+                            status_item.setData(Qt.ItemDataRole.BackgroundRole, QColor(52, 152, 219))
+                            status_item.setData(Qt.ItemDataRole.ForegroundRole, QColor(0, 0, 0))
+                            self.gallery_table.setItem(row, 4, status_item)  # Status is now column 4
+                        
                         # Update status if it's completed (100%)
                         if progress_percent >= 100:
                             # Set finished timestamp if not already set
                             if not item.finished_time:
                                 item.finished_time = time.time()
                             
+                            # Update status to completed
+                            item.status = "completed"
                             status_item = QTableWidgetItem("Completed")
                             status_item.setFlags(status_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
                             status_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -2024,11 +2647,11 @@ class ImxUploadGUI(QMainWindow):
                             
                             # Update the finished time column
                             finished_dt = datetime.fromtimestamp(item.finished_time)
-                            finished_text = finished_dt.strftime("%Y-%m-%d %H:%M")
+                            finished_text = finished_dt.strftime("%Y-%m-%d %H:%M:%S")
                             finished_item = QTableWidgetItem(finished_text)
                             finished_item.setFlags(finished_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
                             finished_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-                            finished_item.setFont(QFont("Arial", 9))
+                            finished_item.setFont(QFont("Arial", 8))  # Smaller font
                             self.gallery_table.setItem(row, 6, finished_item)
                         break
     
@@ -2048,35 +2671,77 @@ class ImxUploadGUI(QMainWindow):
         gallery_name = results.get('gallery_name', os.path.basename(path))
         
         if gallery_id and gallery_name:
-            # Create BBCode content
-            bbcode_content = ""
+            # Import template functions
+            from imxup import generate_bbcode_from_template
+            
+            # Prepare template data
+            all_images_bbcode = ""
             for image_data in results.get('images', []):
-                bbcode_content += image_data.get('bbcode', '') + "  "
+                all_images_bbcode += image_data.get('bbcode', '') + "  "
+            
+            # Calculate statistics
+            total_size = results.get('total_size', 0) or item.total_size
+            folder_size = f"{(total_size) / (1024*1024):.1f} MB"
+            avg_width = item.avg_width or results.get('avg_width', 0)
+            avg_height = item.avg_height or results.get('avg_height', 0)
+            
+            # Get most common extension from uploaded images
+            extensions = []
+            for image_data in results.get('images', []):
+                if 'image_url' in image_data:
+                    # Extract extension from URL or use default
+                    url = image_data['image_url']
+                    if '.' in url:
+                        ext = url.split('.')[-1].upper()
+                        if ext in ['JPG', 'PNG', 'GIF', 'BMP', 'WEBP']:
+                            extensions.append(ext)
+            extension = max(set(extensions), key=extensions.count) if extensions else "JPG"
+            
+            # Prepare template data
+            template_data = {
+                'folder_name': gallery_name,
+                'width': int(avg_width),
+                'height': int(avg_height),
+                'longest': int(max(avg_width, avg_height)),
+                'extension': extension,
+                'picture_count': len(results.get('images', [])),
+                'folder_size': folder_size,
+                'gallery_link': f"https://imx.to/g/{gallery_id}",
+                'all_images': all_images_bbcode.strip()
+            }
+            
+            # Get template name from the item
+            item = self.queue_manager.get_item(path)
+            template_name = item.template_name if item else "default"
+            
+            # Generate bbcode using the item's template
+            bbcode_content = generate_bbcode_from_template(template_name, template_data)
             
             # Create shortcut content
             shortcut_content = f"""[InternetShortcut]
 URL=https://imx.to/g/{gallery_id}
 """
             
-            # Save to folder location (keep existing format for compatibility)
+            # Save to .uploaded subfolder under original folder using standardized names
+            from imxup import build_gallery_filenames
             gallery_folder = path
-            folder_bbcode_path = os.path.join(gallery_folder, f"gallery_{gallery_id}_bbcode.txt")
-            folder_shortcut_path = os.path.join(gallery_folder, f"gallery_{gallery_id}.url")
-            
+            uploaded_subdir = os.path.join(path, ".uploaded")
+            os.makedirs(uploaded_subdir, exist_ok=True)
+            safe_gallery_name, url_filename, bbcode_filename = build_gallery_filenames(gallery_name, gallery_id)
+            folder_bbcode_path = os.path.join(uploaded_subdir, bbcode_filename)
+            folder_shortcut_path = os.path.join(uploaded_subdir, url_filename)
+
             with open(folder_bbcode_path, 'w', encoding='utf-8') as f:
                 f.write(bbcode_content)
             with open(folder_shortcut_path, 'w', encoding='utf-8') as f:
                 f.write(shortcut_content)
             
-            # Save to central location with new naming format
-            from imxup import get_central_storage_path
+            # Save to central location with standardized naming
+            from imxup import get_central_storage_path, build_gallery_filenames
             central_path = get_central_storage_path()
-            
-            # Sanitize gallery name for filename
-            safe_gallery_name = sanitize_gallery_name(gallery_name)
-            
-            central_bbcode_path = os.path.join(central_path, f"{safe_gallery_name}_{gallery_id}_bbcode.txt")
-            central_shortcut_path = os.path.join(central_path, f"{safe_gallery_name}_{gallery_id}.url")
+            _, url_filename, bbcode_filename = build_gallery_filenames(gallery_name, gallery_id)
+            central_bbcode_path = os.path.join(central_path, bbcode_filename)
+            central_shortcut_path = os.path.join(central_path, url_filename)
             
             with open(central_bbcode_path, 'w', encoding='utf-8') as f:
                 f.write(bbcode_content)
@@ -2093,8 +2758,7 @@ URL=https://imx.to/g/{gallery_id}
         upload_time = results.get('upload_time', 0)
         successful_count = results.get('successful_count', 0)
         
-        self.add_log_message(f"{timestamp()} ✓ Completed: {gallery_name}")
-        self.add_log_message(f"{timestamp()} Gallery URL: {gallery_url}")
+        self.add_log_message(f"{timestamp()} ✓ Completed: {gallery_name} ({gallery_id})")
         self.add_log_message(f"{timestamp()} Uploaded {successful_count} images ({total_size / (1024*1024):.1f} MB) in {upload_time:.1f}s")
     
     def on_gallery_exists(self, gallery_name: str, existing_files: list):
@@ -2132,13 +2796,7 @@ URL=https://imx.to/g/{gallery_id}
     def add_log_message(self, message: str):
         """Add message to log"""
         self.log_text.append(message)
-        
-        # Keep log size manageable
-        if self.log_text.document().blockCount() > 1000:
-            cursor = self.log_text.textCursor()
-            cursor.movePosition(cursor.MoveOperation.Start)
-            cursor.movePosition(cursor.MoveOperation.Down, cursor.MoveMode.KeepAnchor, 100)
-            cursor.removeSelectedText()
+        # Retain long history; no aggressive trimming
     
     def start_single_item(self, path: str):
         """Start a single item"""
@@ -2155,6 +2813,29 @@ URL=https://imx.to/g/{gallery_id}
             self.update_queue_display()
         else:
             self.add_log_message(f"{timestamp()} Failed to pause: {os.path.basename(path)}")
+    
+    def stop_single_item(self, path: str):
+        """Stop a single uploading item"""
+        with QMutexLocker(self.queue_manager.mutex):
+            if path in self.queue_manager.items:
+                item = self.queue_manager.items[path]
+                if item.status == "uploading":
+                    item.status = "failed"
+                    item.error_message = "Stopped by user"
+                    self.add_log_message(f"{timestamp()} Stopped upload: {os.path.basename(path)}")
+        
+        self.update_queue_display()
+    
+    def cancel_single_item(self, path: str):
+        """Cancel a queued item and put it back to ready state"""
+        with QMutexLocker(self.queue_manager.mutex):
+            if path in self.queue_manager.items:
+                item = self.queue_manager.items[path]
+                if item.status == "queued":
+                    item.status = "ready"
+                    self.add_log_message(f"{timestamp()} Canceled queued item: {os.path.basename(path)}")
+        
+        self.update_queue_display()
     
     def view_bbcode_files(self, path: str):
         """Open BBCode viewer/editor for completed item"""
@@ -2182,12 +2863,12 @@ URL=https://imx.to/g/{gallery_id}
         from imxup import get_central_storage_path
         central_path = get_central_storage_path()
         
-        # Try central location first with new naming format
+        # Try central location first with standardized naming, fallback to legacy
+        from imxup import build_gallery_filenames
         item = self.queue_manager.get_item(path)
-        if item and item.gallery_id:
-            # Use new naming format: GalleryName_galleryid_bbcode.txt
-            safe_gallery_name = sanitize_gallery_name(item.name or folder_name)
-            central_bbcode = os.path.join(central_path, f"{safe_gallery_name}_{item.gallery_id}_bbcode.txt")
+        if item and item.gallery_id and (item.name or folder_name):
+            _, _, bbcode_filename = build_gallery_filenames(item.name or folder_name, item.gallery_id)
+            central_bbcode = os.path.join(central_path, bbcode_filename)
         else:
             # Fallback to old format for existing files
             central_bbcode = os.path.join(central_path, f"{folder_name}_bbcode.txt")
@@ -2202,8 +2883,12 @@ URL=https://imx.to/g/{gallery_id}
         else:
             # Try folder location (existing format)
             import glob
-            folder_bbcode_pattern = os.path.join(path, "gallery_*_bbcode.txt")
-            folder_bbcode_files = glob.glob(folder_bbcode_pattern)
+            # Prefer standardized .uploaded location, fallback to legacy
+            if item and item.gallery_id and (item.name or folder_name):
+                _, _, bbcode_filename = build_gallery_filenames(item.name or folder_name, item.gallery_id)
+                folder_bbcode_files = glob.glob(os.path.join(path, ".uploaded", bbcode_filename))
+            else:
+                folder_bbcode_files = glob.glob(os.path.join(path, "gallery_*_bbcode.txt"))
             
             if folder_bbcode_files and os.path.exists(folder_bbcode_files[0]):
                 with open(folder_bbcode_files[0], 'r', encoding='utf-8') as f:
@@ -2352,14 +3037,72 @@ URL=https://imx.to/g/{gallery_id}
         if geometry:
             self.restoreGeometry(geometry)
         
-        # Restore confirm delete setting
-        confirm_delete = self.settings.value("confirm_delete", True, type=bool)
+        # Load settings from .ini file
+        defaults = load_user_defaults()
+        
+        # Restore confirm delete setting from .ini file
+        confirm_delete = defaults.get('confirm_delete', True)
+        if isinstance(confirm_delete, str):
+            confirm_delete = confirm_delete.lower() == 'true'
         self.confirm_delete_check.setChecked(confirm_delete)
     
     def save_settings(self):
         """Save window settings"""
         self.settings.setValue("geometry", self.saveGeometry())
         self.settings.setValue("confirm_delete", self.confirm_delete_check.isChecked())
+    
+    def on_setting_changed(self):
+        """Handle when any setting is changed"""
+        self.save_settings_btn.setEnabled(True)
+    
+    def save_upload_settings(self):
+        """Save upload settings to .ini file"""
+        try:
+            import configparser
+            import os
+            
+            # Get current values
+            thumbnail_size = self.thumbnail_size_combo.currentIndex() + 1
+            thumbnail_format = self.thumbnail_format_combo.currentIndex() + 1
+            max_retries = self.max_retries_spin.value()
+            parallel_batch_size = self.batch_size_spin.value()
+            template_name = self.template_combo.currentText()
+            public_gallery = 1 if self.public_gallery_check.isChecked() else 0
+            confirm_delete = self.confirm_delete_check.isChecked()
+            
+            # Load existing config
+            config = configparser.ConfigParser()
+            config_file = os.path.join(os.path.expanduser("~"), ".imxup.ini")
+            
+            if os.path.exists(config_file):
+                config.read(config_file)
+            
+            # Ensure DEFAULTS section exists
+            if 'DEFAULTS' not in config:
+                config['DEFAULTS'] = {}
+            
+            # Update settings
+            config['DEFAULTS']['thumbnail_size'] = str(thumbnail_size)
+            config['DEFAULTS']['thumbnail_format'] = str(thumbnail_format)
+            config['DEFAULTS']['max_retries'] = str(max_retries)
+            config['DEFAULTS']['parallel_batch_size'] = str(parallel_batch_size)
+            config['DEFAULTS']['template_name'] = template_name
+            config['DEFAULTS']['public_gallery'] = str(public_gallery)
+            config['DEFAULTS']['confirm_delete'] = str(confirm_delete)
+            
+            # Save to file
+            with open(config_file, 'w') as f:
+                config.write(f)
+            
+            # Disable save button
+            self.save_settings_btn.setEnabled(False)
+            
+            # Show success message
+            self.add_log_message(f"{timestamp()} Settings saved successfully")
+            
+        except Exception as e:
+            self.add_log_message(f"{timestamp()} Error saving settings: {str(e)}")
+            QMessageBox.warning(self, "Error", f"Failed to save settings: {str(e)}")
     
     def dragEnterEvent(self, event):
         """Handle drag enter - SIMPLE VERSION"""
@@ -2483,6 +3226,464 @@ def main():
         if hasattr(window, 'server') and window.server:
             window.server.stop()
         app.quit()
+
+class PlaceholderHighlighter(QSyntaxHighlighter):
+    """Syntax highlighter for BBCode template placeholders"""
+    
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.placeholder_format = QTextCharFormat()
+        self.placeholder_format.setBackground(QColor("#fff3cd"))  # Light yellow background
+        self.placeholder_format.setForeground(QColor("#856404"))  # Dark yellow text
+        self.placeholder_format.setFontWeight(QFont.Weight.Bold)
+        
+        # Define all placeholders
+        self.placeholders = [
+            "#folderName#", "#width#", "#height#", "#longest#", 
+            "#extension#", "#pictureCount#", "#folderSize#", 
+            "#galleryLink#", "#allImages#"
+        ]
+    
+    def highlightBlock(self, text):
+        """Highlight placeholders in the text block"""
+        for placeholder in self.placeholders:
+            index = 0
+            while True:
+                index = text.find(placeholder, index)
+                if index == -1:
+                    break
+                self.setFormat(index, len(placeholder), self.placeholder_format)
+                index += len(placeholder)
+
+
+class TemplateManagerDialog(QDialog):
+    """Dialog for managing BBCode templates"""
+    
+    def __init__(self, parent=None, current_template="default"):
+        super().__init__(parent)
+        self.setWindowTitle("Manage BBCode Templates")
+        self.setModal(True)
+        self.resize(900, 700)
+        
+        # Track unsaved changes
+        self.unsaved_changes = False
+        self.current_template_name = None
+        self.initial_template = current_template
+        
+        # Setup UI
+        layout = QVBoxLayout(self)
+        
+        # Template list section
+        list_group = QGroupBox("Templates")
+        list_layout = QHBoxLayout(list_group)
+        
+        # Template list
+        self.template_list = QListWidget()
+        self.template_list.setMinimumWidth(200)
+        self.template_list.itemSelectionChanged.connect(self.on_template_selected)
+        self.template_list.setStyleSheet("""
+            QListWidget::item:selected {
+                background-color: #2980b9;
+                color: white;
+            }
+        """)
+        list_layout.addWidget(self.template_list)
+        
+        # Template actions
+        actions_layout = QVBoxLayout()
+        
+        self.new_btn = QPushButton("New Template")
+        self.new_btn.clicked.connect(self.create_new_template)
+        actions_layout.addWidget(self.new_btn)
+        
+        self.rename_btn = QPushButton("Rename Template")
+        self.rename_btn.clicked.connect(self.rename_template)
+        self.rename_btn.setEnabled(False)
+        actions_layout.addWidget(self.rename_btn)
+        
+        self.delete_btn = QPushButton("Delete Template")
+        self.delete_btn.clicked.connect(self.delete_template)
+        self.delete_btn.setEnabled(False)
+        actions_layout.addWidget(self.delete_btn)
+        
+        actions_layout.addStretch()
+        list_layout.addLayout(actions_layout)
+        
+        layout.addWidget(list_group)
+        
+        # Template editor section
+        editor_group = QGroupBox("Template Editor")
+        editor_layout = QVBoxLayout(editor_group)
+        
+        # Placeholder buttons
+        placeholder_layout = QHBoxLayout()
+        placeholder_layout.addWidget(QLabel("Insert Placeholders:"))
+        
+        placeholders = [
+            ("#folderName#", "Gallery Name"),
+            ("#width#", "Width"),
+            ("#height#", "Height"),
+            ("#longest#", "Longest Side"),
+            ("#extension#", "Extension"),
+            ("#pictureCount#", "Picture Count"),
+            ("#folderSize#", "Folder Size"),
+            ("#galleryLink#", "Gallery Link"),
+            ("#allImages#", "All Images")
+        ]
+        
+        for placeholder, label in placeholders:
+            btn = QPushButton(label)
+            btn.setToolTip(f"Insert {placeholder}")
+            btn.clicked.connect(lambda checked, p=placeholder: self.insert_placeholder(p))
+            btn.setStyleSheet("""
+                QPushButton {
+                    padding: 2px 6px;
+                    min-width: 80px;
+                    max-height: 24px;
+                }
+            """)
+            placeholder_layout.addWidget(btn)
+        
+        editor_layout.addLayout(placeholder_layout)
+        
+        # Template content editor with syntax highlighting
+        self.template_editor = QPlainTextEdit()
+        self.template_editor.setFont(QFont("Consolas", 10))
+        self.template_editor.textChanged.connect(self.on_template_changed)
+        
+        # Add syntax highlighter for placeholders
+        self.highlighter = PlaceholderHighlighter(self.template_editor.document())
+        
+        editor_layout.addWidget(self.template_editor)
+        
+        layout.addWidget(editor_group)
+        
+        # Buttons
+        button_layout = QHBoxLayout()
+        
+        self.save_btn = QPushButton("Save Template")
+        self.save_btn.clicked.connect(self.save_template)
+        self.save_btn.setEnabled(False)
+        button_layout.addWidget(self.save_btn)
+        
+        button_layout.addStretch()
+        
+        self.close_btn = QPushButton("Close")
+        self.close_btn.clicked.connect(self.accept)
+        button_layout.addWidget(self.close_btn)
+        
+        layout.addLayout(button_layout)
+        
+        # Load templates
+        self.load_templates()
+    
+    def load_templates(self):
+        """Load and display available templates"""
+        from imxup import load_templates
+        templates = load_templates()
+        
+        self.template_list.clear()
+        for template_name in templates.keys():
+            self.template_list.addItem(template_name)
+        
+        # Select the current template if available, otherwise select first template
+        if self.template_list.count() > 0:
+            # Try to find and select the initial template
+            found_template = False
+            for i in range(self.template_list.count()):
+                if self.template_list.item(i).text() == self.initial_template:
+                    self.template_list.setCurrentRow(i)
+                    found_template = True
+                    break
+            
+            # If initial template not found, select first template
+            if not found_template:
+                self.template_list.setCurrentRow(0)
+    
+    def on_template_selected(self):
+        """Handle template selection"""
+        current_item = self.template_list.currentItem()
+        if current_item:
+            template_name = current_item.text()
+            
+            # Check for unsaved changes before switching
+            if self.unsaved_changes and self.current_template_name:
+                reply = QMessageBox.question(
+                    self,
+                    "Unsaved Changes",
+                    f"You have unsaved changes to template '{self.current_template_name}'. Do you want to save them before switching?",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No | QMessageBox.StandardButton.Cancel,
+                    QMessageBox.StandardButton.Yes
+                )
+                
+                if reply == QMessageBox.StandardButton.Yes:
+                    # Save to the current template (not the one we're switching to)
+                    content = self.template_editor.toPlainText()
+                    from imxup import get_template_path
+                    template_path = get_template_path()
+                    template_file = os.path.join(template_path, f".template {self.current_template_name}.txt")
+                    
+                    try:
+                        with open(template_file, 'w', encoding='utf-8') as f:
+                            f.write(content)
+                        self.save_btn.setEnabled(False)
+                        self.unsaved_changes = False
+                    except Exception as e:
+                        QMessageBox.warning(self, "Error", f"Failed to save template: {str(e)}")
+                        # Restore the previous selection if save failed
+                        for i in range(self.template_list.count()):
+                            if self.template_list.item(i).text() == self.current_template_name:
+                                self.template_list.setCurrentRow(i)
+                                return
+                        return
+                elif reply == QMessageBox.StandardButton.Cancel:
+                    # Restore the previous selection
+                    for i in range(self.template_list.count()):
+                        if self.template_list.item(i).text() == self.current_template_name:
+                            self.template_list.setCurrentRow(i)
+                            return
+                    return
+            
+            self.load_template_content(template_name)
+            self.current_template_name = template_name
+            self.unsaved_changes = False
+            
+            # Disable editing for default template
+            is_default = template_name == "default"
+            self.template_editor.setReadOnly(is_default)
+            self.rename_btn.setEnabled(not is_default)
+            self.delete_btn.setEnabled(not is_default)
+            self.save_btn.setEnabled(False)  # Will be enabled when content changes (if not default)
+            
+            if is_default:
+                self.template_editor.setStyleSheet("""
+                    QPlainTextEdit {
+                        background-color: #f8f9fa;
+                        color: #6c757d;
+                    }
+                """)
+            else:
+                self.template_editor.setStyleSheet("")
+        else:
+            self.template_editor.clear()
+            self.current_template_name = None
+            self.unsaved_changes = False
+            self.rename_btn.setEnabled(False)
+            self.delete_btn.setEnabled(False)
+    
+    def load_template_content(self, template_name):
+        """Load template content into editor"""
+        from imxup import load_templates
+        templates = load_templates()
+        
+        if template_name in templates:
+            self.template_editor.setPlainText(templates[template_name])
+        else:
+            self.template_editor.clear()
+        
+        # Reset unsaved changes flag when loading content
+        self.unsaved_changes = False
+    
+    def insert_placeholder(self, placeholder):
+        """Insert a placeholder at cursor position"""
+        cursor = self.template_editor.textCursor()
+        cursor.insertText(placeholder)
+        self.template_editor.setFocus()
+    
+    def on_template_changed(self):
+        """Handle template content changes"""
+        # Only allow saving if not the default template
+        if self.current_template_name != "default":
+            self.save_btn.setEnabled(True)
+            self.unsaved_changes = True
+    
+    def create_new_template(self):
+        """Create a new template"""
+        # Check for unsaved changes before creating new template
+        if self.unsaved_changes and self.current_template_name:
+            reply = QMessageBox.question(
+                self,
+                "Unsaved Changes",
+                f"You have unsaved changes to template '{self.current_template_name}'. Do you want to save them before creating a new template?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No | QMessageBox.StandardButton.Cancel,
+                QMessageBox.StandardButton.Yes
+            )
+            
+            if reply == QMessageBox.StandardButton.Yes:
+                self.save_template()
+            elif reply == QMessageBox.StandardButton.Cancel:
+                return
+        
+        name, ok = QInputDialog.getText(self, "New Template", "Template name:")
+        if ok and name.strip():
+            name = name.strip()
+            
+            # Check if template already exists
+            from imxup import load_templates
+            templates = load_templates()
+            if name in templates:
+                QMessageBox.warning(self, "Error", f"Template '{name}' already exists!")
+                return
+            
+            # Add to list and select it
+            self.template_list.addItem(name)
+            self.template_list.setCurrentItem(self.template_list.item(self.template_list.count() - 1))
+            
+            # Clear editor for new template
+            self.template_editor.clear()
+            self.current_template_name = name
+            self.unsaved_changes = True
+            self.save_btn.setEnabled(True)
+    
+    def rename_template(self):
+        """Rename the current template"""
+        current_item = self.template_list.currentItem()
+        if not current_item:
+            return
+        
+        old_name = current_item.text()
+        if old_name == "default":
+            QMessageBox.warning(self, "Error", "Cannot rename the default template!")
+            return
+        
+        new_name, ok = QInputDialog.getText(self, "Rename Template", "New name:", text=old_name)
+        if ok and new_name.strip():
+            new_name = new_name.strip()
+            
+            # Check if new name already exists
+            from imxup import load_templates
+            templates = load_templates()
+            if new_name in templates:
+                QMessageBox.warning(self, "Error", f"Template '{new_name}' already exists!")
+                return
+            
+            # Rename the template file
+            from imxup import get_template_path
+            template_path = get_template_path()
+            old_file = os.path.join(template_path, f".template {old_name}.txt")
+            new_file = os.path.join(template_path, f".template {new_name}.txt")
+            
+            try:
+                os.rename(old_file, new_file)
+                current_item.setText(new_name)
+                QMessageBox.information(self, "Success", f"Template renamed to '{new_name}'")
+            except Exception as e:
+                QMessageBox.warning(self, "Error", f"Failed to rename template: {str(e)}")
+    
+    def delete_template(self):
+        """Delete the current template"""
+        current_item = self.template_list.currentItem()
+        if not current_item:
+            return
+        
+        template_name = current_item.text()
+        if template_name == "default":
+            QMessageBox.warning(self, "Error", "Cannot delete the default template!")
+            return
+        
+        # Check for unsaved changes before deleting
+        if self.unsaved_changes and self.current_template_name == template_name:
+            reply = QMessageBox.question(
+                self,
+                "Unsaved Changes",
+                f"You have unsaved changes to template '{template_name}'. Do you want to save them before deleting?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No | QMessageBox.StandardButton.Cancel,
+                QMessageBox.StandardButton.Yes
+            )
+            
+            if reply == QMessageBox.StandardButton.Yes:
+                self.save_template()
+            elif reply == QMessageBox.StandardButton.Cancel:
+                return
+        
+        reply = QMessageBox.question(
+            self,
+            "Delete Template",
+            f"Are you sure you want to delete template '{template_name}'?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No
+        )
+        
+        if reply == QMessageBox.StandardButton.Yes:
+            # Delete the template file
+            from imxup import get_template_path
+            template_path = get_template_path()
+            template_file = os.path.join(template_path, f".template {template_name}.txt")
+            
+            try:
+                os.remove(template_file)
+                self.template_list.takeItem(self.template_list.currentRow())
+                self.template_editor.clear()
+                self.save_btn.setEnabled(False)
+                self.unsaved_changes = False
+                self.current_template_name = None
+                QMessageBox.information(self, "Success", f"Template '{template_name}' deleted")
+            except Exception as e:
+                QMessageBox.warning(self, "Error", f"Failed to delete template: {str(e)}")
+    
+    def save_template(self):
+        """Save the current template"""
+        current_item = self.template_list.currentItem()
+        if not current_item:
+            return
+        
+        template_name = current_item.text()
+        content = self.template_editor.toPlainText()
+        
+        # Save the template file
+        from imxup import get_template_path
+        template_path = get_template_path()
+        template_file = os.path.join(template_path, f".template {template_name}.txt")
+        
+        try:
+            with open(template_file, 'w', encoding='utf-8') as f:
+                f.write(content)
+            self.save_btn.setEnabled(False)
+            self.unsaved_changes = False
+            QMessageBox.information(self, "Success", f"Template '{template_name}' saved")
+        except Exception as e:
+            QMessageBox.warning(self, "Error", f"Failed to save template: {str(e)}")
+    
+    def closeEvent(self, event):
+        """Handle dialog closing with unsaved changes check"""
+        if self.unsaved_changes and self.current_template_name:
+            reply = QMessageBox.question(
+                self,
+                "Unsaved Changes",
+                f"You have unsaved changes to template '{self.current_template_name}'. Do you want to save them before closing?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No | QMessageBox.StandardButton.Cancel,
+                QMessageBox.StandardButton.Yes
+            )
+            
+            if reply == QMessageBox.StandardButton.Yes:
+                # Try to save the template
+                current_item = self.template_list.currentItem()
+                if current_item:
+                    template_name = current_item.text()
+                    content = self.template_editor.toPlainText()
+                    
+                    # Save the template file
+                    from imxup import get_template_path
+                    template_path = get_template_path()
+                    template_file = os.path.join(template_path, f".template {template_name}.txt")
+                    
+                    try:
+                        with open(template_file, 'w', encoding='utf-8') as f:
+                            f.write(content)
+                        self.save_btn.setEnabled(False)
+                        self.unsaved_changes = False
+                        event.accept()
+                    except Exception as e:
+                        QMessageBox.warning(self, "Error", f"Failed to save template: {str(e)}")
+                        event.ignore()
+                else:
+                    event.accept()
+            elif reply == QMessageBox.StandardButton.No:
+                event.accept()
+            else:  # Cancel
+                event.ignore()
+        else:
+            event.accept()
 
 if __name__ == "__main__":
     main()

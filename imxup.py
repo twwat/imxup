@@ -16,6 +16,7 @@ import asyncio
 import aiohttp
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
+import concurrent.futures
 import time
 from tqdm import tqdm
 import configparser
@@ -28,7 +29,7 @@ import zipfile
 import urllib.request
 import platform
 import sqlite3
-import shutil
+#import shutil
 import glob
 import winreg
 
@@ -188,7 +189,10 @@ def load_user_defaults():
             defaults['thumbnail_size'] = config.getint('DEFAULTS', 'thumbnail_size', fallback=3)
             defaults['thumbnail_format'] = config.getint('DEFAULTS', 'thumbnail_format', fallback=2)
             defaults['max_retries'] = config.getint('DEFAULTS', 'max_retries', fallback=3)
+            defaults['parallel_batch_size'] = config.getint('DEFAULTS', 'parallel_batch_size', fallback=4)
             defaults['public_gallery'] = config.getint('DEFAULTS', 'public_gallery', fallback=1)
+            defaults['template_name'] = config.get('DEFAULTS', 'template_name', fallback='default')
+            defaults['confirm_delete'] = config.getboolean('DEFAULTS', 'confirm_delete', fallback=True)
         
         return defaults
     return {}
@@ -255,7 +259,7 @@ def save_unnamed_gallery(gallery_id, intended_name):
 
 def get_central_storage_path():
     """Get central storage path for gallery files"""
-    central_path = os.path.join(os.path.expanduser("~"), "imxup_galleries")
+    central_path = os.path.join(os.path.expanduser("~"), ".imxup", "galleries")
     os.makedirs(central_path, exist_ok=True)
     return central_path
 
@@ -271,30 +275,35 @@ def sanitize_gallery_name(name):
     sanitized = sanitized.strip()
     return sanitized
 
+def build_gallery_filenames(gallery_name, gallery_id):
+    """Return standardized filenames for gallery artifacts.
+    - URL filename: {Gallery Name}_{GalleryID}.url
+    - BBCode filename: {Gallery Name}_{GalleryID}_bbcode.txt
+    Returns (safe_gallery_name, url_filename, bbcode_filename).
+    """
+    safe_gallery_name = sanitize_gallery_name(gallery_name)
+    url_filename = f"{safe_gallery_name}_{gallery_id}.url"
+    bbcode_filename = f"{safe_gallery_name}_{gallery_id}_bbcode.txt"
+    return safe_gallery_name, url_filename, bbcode_filename
+
 def check_if_gallery_exists(folder_name):
     """Check if gallery files already exist for this folder"""
     central_path = get_central_storage_path()
     
     # Check central location
-    central_files = [
-        os.path.join(central_path, f"{folder_name}.url"),
-        os.path.join(central_path, f"{folder_name}_bbcode.txt")
-    ]
+    central_files = glob.glob(os.path.join(central_path, f"{folder_name}_*_bbcode.txt")) + \
+                    glob.glob(os.path.join(central_path, f"{folder_name}_*.url"))
     
-    # Check folder location
+    # Check within .uploaded subfolder directly under this folder
     folder_files = [
-        os.path.join(folder_name, f"gallery_*.url"),
-        os.path.join(folder_name, f"gallery_*_bbcode.txt")
+        os.path.join(folder_name, ".uploaded", f"{folder_name}_*.url"),
+        os.path.join(folder_name, ".uploaded", f"{folder_name}_*_bbcode.txt")
     ]
     
     existing_files = []
-    for file_path in central_files:
-        if os.path.exists(file_path):
-            existing_files.append(file_path)
-    
+    existing_files.extend(central_files)
     for pattern in folder_files:
-        if glob.glob(pattern):
-            existing_files.extend(glob.glob(pattern))
+        existing_files.extend(glob.glob(pattern))
     
     return existing_files
 
@@ -407,6 +416,75 @@ def load_cookies_from_file(cookie_file="cookies.txt"):
     except Exception as e:
         print(f"{timestamp()} Error loading cookies: {e}")
     return cookies
+
+def get_template_path():
+    """Get the template directory path"""
+    template_path = os.path.join(os.path.expanduser("~"), ".imxup", "galleries")
+    os.makedirs(template_path, exist_ok=True)
+    return template_path
+
+def get_default_template():
+    """Get the default template content"""
+    return "#folderName#\n#allImages#"
+
+def load_templates():
+    """Load all available templates from the template directory"""
+    template_path = get_template_path()
+    templates = {}
+    
+    # Add default template
+    templates["default"] = get_default_template()
+    
+    # Load custom templates
+    if os.path.exists(template_path):
+        for filename in os.listdir(template_path):
+            if filename.startswith(".template"):
+                template_name = filename[10:]  # Remove ".template " prefix
+                # Remove .txt extension if present
+                if template_name.endswith('.txt'):
+                    template_name = template_name[:-4]
+                if template_name:  # Skip empty names
+                    template_file = os.path.join(template_path, filename)
+                    try:
+                        with open(template_file, 'r', encoding='utf-8') as f:
+                            templates[template_name] = f.read()
+                    except Exception as e:
+                        print(f"{timestamp()} Warning: Could not load template '{template_name}': {e}")
+    
+    return templates
+
+def apply_template(template_content, data):
+    """Apply a template with data replacement"""
+    result = template_content
+    
+    # Replace placeholders with actual data
+    replacements = {
+        '#folderName#': data.get('folder_name', ''),
+        '#width#': str(data.get('width', 0)),
+        '#height#': str(data.get('height', 0)),
+        '#longest#': str(data.get('longest', 0)),
+        '#extension#': data.get('extension', ''),
+        '#pictureCount#': str(data.get('picture_count', 0)),
+        '#folderSize#': data.get('folder_size', ''),
+        '#galleryLink#': data.get('gallery_link', ''),
+        '#allImages#': data.get('all_images', '')
+    }
+    
+    for placeholder, value in replacements.items():
+        result = result.replace(placeholder, value)
+    
+    return result
+
+def generate_bbcode_from_template(template_name, data):
+    """Generate bbcode content using a specific template"""
+    templates = load_templates()
+    
+    if template_name not in templates:
+        print(f"{timestamp()} Warning: Template '{template_name}' not found, using default")
+        template_name = "default"
+    
+    template_content = templates[template_name]
+    return apply_template(template_content, data)
 
 class ImxToUploader:
     def _get_credentials(self):
@@ -640,7 +718,7 @@ class ImxToUploader:
             print(f"{timestamp()} Error creating gallery: {str(e)}")
             return None
     
-    def _upload_without_named_gallery(self, folder_path, image_files, thumbnail_size, thumbnail_format, max_retries):
+    def _upload_without_named_gallery(self, folder_path, image_files, thumbnail_size, thumbnail_format, max_retries, template_name="default"):
         """Fallback upload method without gallery naming"""
         start_time = time.time()
         print(f"{timestamp()} Using API-only upload (no gallery naming)")
@@ -710,15 +788,15 @@ class ImxToUploader:
                 
                 # Upload batch concurrently
                 with ThreadPoolExecutor(max_workers=batch_size) as executor:
-                    # Submit all uploads in the batch
-                    future_to_file = {
-                        executor.submit(upload_single_image, image_file, 1, pbar): image_file 
-                        for image_file in batch
-                    }
+                    # Submit all uploads in the batch and track them in order
+                    futures = []
+                    for image_file in batch:
+                        future = executor.submit(upload_single_image, image_file, 1, pbar)
+                        futures.append((future, image_file))
                     
-                    # Collect results as they complete
+                    # Collect results in the order they were submitted
                     batch_results = []
-                    for future in as_completed(future_to_file):
+                    for future, image_file in futures:
                         image_file, image_data, error = future.result()
                         batch_results.append((image_file, image_data, error))
                         pbar.update(1)
@@ -740,12 +818,14 @@ class ImxToUploader:
                      unit="img", leave=False) as retry_pbar:
                 
                 with ThreadPoolExecutor(max_workers=4) as executor:
-                    future_to_file = {
-                        executor.submit(upload_single_image, image_file, retry_count + 1, retry_pbar): image_file 
-                        for image_file, _ in failed_images
-                    }
+                    # Submit retries in order
+                    futures = []
+                    for image_file, _ in failed_images:
+                        future = executor.submit(upload_single_image, image_file, retry_count + 1, retry_pbar)
+                        futures.append((future, image_file))
                     
-                    for future in as_completed(future_to_file):
+                    # Collect results in order
+                    for future, image_file in futures:
                         image_file, image_data, error = future.result()
                         if image_data:
                             uploaded_images.append((image_file, image_data))
@@ -809,35 +889,60 @@ class ImxToUploader:
         # Create gallery folder and files
         gallery_folder = os.path.join(folder_path, f"gallery_{gallery_id}")
         os.makedirs(gallery_folder, exist_ok=True)
+        uploaded_subdir = os.path.join(folder_path, ".uploaded")
+        os.makedirs(uploaded_subdir, exist_ok=True)
         
         # Create shortcut file (.url) to the gallery
         shortcut_content = f"""[InternetShortcut]
 URL=https://imx.to/g/{gallery_id}
 """
-        shortcut_path = os.path.join(gallery_folder, f"gallery_{gallery_id}.url")
-        with open(shortcut_path, 'w', encoding='utf-8') as f:
+        # Store local copies in .uploaded folder using standardized filenames
+        _, url_filename, bbcode_filename = build_gallery_filenames(os.path.basename(folder_path), gallery_id)
+        uploaded_shortcut_path = os.path.join(uploaded_subdir, url_filename)
+        with open(uploaded_shortcut_path, 'w', encoding='utf-8') as f:
             f.write(shortcut_content)
         
-        # Create .txt file with combined bbcode
-        # replacement tags: #folderName #pictureCount #extension #width #height #folderSize# #allImages# #longestSide# #fileDownload# #cover# 
-        
-        bbcode_content = ""
+        # Prepare template data
+        all_images_bbcode = ""
         for image_data in results['images']:
-            bbcode_content += image_data['bbcode'] + " "
+            all_images_bbcode += image_data['bbcode'] + "  "
         
-        bbcode_path = os.path.join(gallery_folder, f"gallery_{gallery_id}_bbcode.txt")
-        with open(bbcode_path, 'w', encoding='utf-8') as f:
+        # Calculate folder size
+        folder_size = f"{total_size / (1024*1024):.1f} MB"
+        
+        # Get most common extension
+        extensions = [os.path.splitext(img_file)[1].upper().lstrip('.') 
+                     for img_file, _ in uploaded_images]
+        extension = max(set(extensions), key=extensions.count) if extensions else "JPG"
+        
+        # Prepare template data
+        template_data = {
+            'folder_name': os.path.basename(folder_path),
+            'width': int(avg_width),
+            'height': int(avg_height),
+            'longest': int(max(avg_width, avg_height)),
+            'extension': extension,
+            'picture_count': len(uploaded_images) + 1,  # +1 for the first image that created the gallery
+            'folder_size': folder_size,
+            'gallery_link': f"https://imx.to/g/{gallery_id}",
+            'all_images': all_images_bbcode.strip()
+        }
+        
+        # Generate bbcode using specified template
+        bbcode_content = generate_bbcode_from_template(template_name, template_data)
+        
+        uploaded_bbcode_path = os.path.join(uploaded_subdir, bbcode_filename)
+        with open(uploaded_bbcode_path, 'w', encoding='utf-8') as f:
             f.write(bbcode_content)
         
         # Also save to central location
         central_path = get_central_storage_path()
-        folder_name = os.path.basename(folder_path)
-        
-        central_shortcut_path = os.path.join(central_path, f"{folder_name}.url")
+        safe_gallery_name, url_filename, bbcode_filename = build_gallery_filenames(os.path.basename(folder_path), gallery_id)
+        central_shortcut_path = os.path.join(central_path, url_filename)
         with open(central_shortcut_path, 'w', encoding='utf-8') as f:
             f.write(shortcut_content)
         
-        central_bbcode_path = os.path.join(central_path, f"{folder_name}_bbcode.txt")
+        central_bbcode_path = os.path.join(central_path, bbcode_filename)
         with open(central_bbcode_path, 'w', encoding='utf-8') as f:
             f.write(bbcode_content)
         
@@ -1005,7 +1110,7 @@ URL=https://imx.to/g/{gallery_id}
             except requests.exceptions.RequestException as e:
                 raise Exception(f"Network error during upload: {str(e)}")
     
-    def upload_folder(self, folder_path, gallery_name=None, thumbnail_size=3, thumbnail_format=2, max_retries=3, public_gallery=1, parallel_batch_size=4):
+    def upload_folder(self, folder_path, gallery_name=None, thumbnail_size=3, thumbnail_format=2, max_retries=3, public_gallery=1, parallel_batch_size=4, template_name="default"):
         """
         Upload all images in a folder as a gallery
         
@@ -1080,7 +1185,7 @@ URL=https://imx.to/g/{gallery_id}
         if not gallery_id:
             print("Failed to create named gallery, falling back to API-only upload...")
             # Fallback to API-only upload (no gallery naming)
-            return self._upload_without_named_gallery(folder_path, image_files, thumbnail_size, thumbnail_format, max_retries)
+            return self._upload_without_named_gallery(folder_path, image_files, thumbnail_size, thumbnail_format, max_retries, template_name)
         
         gallery_url = f"https://imx.to/g/{gallery_id}"
         
@@ -1122,35 +1227,33 @@ URL=https://imx.to/g/{gallery_id}
         uploaded_images = []
         failed_images = []
         
-                # Main upload progress bar
-        with tqdm(total=len(image_files), desc=f"Uploading to {gallery_name}", 
-                 unit="img", leave=False) as pbar:
-            
-            # Process images in batches for concurrent uploads
-            for i in range(0, len(image_files), parallel_batch_size):
-                batch = image_files[i:i + parallel_batch_size]
+        # Rolling concurrency: keep N workers busy until all submitted
+        with tqdm(total=len(image_files), desc=f"Uploading to {gallery_name}", unit="img", leave=False) as pbar:
+            with ThreadPoolExecutor(max_workers=parallel_batch_size) as executor:
+                import queue
+                remaining = queue.Queue()
+                for f in image_files:
+                    remaining.put(f)
+                futures_map = {}
+                # Prime the pool
+                for _ in range(min(parallel_batch_size, remaining.qsize())):
+                    img = remaining.get()
+                    futures_map[executor.submit(upload_single_image, img, 1, pbar)] = img
                 
-                # Upload batch concurrently
-                with ThreadPoolExecutor(max_workers=parallel_batch_size) as executor:
-                    # Submit all uploads in the batch
-                    future_to_file = {
-                        executor.submit(upload_single_image, image_file, 1, pbar): image_file 
-                        for image_file in batch
-                    }
-                    
-                    # Collect results as they complete
-                    batch_results = []
-                    for future in as_completed(future_to_file):
-                        image_file, image_data, error = future.result()
-                        batch_results.append((image_file, image_data, error))
+                while futures_map:
+                    done, _ = concurrent.futures.wait(list(futures_map.keys()), return_when=concurrent.futures.FIRST_COMPLETED)
+                    for fut in done:
+                        img = futures_map.pop(fut)
+                        image_file, image_data, error = fut.result()
+                        if image_data:
+                            uploaded_images.append((image_file, image_data))
+                        else:
+                            failed_images.append((image_file, error))
                         pbar.update(1)
-                
-                # Process batch results
-                for image_file, image_data, error in batch_results:
-                    if image_data:
-                        uploaded_images.append((image_file, image_data))
-                    else:
-                        failed_images.append((image_file, error))
+                        # Submit next if any left
+                        if not remaining.empty():
+                            nxt = remaining.get()
+                            futures_map[executor.submit(upload_single_image, nxt, 1, pbar)] = nxt
         
         # Retry failed uploads with progress bar
         retry_count = 0
@@ -1158,22 +1261,30 @@ URL=https://imx.to/g/{gallery_id}
             retry_count += 1
             retry_failed = []
             
-            with tqdm(total=len(failed_images), desc=f"Retry {retry_count}/{max_retries}", 
-                     unit="img", leave=False) as retry_pbar:
-                
+            with tqdm(total=len(failed_images), desc=f"Retry {retry_count}/{max_retries}", unit="img", leave=False) as retry_pbar:
                 with ThreadPoolExecutor(max_workers=parallel_batch_size) as executor:
-                    future_to_file = {
-                        executor.submit(upload_single_image, image_file, retry_count + 1, retry_pbar): image_file 
-                        for image_file, _ in failed_images
-                    }
+                    import queue
+                    remaining = queue.Queue()
+                    for img, _ in failed_images:
+                        remaining.put(img)
+                    futures_map = {}
+                    for _ in range(min(parallel_batch_size, remaining.qsize())):
+                        img = remaining.get()
+                        futures_map[executor.submit(upload_single_image, img, retry_count + 1, retry_pbar)] = img
                     
-                    for future in as_completed(future_to_file):
-                        image_file, image_data, error = future.result()
-                        if image_data:
-                            uploaded_images.append((image_file, image_data))
-                        else:
-                            retry_failed.append((image_file, error))
-                        retry_pbar.update(1)
+                    while futures_map:
+                        done, _ = concurrent.futures.wait(list(futures_map.keys()), return_when=concurrent.futures.FIRST_COMPLETED)
+                        for fut in done:
+                            img = futures_map.pop(fut)
+                            image_file, image_data, error = fut.result()
+                            if image_data:
+                                uploaded_images.append((image_file, image_data))
+                            else:
+                                retry_failed.append((image_file, error))
+                            retry_pbar.update(1)
+                            if not remaining.empty():
+                                nxt = remaining.get()
+                                futures_map[executor.submit(upload_single_image, nxt, retry_count + 1, retry_pbar)] = nxt
             
             failed_images = retry_failed
         
@@ -1216,33 +1327,59 @@ URL=https://imx.to/g/{gallery_id}
         # Create gallery folder and files
         gallery_folder = os.path.join(folder_path, f"gallery_{gallery_id}")
         os.makedirs(gallery_folder, exist_ok=True)
+        uploaded_subdir = os.path.join(folder_path, ".uploaded")
+        os.makedirs(uploaded_subdir, exist_ok=True)
         
-        # Create shortcut file (.url) to the gallery
+        # Create shortcut file (.url) to the gallery (standard naming)
         shortcut_content = f"""[InternetShortcut]
 URL=https://imx.to/g/{gallery_id}
 """
-        shortcut_path = os.path.join(gallery_folder, f"gallery_{gallery_id}.url")
-        with open(shortcut_path, 'w', encoding='utf-8') as f:
+        _, url_filename, bbcode_filename = build_gallery_filenames(gallery_name, gallery_id)
+        uploaded_shortcut_path = os.path.join(uploaded_subdir, url_filename)
+        with open(uploaded_shortcut_path, 'w', encoding='utf-8') as f:
             f.write(shortcut_content)
         
-        # Create .txt file with combined bbcode
-        bbcode_content = ""
+        # Prepare template data
+        all_images_bbcode = ""
         for image_data in results['images']:
-            bbcode_content += image_data['bbcode'] + "\n"
+            all_images_bbcode += image_data['bbcode'] + "  "
         
-        bbcode_path = os.path.join(gallery_folder, f"gallery_{gallery_id}_bbcode.txt")
-        with open(bbcode_path, 'w', encoding='utf-8') as f:
+        # Calculate folder size
+        folder_size = f"{total_size / (1024*1024):.1f} MB"
+        
+        # Get most common extension
+        extensions = [os.path.splitext(img_file)[1].upper().lstrip('.') 
+                     for img_file, _ in uploaded_images]
+        extension = max(set(extensions), key=extensions.count) if extensions else "JPG"
+        
+        # Prepare template data
+        template_data = {
+            'folder_name': gallery_name,
+            'width': int(avg_width),
+            'height': int(avg_height),
+            'longest': int(max(avg_width, avg_height)),
+            'extension': extension,
+            'picture_count': len(uploaded_images),
+            'folder_size': folder_size,
+            'gallery_link': f"https://imx.to/g/{gallery_id}",
+            'all_images': all_images_bbcode.strip()
+        }
+        
+        # Generate bbcode using specified template
+        bbcode_content = generate_bbcode_from_template(template_name, template_data)
+        
+        uploaded_bbcode_path = os.path.join(uploaded_subdir, bbcode_filename)
+        with open(uploaded_bbcode_path, 'w', encoding='utf-8') as f:
             f.write(bbcode_content)
         
         # Also save to central location
         central_path = get_central_storage_path()
-        folder_name = os.path.basename(folder_path)
-        
-        central_shortcut_path = os.path.join(central_path, f"{folder_name}.url")
+        safe_gallery_name, url_filename, bbcode_filename = build_gallery_filenames(gallery_name, gallery_id)
+        central_shortcut_path = os.path.join(central_path, url_filename)
         with open(central_shortcut_path, 'w', encoding='utf-8') as f:
             f.write(shortcut_content)
         
-        central_bbcode_path = os.path.join(central_path, f"{folder_name}_bbcode.txt")
+        central_bbcode_path = os.path.join(central_path, bbcode_filename)
         with open(central_bbcode_path, 'w', encoding='utf-8') as f:
             f.write(bbcode_content)
         
@@ -1254,13 +1391,13 @@ def main():
     # Load user defaults
     user_defaults = load_user_defaults()
     
-    parser = argparse.ArgumentParser(description='Upload image folders to imx.to as galleries')
+    parser = argparse.ArgumentParser(description='Upload image folders to imx.to as galleries and generate bbcode.\n\nSettings file: ' + os.path.join(os.path.expanduser('~'), '.imxup.ini'))
     parser.add_argument('folder_paths', nargs='*', help='Paths to folders containing images')
     parser.add_argument('--name', help='Gallery name (optional, uses folder name if not specified)')
-    parser.add_argument('--thumbnail-size', type=int, choices=[1, 2, 3, 4, 6], 
+    parser.add_argument('--size', type=int, choices=[1, 2, 3, 4, 6], 
                        default=user_defaults.get('thumbnail_size', 3),
                        help='Thumbnail size: 1=100x100, 2=180x180, 3=250x250, 4=300x300, 6=150x150 (default: 3)')
-    parser.add_argument('--thumbnail-format', type=int, choices=[1, 2, 3, 4], 
+    parser.add_argument('--format', type=int, choices=[1, 2, 3, 4], 
                        default=user_defaults.get('thumbnail_format', 2),
                        help='Thumbnail format: 1=Fixed width, 2=Proportional, 3=Square, 4=Fixed height (default: 2)')
     parser.add_argument('--max-retries', type=int, 
@@ -1269,7 +1406,7 @@ def main():
     parser.add_argument('--public-gallery', type=int, choices=[0, 1], 
                        default=user_defaults.get('public_gallery', 1),
                        help='Gallery visibility: 0=private, 1=public (default: 1)')
-    parser.add_argument('--parallel-batch-size', type=int, 
+    parser.add_argument('--parallel', type=int, 
                        default=user_defaults.get('parallel_batch_size', 4),
                        help='Number of images to upload simultaneously (default: 4)')
     parser.add_argument('--private', action='store_true',
@@ -1280,6 +1417,8 @@ def main():
                        help='Set up secure password storage (interactive)')
     parser.add_argument('--rename-unnamed', action='store_true',
                        help='Rename all unnamed galleries from previous uploads')
+    parser.add_argument('--template', '-t', 
+                       help='Template name to use for bbcode generation (default: "default")')
 
     parser.add_argument('--install-context-menu', action='store_true',
                        help='Install Windows context menu integration')
@@ -1437,11 +1576,12 @@ def main():
                 results = uploader.upload_folder(
                     folder_path, 
                     gallery_name,
-                    thumbnail_size=args.thumbnail_size,
-                    thumbnail_format=args.thumbnail_format,
+                    thumbnail_size=args.size,
+                    thumbnail_format=args.format,
                     max_retries=args.max_retries,
                     public_gallery=public_gallery,
-                    parallel_batch_size=args.parallel_batch_size
+                    parallel_batch_size=args.parallel,
+                    template_name=args.template or "default"
                 )
                 all_results.append(results)
                 
