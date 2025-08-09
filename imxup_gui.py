@@ -154,24 +154,60 @@ class GUIImxToUploader(ImxToUploader):
         
         # Use existing gallery if resuming; otherwise create a new one (skip login since it's already done)
         gallery_id = None
+        initial_completed = 0
+        initial_uploaded_size = 0
+        preseed_images = []  # Preserve first image in API-only fallback
+        files_to_upload = []
         if current_item and current_item.gallery_id:
             gallery_id = current_item.gallery_id
             if self.worker_thread:
                 self.worker_thread.log_message.emit(f"{timestamp()} Resuming existing gallery {gallery_id}")
+            files_to_upload = image_files
         else:
             gallery_id = self.create_gallery_with_name(gallery_name, public_gallery, skip_login=True)
-        
-        if not gallery_id:
-            print("Failed to create named gallery, falling back to API-only upload...")
-            # Fallback to API-only upload (no gallery naming)
-            return self._upload_without_named_gallery(folder_path, image_files, thumbnail_size, thumbnail_format, max_retries, parallel_batch_size)
+            if not gallery_id:
+                # API-only fallback: upload first image to create gallery, then reuse same loop for the rest
+                if self.worker_thread:
+                    self.worker_thread.log_message.emit(f"{timestamp()} Using API-only upload (no gallery naming)")
+                first_file = image_files[0]
+                first_image_path = os.path.join(folder_path, first_file)
+                if self.worker_thread:
+                    self.worker_thread.log_message.emit(f"{timestamp()} Uploading first image: {first_file}")
+                first_response = self.upload_image(
+                    first_image_path,
+                    create_gallery=True,
+                    thumbnail_size=thumbnail_size,
+                    thumbnail_format=thumbnail_format
+                )
+                if first_response.get('status') != 'success':
+                    raise Exception(f"{timestamp()} Failed to create gallery: {first_response}")
+                gallery_id = first_response['data'].get('gallery_id')
+                # Save for later renaming (with sanitized name)
+                from imxup import save_unnamed_gallery
+                save_unnamed_gallery(gallery_id, gallery_name)
+                preseed_images = [first_response['data']]
+                initial_completed = 1
+                try:
+                    initial_uploaded_size = os.path.getsize(first_image_path)
+                except Exception:
+                    initial_uploaded_size = 0
+                # Optional: emit a progress update for the first image
+                if self.worker_thread:
+                    percent_once = int((initial_completed / max(original_total_images, 1)) * 100)
+                    self.worker_thread.progress_updated.emit(
+                        folder_path, initial_completed, original_total_images, percent_once, first_file
+                    )
+                # Upload the rest
+                files_to_upload = image_files[1:]
+            else:
+                files_to_upload = image_files
         
         gallery_url = f"https://imx.to/g/{gallery_id}"
         
         # Store results
         results = {
             'gallery_url': gallery_url,
-            'images': []
+            'images': list(preseed_images)
         }
         
         # Upload all images to the created gallery with progress bars
@@ -209,7 +245,7 @@ class GUIImxToUploader(ImxToUploader):
         import concurrent.futures, queue
         with ThreadPoolExecutor(max_workers=parallel_batch_size) as executor:
             remaining = queue.Queue()
-            for f in image_files:
+            for f in files_to_upload:
                 remaining.put(f)
             futures_map = {}
             # Prime pool
@@ -239,7 +275,7 @@ class GUIImxToUploader(ImxToUploader):
                             self.worker_thread.log_message.emit(f"{timestamp()} ✗ Failed: {image_file} - {error}")
                     
                     # Update progress
-                    completed_count = len(uploaded_images)
+                    completed_count = initial_completed + len(uploaded_images)
                     progress_percent = int((completed_count / max(original_total_images, 1)) * 100)
                     if self.worker_thread:
                         self.worker_thread.progress_updated.emit(
@@ -300,7 +336,7 @@ class GUIImxToUploader(ImxToUploader):
                             if self.worker_thread:
                                 self.worker_thread.log_message.emit(f"{timestamp()} ✗ Retry failed: {image_file} - {error}")
                         
-                        completed_count = len(uploaded_images)
+                        completed_count = initial_completed + len(uploaded_images)
                         progress_percent = int((completed_count / max(original_total_images, 1)) * 100)
                         if self.worker_thread:
                             self.worker_thread.progress_updated.emit(
@@ -329,14 +365,21 @@ class GUIImxToUploader(ImxToUploader):
         
         # Calculate transfer speed and dimension stats (robust to edge cases)
         try:
-            uploaded_size = sum(os.path.getsize(os.path.join(folder_path, img_file))
-                               for img_file, _ in uploaded_images)
+            uploaded_size = initial_uploaded_size + sum(
+                os.path.getsize(os.path.join(folder_path, img_file)) for img_file, _ in uploaded_images
+            )
         except Exception:
             uploaded_size = 0
         transfer_speed = uploaded_size / upload_time if upload_time > 0 else 0
         
         try:
             successful_dimensions = []
+            # Include first image in averages if API-only fallback used
+            if initial_completed == 1 and preseed_images:
+                first_file = image_files[0]
+                w, h = image_dimensions_map.get(first_file, (0, 0))
+                if w > 0 and h > 0:
+                    successful_dimensions.append((w, h))
             for img_file, _ in uploaded_images:
                 w, h = image_dimensions_map.get(img_file, (0, 0))
                 if w > 0 and h > 0:
@@ -357,7 +400,7 @@ class GUIImxToUploader(ImxToUploader):
             'transfer_speed': transfer_speed,
             'avg_width': avg_width,
             'avg_height': avg_height,
-            'successful_count': len(uploaded_images),
+            'successful_count': initial_completed + len(uploaded_images),
             'failed_count': len(failed_images),
             'failed_details': failed_images
         })
@@ -378,177 +421,6 @@ URL=https://imx.to/g/{gallery_id}
         
         # Files will be created in on_gallery_completed when gallery_id is available
         print(f"{timestamp()} Gallery upload completed successfully")
-        
-        return results
-    
-    def _upload_without_named_gallery(self, folder_path, image_files, thumbnail_size, thumbnail_format, max_retries, parallel_batch_size=4):
-        """Override to add progress tracking for GUI"""
-        start_time = time.time()
-        
-        if self.worker_thread:
-            self.worker_thread.log_message.emit(f"{timestamp()} Using API-only upload (no gallery naming)")
-        
-        # Upload first image and create gallery
-        first_image_path = os.path.join(folder_path, image_files[0])
-        if self.worker_thread:
-            self.worker_thread.log_message.emit(f"{timestamp()} Uploading first image: {image_files[0]}")
-        
-        first_response = self.upload_image(first_image_path, create_gallery=True, 
-                                          thumbnail_size=thumbnail_size, thumbnail_format=thumbnail_format)
-        
-        if first_response.get('status') != 'success':
-            raise Exception(f"{timestamp()} Failed to create gallery: {first_response}")
-        
-        # Get gallery ID from first upload
-        gallery_id = first_response['data'].get('gallery_id')
-        gallery_url = f"https://imx.to/g/{gallery_id}"
-        
-        # Save for later renaming (with sanitized name)
-        folder_name = sanitize_gallery_name(os.path.basename(folder_path))
-        from imxup import save_unnamed_gallery
-        save_unnamed_gallery(gallery_id, folder_name)
-        if self.worker_thread:
-            self.worker_thread.log_message.emit(f"{timestamp()} Saved unnamed gallery {gallery_id} for later renaming to '{folder_name}'")
-        
-        # Store results
-        results = {
-            'gallery_url': gallery_url,
-            'images': [first_response['data']]
-        }
-        
-        # Upload remaining images with progress tracking
-        def upload_single_image(image_file, attempt=1):
-            image_path = os.path.join(folder_path, image_file)
-            
-            try:
-                response = self.upload_image(image_path, gallery_id=gallery_id,
-                                           thumbnail_size=thumbnail_size, thumbnail_format=thumbnail_format)
-                
-                if response.get('status') == 'success':
-                    return image_file, response['data'], None
-                else:
-                    error_msg = f"API error: {response}"
-                    return image_file, None, error_msg
-                    
-            except Exception as e:
-                error_msg = f"Network error: {str(e)}"
-                return image_file, None, error_msg
-        
-        # Upload remaining images with rolling concurrency
-        uploaded_images = []
-        failed_images = []
-        remaining_images = image_files[1:]  # Skip first (already uploaded)
-
-        import concurrent.futures, queue
-        with ThreadPoolExecutor(max_workers=parallel_batch_size) as executor:
-            remaining = queue.Queue()
-            for f in remaining_images:
-                remaining.put(f)
-            futures_map = {}
-            # Prime pool
-            for _ in range(min(parallel_batch_size, remaining.qsize())):
-                img = remaining.get()
-                futures_map[executor.submit(upload_single_image, img, 1)] = img
-            # Process as they complete
-            while futures_map:
-                done, _ = concurrent.futures.wait(list(futures_map.keys()), return_when=concurrent.futures.FIRST_COMPLETED)
-                for fut in done:
-                    img = futures_map.pop(fut)
-                    image_file, image_data, error = fut.result()
-                    if image_data:
-                        uploaded_images.append((image_file, image_data))
-                        if self.worker_thread:
-                            self.worker_thread.log_message.emit(f"{timestamp()} ✓ Uploaded: {image_file}")
-                    else:
-                        failed_images.append((image_file, error))
-                        if self.worker_thread:
-                            self.worker_thread.log_message.emit(f"{timestamp()} ✗ Failed: {image_file} - {error}")
-                    # Update progress (include the first image in counts)
-                    completed_count = len(uploaded_images) + 1
-                    progress_percent = int((completed_count / max(len(image_files), 1)) * 100)
-                    if self.worker_thread:
-                        self.worker_thread.progress_updated.emit(
-                            folder_path, completed_count, len(image_files), progress_percent, image_file
-                        )
-                        self.worker_thread.log_message.emit(f"{timestamp()} Progress: {completed_count}/{len(image_files)} ({progress_percent}%)")
-                    # Refill if not soft-stopped
-                    if not remaining.empty():
-                        soft_stop = False
-                        if self.worker_thread and self.worker_thread.current_item and self.worker_thread.current_item.path == folder_path:
-                            soft_stop = getattr(self.worker_thread, '_soft_stop_requested_for', None) == folder_path
-                        if not soft_stop:
-                            nxt = remaining.get()
-                            futures_map[executor.submit(upload_single_image, nxt, 1)] = nxt
-        
-        # Retry failed uploads with rolling concurrency
-        retry_count = 0
-        while failed_images and retry_count < max_retries:
-            retry_count += 1
-            retry_failed = []
-            
-            if self.worker_thread:
-                self.worker_thread.log_message.emit(f"{timestamp()} Retrying {len(failed_images)} failed uploads (attempt {retry_count}/{max_retries})")
-            
-            # Rolling retries
-            import concurrent.futures, queue
-            with ThreadPoolExecutor(max_workers=parallel_batch_size) as executor:
-                remaining = queue.Queue()
-                for img, _ in failed_images:
-                    remaining.put(img)
-                futures_map = {}
-                for _ in range(min(parallel_batch_size, remaining.qsize())):
-                    img = remaining.get()
-                    futures_map[executor.submit(upload_single_image, img, retry_count + 1)] = img
-                while futures_map:
-                    done, _ = concurrent.futures.wait(list(futures_map.keys()), return_when=concurrent.futures.FIRST_COMPLETED)
-                    for fut in done:
-                        img = futures_map.pop(fut)
-                        image_file, image_data, error = fut.result()
-                        if image_data:
-                            uploaded_images.append((image_file, image_data))
-                            if self.worker_thread:
-                                self.worker_thread.log_message.emit(f"{timestamp()} ✓ Retry successful: {image_file}")
-                        else:
-                            retry_failed.append((image_file, error))
-                            if self.worker_thread:
-                                self.worker_thread.log_message.emit(f"{timestamp()} ✗ Retry failed: {image_file} - {error}")
-                        completed_count = len(uploaded_images) + 1
-                        progress_percent = int((completed_count / max(len(image_files), 1)) * 100)
-                        if self.worker_thread:
-                            self.worker_thread.progress_updated.emit(
-                                folder_path, completed_count, len(image_files), progress_percent, image_file
-                            )
-                        if not remaining.empty():
-                            nxt = remaining.get()
-                            futures_map[executor.submit(upload_single_image, nxt, retry_count + 1)] = nxt
-            
-            failed_images = retry_failed
-        
-        # Sort uploaded images by original file order
-        uploaded_images.sort(key=lambda x: image_files.index(x[0]))
-        
-        # Add to results in correct order (includes previously uploaded + new ones)
-        results['images'] = [image_data for _, image_data in uploaded_images]
-        
-        # Calculate statistics
-        end_time = time.time()
-        upload_time = end_time - start_time
-        
-        # Calculate transfer speed
-        uploaded_size = sum(os.path.getsize(os.path.join(folder_path, img_file)) 
-                           for img_file, _ in uploaded_images)
-        transfer_speed = uploaded_size / upload_time if upload_time > 0 else 0
-        
-        # Add statistics to results
-        results.update({
-            'gallery_id': gallery_id,
-            'gallery_name': folder_name,
-            'upload_time': upload_time,
-            'uploaded_size': uploaded_size,
-            'transfer_speed': transfer_speed,
-            'successful_count': len(uploaded_images) + 1,  # +1 for first image
-            'failed_count': len(failed_images)
-        })
         
         return results
 
@@ -2816,6 +2688,19 @@ class ImxUploadGUI(QMainWindow):
         scrollbar = self.gallery_table.verticalScrollBar()
         scroll_position = scrollbar.value()
         
+        # Preserve current selection by path (column 1 holds path in UserRole)
+        selected_paths = set()
+        try:
+            selected_rows = {it.row() for it in self.gallery_table.selectedItems()}
+            for row in selected_rows:
+                name_item = self.gallery_table.item(row, 1)
+                if name_item:
+                    path = name_item.data(Qt.ItemDataRole.UserRole)
+                    if path:
+                        selected_paths.add(path)
+        except Exception:
+            pass
+        
         # Clear the table first
         self.gallery_table.clearContents()
         self.gallery_table.setRowCount(len(items))
@@ -2940,6 +2825,16 @@ class ImxUploadGUI(QMainWindow):
             action_widget.cancel_btn.clicked.connect(lambda checked, path=item.path: self.cancel_single_item(path))
             action_widget.update_buttons(item.status)
             self.gallery_table.setCellWidget(row, 7, action_widget)
+        
+        # Restore selection
+        if selected_paths:
+            try:
+                for row in range(self.gallery_table.rowCount()):
+                    name_item = self.gallery_table.item(row, 1)
+                    if name_item and name_item.data(Qt.ItemDataRole.UserRole) in selected_paths:
+                        self.gallery_table.selectRow(row)
+            except Exception:
+                pass
         
         # Restore scroll position
         scrollbar = self.gallery_table.verticalScrollBar()

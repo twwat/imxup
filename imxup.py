@@ -784,235 +784,7 @@ class ImxToUploader:
             print(f"{timestamp()} Error creating gallery: {str(e)}")
             return None
     
-    def _upload_without_named_gallery(self, folder_path, image_files, thumbnail_size, thumbnail_format, max_retries, template_name="default"):
-        """Fallback upload method without gallery naming"""
-        start_time = time.time()
-        print(f"{timestamp()} Using API-only upload (no gallery naming)")
-        
-        # Upload first image and create gallery
-        first_image_path = os.path.join(folder_path, image_files[0])
-        print(f"{timestamp()} Uploading first image: {image_files[0]}")
-        
-        first_response = self.upload_image(first_image_path, create_gallery=True, 
-                                          thumbnail_size=thumbnail_size, thumbnail_format=thumbnail_format)
-        
-        if first_response.get('status') != 'success':
-            raise Exception(f"{timestamp()} Failed to create gallery: {first_response}")
-        
-        # Get gallery ID from first upload
-        gallery_id = first_response['data'].get('gallery_id')
-        gallery_url = f"https://imx.to/g/{gallery_id}"
-        
-        # Save for later renaming (with sanitized name)
-        folder_name = sanitize_gallery_name(os.path.basename(folder_path))
-        save_unnamed_gallery(gallery_id, folder_name)
-        print(f"{timestamp()} Saved unnamed gallery {gallery_id} for later renaming to '{folder_name}'")
-        
-        # Store results
-        results = {
-            'gallery_url': gallery_url,
-            'images': [first_response['data']]
-        }
-        
-        # Upload remaining images with progress bars and concurrency
-        def upload_single_image(image_file, attempt=1, pbar=None):
-            image_path = os.path.join(folder_path, image_file)
-            
-            try:
-                response = self.upload_image(image_path, gallery_id=gallery_id,
-                                           thumbnail_size=thumbnail_size, thumbnail_format=thumbnail_format)
-                
-                if response.get('status') == 'success':
-                    if pbar:
-                        pbar.set_postfix_str(f"✓ {image_file}")
-                    return image_file, response['data'], None
-                else:
-                    error_msg = f"API error: {response}"
-                    if pbar:
-                        pbar.set_postfix_str(f"✗ {image_file}")
-                    return image_file, None, error_msg
-                    
-            except Exception as e:
-                error_msg = f"Network error: {str(e)}"
-                if pbar:
-                    pbar.set_postfix_str(f"✗ {image_file}")
-                return image_file, None, error_msg
-        
-        # Upload remaining images with retries, maintaining order
-        uploaded_images = []
-        failed_images = []
-        
-        # Main upload progress bar
-        with tqdm(total=len(image_files[1:]), desc="Uploading remaining images", 
-                 unit="img", leave=False) as pbar:
-            
-            # Process images in batches of 8 for concurrent uploads
-            batch_size = 5
-            remaining_images = image_files[1:]  # Skip first image (already uploaded)
-            for i in range(0, len(remaining_images), batch_size):
-                batch = remaining_images[i:i + batch_size]
-                
-                # Upload batch concurrently
-                with ThreadPoolExecutor(max_workers=batch_size) as executor:
-                    # Submit all uploads in the batch and track them in order
-                    futures = []
-                    for image_file in batch:
-                        future = executor.submit(upload_single_image, image_file, 1, pbar)
-                        futures.append((future, image_file))
-                    
-                    # Collect results in the order they were submitted
-                    batch_results = []
-                    for future, image_file in futures:
-                        image_file, image_data, error = future.result()
-                        batch_results.append((image_file, image_data, error))
-                        pbar.update(1)
-                
-                # Process batch results
-                for image_file, image_data, error in batch_results:
-                    if image_data:
-                        uploaded_images.append((image_file, image_data))
-                    else:
-                        failed_images.append((image_file, error))
-        
-        # Retry failed uploads with progress bar
-        retry_count = 0
-        while failed_images and retry_count < max_retries:
-            retry_count += 1
-            retry_failed = []
-            
-            with tqdm(total=len(failed_images), desc=f"Retry {retry_count}/{max_retries}", 
-                     unit="img", leave=False) as retry_pbar:
-                
-                with ThreadPoolExecutor(max_workers=4) as executor:
-                    # Submit retries in order
-                    futures = []
-                    for image_file, _ in failed_images:
-                        future = executor.submit(upload_single_image, image_file, retry_count + 1, retry_pbar)
-                        futures.append((future, image_file))
-                    
-                    # Collect results in order
-                    for future, image_file in futures:
-                        image_file, image_data, error = future.result()
-                        if image_data:
-                            uploaded_images.append((image_file, image_data))
-                        else:
-                            retry_failed.append((image_file, error))
-                        retry_pbar.update(1)
-            
-            failed_images = retry_failed
-        
-        # Sort uploaded images by original file order
-        uploaded_images.sort(key=lambda x: image_files.index(x[0]))
-        
-        # Add to results in correct order
-        for _, image_data in uploaded_images:
-            results['images'].append(image_data)
-        
-        # Calculate statistics
-        end_time = time.time()
-        upload_time = end_time - start_time
-        
-        # Calculate transfer speed
-        uploaded_size = sum(os.path.getsize(os.path.join(folder_path, img_file)) 
-                           for img_file, _ in uploaded_images)
-        total_size = sum(os.path.getsize(os.path.join(folder_path, img_file)) 
-                        for img_file in image_files)
-        transfer_speed = uploaded_size / upload_time if upload_time > 0 else 0
-        
-        # Calculate image dimension statistics
-        image_dimensions = []
-        for f in image_files:
-            file_path = os.path.join(folder_path, f)
-            try:
-                from PIL import Image
-                with Image.open(file_path) as img:
-                    width, height = img.size
-                    image_dimensions.append((width, height))
-            except ImportError:
-                image_dimensions.append((0, 0))  # PIL not available
-            except Exception:
-                image_dimensions.append((0, 0))  # Error reading image
-        
-        successful_dimensions = [image_dimensions[image_files.index(img_file)] 
-                               for img_file, _ in uploaded_images]
-        avg_width = sum(w for w, h in successful_dimensions) / len(successful_dimensions) if successful_dimensions else 0
-        avg_height = sum(h for w, h in successful_dimensions) / len(successful_dimensions) if successful_dimensions else 0
-        
-        # Add statistics to results
-        results.update({
-            'gallery_id': gallery_id,
-            'gallery_name': os.path.basename(folder_path),
-            'upload_time': upload_time,
-            'total_size': total_size,
-            'uploaded_size': uploaded_size,
-            'transfer_speed': transfer_speed,
-            'avg_width': avg_width,
-            'avg_height': avg_height,
-            'successful_count': len(uploaded_images) + 1,  # +1 for the first image that created the gallery
-            'failed_count': len(failed_images)
-        })
-        
-        # Ensure .uploaded exists; do not create separate gallery_{id} folder
-        uploaded_subdir = os.path.join(folder_path, ".uploaded")
-        os.makedirs(uploaded_subdir, exist_ok=True)
-        
-        # Create shortcut file (.url) to the gallery
-        shortcut_content = f"""[InternetShortcut]
-URL=https://imx.to/g/{gallery_id}
-"""
-        # Store local copies in .uploaded folder using standardized filenames
-        _, url_filename, bbcode_filename = build_gallery_filenames(os.path.basename(folder_path), gallery_id)
-        uploaded_shortcut_path = os.path.join(uploaded_subdir, url_filename)
-        with open(uploaded_shortcut_path, 'w', encoding='utf-8') as f:
-            f.write(shortcut_content)
-        
-        # Prepare template data
-        all_images_bbcode = ""
-        for image_data in results['images']:
-            all_images_bbcode += image_data['bbcode'] + "  "
-        
-        # Calculate folder size
-        folder_size = f"{total_size / (1024*1024):.1f} MB"
-        
-        # Get most common extension
-        extensions = [os.path.splitext(img_file)[1].upper().lstrip('.') 
-                     for img_file, _ in uploaded_images]
-        extension = max(set(extensions), key=extensions.count) if extensions else "JPG"
-        
-        # Prepare template data
-        template_data = {
-            'folder_name': os.path.basename(folder_path),
-            'width': int(avg_width),
-            'height': int(avg_height),
-            'longest': int(max(avg_width, avg_height)),
-            'extension': extension,
-            'picture_count': len(uploaded_images) + 1,  # +1 for the first image that created the gallery
-            'folder_size': folder_size,
-            'gallery_link': f"https://imx.to/g/{gallery_id}",
-            'all_images': all_images_bbcode.strip()
-        }
-        
-        # Generate bbcode using specified template
-        bbcode_content = generate_bbcode_from_template(template_name, template_data)
-        
-        uploaded_bbcode_path = os.path.join(uploaded_subdir, bbcode_filename)
-        with open(uploaded_bbcode_path, 'w', encoding='utf-8') as f:
-            f.write(bbcode_content)
-        
-        # Also save to central location
-        central_path = get_central_storage_path()
-        safe_gallery_name, url_filename, bbcode_filename = build_gallery_filenames(os.path.basename(folder_path), gallery_id)
-        central_shortcut_path = os.path.join(central_path, url_filename)
-        with open(central_shortcut_path, 'w', encoding='utf-8') as f:
-            f.write(shortcut_content)
-        
-        central_bbcode_path = os.path.join(central_path, bbcode_filename)
-        with open(central_bbcode_path, 'w', encoding='utf-8') as f:
-            f.write(bbcode_content)
-        
-        print(f"{timestamp()} Saved gallery files to central location: {central_path}")
-        
-        return results
+    # REMOVED: _upload_without_named_gallery — unified into upload_folder
     
     def rename_gallery(self, gallery_id, new_name):
         """Rename an existing gallery"""
@@ -1243,20 +1015,45 @@ URL=https://imx.to/g/{gallery_id}
                 print(f"{timestamp()} Skipping {folder_path}")
                 return None
         
-        # Create gallery (skip login since it's already done)
+        # Create gallery (skip login since it's already done). If creation fails, fall back to API-only
         gallery_id = self.create_gallery_with_name(gallery_name, public_gallery, skip_login=True)
-        
+        initial_completed = 0
+        initial_uploaded_size = 0
+        preseed_images = []
+        files_to_upload = []
         if not gallery_id:
             print("Failed to create named gallery, falling back to API-only upload...")
-            # Fallback to API-only upload (no gallery naming)
-            return self._upload_without_named_gallery(folder_path, image_files, thumbnail_size, thumbnail_format, max_retries, template_name)
+            # Upload first image to create gallery
+            first_file = image_files[0]
+            first_image_path = os.path.join(folder_path, first_file)
+            print(f"{timestamp()} Uploading first image: {first_file}")
+            first_response = self.upload_image(
+                first_image_path,
+                create_gallery=True,
+                thumbnail_size=thumbnail_size,
+                thumbnail_format=thumbnail_format
+            )
+            if first_response.get('status') != 'success':
+                raise Exception(f"{timestamp()} Failed to create gallery: {first_response}")
+            gallery_id = first_response['data'].get('gallery_id')
+            # Save for later renaming (with sanitized name)
+            save_unnamed_gallery(gallery_id, gallery_name)
+            preseed_images = [first_response['data']]
+            initial_completed = 1
+            try:
+                initial_uploaded_size = os.path.getsize(first_image_path)
+            except Exception:
+                initial_uploaded_size = 0
+            files_to_upload = image_files[1:]
+        else:
+            files_to_upload = image_files
         
         gallery_url = f"https://imx.to/g/{gallery_id}"
         
         # Store results
         results = {
             'gallery_url': gallery_url,
-            'images': []
+            'images': list(preseed_images)
         }
         
         # Upload all images to the created gallery with progress bars
@@ -1292,11 +1089,11 @@ URL=https://imx.to/g/{gallery_id}
         failed_images = []
         
         # Rolling concurrency: keep N workers busy until all submitted
-        with tqdm(total=len(image_files), desc=f"Uploading to {gallery_name}", unit="img", leave=False) as pbar:
+        with tqdm(total=len(image_files), initial=initial_completed, desc=f"Uploading to {gallery_name}", unit="img", leave=False) as pbar:
             with ThreadPoolExecutor(max_workers=parallel_batch_size) as executor:
                 import queue
                 remaining = queue.Queue()
-                for f in image_files:
+                for f in files_to_upload:
                     remaining.put(f)
                 futures_map = {}
                 # Prime the pool
@@ -1364,13 +1161,19 @@ URL=https://imx.to/g/{gallery_id}
         upload_time = end_time - start_time
         
         # Calculate transfer speed
-        uploaded_size = sum(os.path.getsize(os.path.join(folder_path, img_file)) 
+        uploaded_size = initial_uploaded_size + sum(os.path.getsize(os.path.join(folder_path, img_file)) 
                            for img_file, _ in uploaded_images)
         transfer_speed = uploaded_size / upload_time if upload_time > 0 else 0
         
         # Calculate image dimension statistics
-        successful_dimensions = [image_dimensions[image_files.index(img_file)] 
-                               for img_file, _ in uploaded_images]
+        successful_dimensions = []
+        if initial_completed == 1:
+            try:
+                successful_dimensions.append(image_dimensions[image_files.index(image_files[0])])
+            except Exception:
+                pass
+        successful_dimensions.extend([image_dimensions[image_files.index(img_file)] 
+                               for img_file, _ in uploaded_images])
         avg_width = sum(w for w, h in successful_dimensions) / len(successful_dimensions) if successful_dimensions else 0
         avg_height = sum(h for w, h in successful_dimensions) / len(successful_dimensions) if successful_dimensions else 0
         
@@ -1384,7 +1187,7 @@ URL=https://imx.to/g/{gallery_id}
             'transfer_speed': transfer_speed,
             'avg_width': avg_width,
             'avg_height': avg_height,
-            'successful_count': len(uploaded_images),
+            'successful_count': initial_completed + len(uploaded_images),
             'failed_count': len(failed_images)
         })
         
@@ -1404,8 +1207,14 @@ URL=https://imx.to/g/{gallery_id}
         folder_size = f"{total_size / (1024*1024):.1f} MB"
         
         # Get most common extension
-        extensions = [os.path.splitext(img_file)[1].upper().lstrip('.') 
-                     for img_file, _ in uploaded_images]
+        extensions = []
+        if initial_completed == 1:
+            try:
+                extensions.append(os.path.splitext(image_files[0])[1].upper().lstrip('.'))
+            except Exception:
+                pass
+        extensions.extend([os.path.splitext(img_file)[1].upper().lstrip('.') 
+                     for img_file, _ in uploaded_images])
         extension = max(set(extensions), key=extensions.count) if extensions else "JPG"
         
         # Prepare template data
@@ -1415,7 +1224,7 @@ URL=https://imx.to/g/{gallery_id}
             'height': int(avg_height),
             'longest': int(max(avg_width, avg_height)),
             'extension': extension,
-            'picture_count': len(uploaded_images),
+            'picture_count': initial_completed + len(uploaded_images),
             'folder_size': folder_size,
             'gallery_link': f"https://imx.to/g/{gallery_id}",
             'all_images': all_images_bbcode.strip()
@@ -1447,6 +1256,26 @@ URL=https://imx.to/g/{gallery_id}
 
             # Build images list
             images_payload = []
+            # Include preseeded first image in JSON payload if present
+            if initial_completed == 1 and preseed_images:
+                first_fname = image_files[0]
+                w, h = dims_by_name.get(first_fname, (0, 0))
+                try:
+                    size_bytes = os.path.getsize(os.path.join(folder_path, first_fname))
+                except Exception:
+                    size_bytes = 0
+                data0 = preseed_images[0]
+                images_payload.append({
+                    'filename': first_fname,
+                    'uploaded_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                    'image_url': data0.get('image_url'),
+                    'thumb_url': data0.get('thumb_url'),
+                    'bbcode': data0.get('bbcode'),
+                    'width': w,
+                    'height': h,
+                    'size_bytes': size_bytes
+                })
+
             for fname, data in uploaded_images:
                 w, h = dims_by_name.get(fname, (0, 0))
                 try:
@@ -1491,7 +1320,7 @@ URL=https://imx.to/g/{gallery_id}
                 },
                 'stats': {
                     'total_images': len(image_files),
-                    'successful_count': len(uploaded_images),
+                    'successful_count': initial_completed + len(uploaded_images),
                     'failed_count': len(failed_images),
                     'upload_time': upload_time,
                     'total_size': total_size,
