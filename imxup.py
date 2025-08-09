@@ -240,6 +240,11 @@ def load_user_defaults():
             defaults['public_gallery'] = config.getint('DEFAULTS', 'public_gallery', fallback=1)
             defaults['template_name'] = config.get('DEFAULTS', 'template_name', fallback='default')
             defaults['confirm_delete'] = config.getboolean('DEFAULTS', 'confirm_delete', fallback=True)
+            # Auto-rename unnamed galleries after successful login (GUI feature)
+            defaults['auto_rename'] = config.getboolean('DEFAULTS', 'auto_rename', fallback=True)
+            # Storage locations for artifacts
+            defaults['store_in_uploaded'] = config.getboolean('DEFAULTS', 'store_in_uploaded', fallback=True)
+            defaults['store_in_central'] = config.getboolean('DEFAULTS', 'store_in_central', fallback=True)
         
         return defaults
     return {}
@@ -315,7 +320,7 @@ def sanitize_gallery_name(name):
     import re
     # Keep alphanumeric, spaces, hyphens, dashes, round brackets
     # Remove everything else (square brackets, periods, number signs, etc.)
-    sanitized = re.sub(r'[^a-zA-Z0-9\s\-\(\)]', '', name)
+    sanitized = re.sub(r'[^a-zA-Z0-9,\.\s\-\(\)]', '', name)
     # Remove multiple spaces
     sanitized = re.sub(r'\s+', ' ', sanitized)
     # Trim spaces
@@ -324,14 +329,14 @@ def sanitize_gallery_name(name):
 
 def build_gallery_filenames(gallery_name, gallery_id):
     """Return standardized filenames for gallery artifacts.
-    - URL filename: {Gallery Name}_{GalleryID}.url
+    - JSON filename: {Gallery Name}_{GalleryID}.json
     - BBCode filename: {Gallery Name}_{GalleryID}_bbcode.txt
-    Returns (safe_gallery_name, url_filename, bbcode_filename).
+    Returns (safe_gallery_name, json_filename, bbcode_filename).
     """
     safe_gallery_name = sanitize_gallery_name(gallery_name)
-    url_filename = f"{safe_gallery_name}_{gallery_id}.url"
+    json_filename = f"{safe_gallery_name}_{gallery_id}.json"
     bbcode_filename = f"{safe_gallery_name}_{gallery_id}_bbcode.txt"
-    return safe_gallery_name, url_filename, bbcode_filename
+    return safe_gallery_name, json_filename, bbcode_filename
 
 def check_if_gallery_exists(folder_name):
     """Check if gallery files already exist for this folder"""
@@ -339,11 +344,11 @@ def check_if_gallery_exists(folder_name):
     
     # Check central location
     central_files = glob.glob(os.path.join(central_path, f"{folder_name}_*_bbcode.txt")) + \
-                    glob.glob(os.path.join(central_path, f"{folder_name}_*.url"))
+                    glob.glob(os.path.join(central_path, f"{folder_name}_*.json"))
     
     # Check within .uploaded subfolder directly under this folder
     folder_files = [
-        os.path.join(folder_name, ".uploaded", f"{folder_name}_*.url"),
+        os.path.join(folder_name, ".uploaded", f"{folder_name}_*.json"),
         os.path.join(folder_name, ".uploaded", f"{folder_name}_*_bbcode.txt")
     ]
     
@@ -364,6 +369,20 @@ def get_unnamed_galleries():
         if 'UNNAMED_GALLERIES' in config:
             return dict(config['UNNAMED_GALLERIES'])
     return {}
+
+def rename_all_unnamed_with_session(uploader: 'ImxToUploader') -> int:
+    """Rename all unnamed galleries using an already logged-in uploader session.
+    Returns the number of successfully renamed galleries.
+    """
+    unnamed_galleries = get_unnamed_galleries()
+    if not unnamed_galleries:
+        return 0
+    success_count = 0
+    for gallery_id, intended_name in unnamed_galleries.items():
+        if uploader.rename_gallery_with_session(gallery_id, intended_name):
+            remove_unnamed_gallery(gallery_id)
+            success_count += 1
+    return success_count
 
 def remove_unnamed_gallery(gallery_id):
     """Remove gallery from unnamed list after successful renaming"""
@@ -1373,14 +1392,8 @@ URL=https://imx.to/g/{gallery_id}
         uploaded_subdir = os.path.join(folder_path, ".uploaded")
         os.makedirs(uploaded_subdir, exist_ok=True)
         
-        # Create shortcut file (.url) to the gallery (standard naming)
-        shortcut_content = f"""[InternetShortcut]
-URL=https://imx.to/g/{gallery_id}
-"""
-        _, url_filename, bbcode_filename = build_gallery_filenames(gallery_name, gallery_id)
-        uploaded_shortcut_path = os.path.join(uploaded_subdir, url_filename)
-        with open(uploaded_shortcut_path, 'w', encoding='utf-8') as f:
-            f.write(shortcut_content)
+        # Build filenames
+        _, json_filename, bbcode_filename = build_gallery_filenames(gallery_name, gallery_id)
         
         # Prepare template data
         all_images_bbcode = ""
@@ -1417,16 +1430,92 @@ URL=https://imx.to/g/{gallery_id}
         
         # Also save to central location
         central_path = get_central_storage_path()
-        safe_gallery_name, url_filename, bbcode_filename = build_gallery_filenames(gallery_name, gallery_id)
-        central_shortcut_path = os.path.join(central_path, url_filename)
-        with open(central_shortcut_path, 'w', encoding='utf-8') as f:
-            f.write(shortcut_content)
-        
+        safe_gallery_name, json_filename, bbcode_filename = build_gallery_filenames(gallery_name, gallery_id)
         central_bbcode_path = os.path.join(central_path, bbcode_filename)
         with open(central_bbcode_path, 'w', encoding='utf-8') as f:
             f.write(bbcode_content)
         
         print(f"{timestamp()} Saved gallery files to central location: {central_path}")
+
+        # Compose and save JSON artifact at both locations
+        try:
+            # Per-image dimensions are known in image_dimensions; map filenames
+            dims_by_name = {}
+            for idx, (w, h) in enumerate(image_dimensions):
+                if idx < len(image_files):
+                    dims_by_name[image_files[idx]] = (w, h)
+
+            # Build images list
+            images_payload = []
+            for fname, data in uploaded_images:
+                w, h = dims_by_name.get(fname, (0, 0))
+                try:
+                    size_bytes = os.path.getsize(os.path.join(folder_path, fname))
+                except Exception:
+                    size_bytes = 0
+                images_payload.append({
+                    'filename': fname,
+                    'uploaded_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                    'image_url': data.get('image_url'),
+                    'thumb_url': data.get('thumb_url'),
+                    'bbcode': data.get('bbcode'),
+                    'width': w,
+                    'height': h,
+                    'size_bytes': size_bytes
+                })
+
+            failures_payload = [
+                {
+                    'filename': fname,
+                    'failed_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                    'reason': reason
+                }
+                for fname, reason in failed_images
+            ]
+
+            json_payload = {
+                'meta': {
+                    'gallery_name': gallery_name,
+                    'gallery_id': gallery_id,
+                    'gallery_url': gallery_url,
+                    'status': 'completed',
+                    'started_at': datetime.fromtimestamp(start_time).strftime('%Y-%m-%d %H:%M:%S'),
+                    'finished_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                },
+                'settings': {
+                    'thumbnail_size': thumbnail_size,
+                    'thumbnail_format': thumbnail_format,
+                    'public_gallery': public_gallery,
+                    'template_name': template_name,
+                    'parallel_batch_size': parallel_batch_size
+                },
+                'stats': {
+                    'total_images': len(image_files),
+                    'successful_count': len(uploaded_images),
+                    'failed_count': len(failed_images),
+                    'upload_time': upload_time,
+                    'total_size': total_size,
+                    'uploaded_size': uploaded_size,
+                    'avg_width': avg_width,
+                    'avg_height': avg_height,
+                    'transfer_speed_mb_s': transfer_speed / (1024*1024) if transfer_speed else 0
+                },
+                'images': images_payload,
+                'failures': failures_payload,
+                'bbcode_full': bbcode_content
+            }
+
+            # Save JSON to .uploaded
+            uploaded_json_path = os.path.join(uploaded_subdir, json_filename)
+            with open(uploaded_json_path, 'w', encoding='utf-8') as jf:
+                json.dump(json_payload, jf, ensure_ascii=False, indent=2)
+
+            # Save JSON to central
+            central_json_path = os.path.join(central_path, json_filename)
+            with open(central_json_path, 'w', encoding='utf-8') as jf:
+                json.dump(json_payload, jf, ensure_ascii=False, indent=2)
+        except Exception as e:
+            print(f"{timestamp()} Error writing JSON artifact: {e}")
         
         return results
 

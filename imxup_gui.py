@@ -34,7 +34,7 @@ from PyQt6.QtCore import (
 from PyQt6.QtGui import QDragEnterEvent, QDropEvent, QIcon, QFont, QPixmap, QPainter, QColor, QSyntaxHighlighter, QTextCharFormat, QDesktopServices
 
 # Import the core uploader functionality
-from imxup import ImxToUploader, load_user_defaults, timestamp, sanitize_gallery_name, encrypt_password, decrypt_password
+from imxup import ImxToUploader, load_user_defaults, timestamp, sanitize_gallery_name, encrypt_password, decrypt_password, rename_all_unnamed_with_session
 
 # Single instance communication port
 COMMUNICATION_PORT = 27849
@@ -570,6 +570,7 @@ class UploadWorker(QThread):
         self.running = True
         self.current_item = None
         self._soft_stop_requested_for = None
+        self.auto_rename_enabled = True
         
     def stop(self):
         self.running = False
@@ -593,6 +594,16 @@ class UploadWorker(QThread):
                 self.log_message.emit(f"{timestamp()} Login failed - using API-only mode")
             else:
                 self.log_message.emit(f"{timestamp()} Login successful")
+                # Auto-rename unnamed galleries if enabled
+                try:
+                    if self.auto_rename_enabled:
+                        renamed = rename_all_unnamed_with_session(self.uploader)
+                        if renamed > 0:
+                            self.log_message.emit(f"{timestamp()} Auto-renamed {renamed} gallery(ies) after login")
+                        else:
+                            self.log_message.emit(f"{timestamp()} No unnamed galleries to auto-rename")
+                except Exception as e:
+                    self.log_message.emit(f"{timestamp()} Auto-rename error: {e}")
             
             while self.running:
                 # Get next item from queue
@@ -729,6 +740,7 @@ class QueueManager:
                     'progress': item.progress,
                     'uploaded_images': item.uploaded_images,
                     'total_images': item.total_images,
+                    'template_name': item.template_name,
                     'insertion_order': item.insertion_order,
                     'added_time': item.added_time,
                     'finished_time': item.finished_time,
@@ -766,6 +778,7 @@ class QueueManager:
                             progress=item_data.get('progress', 100),
                             uploaded_images=item_data.get('uploaded_images', 0),
                             total_images=item_data.get('total_images', 0),
+                            template_name=item_data.get('template_name', load_user_defaults().get('template_name', 'default')),
                             insertion_order=item_data.get('insertion_order', self._next_order),
                             added_time=item_data.get('added_time'),
                             finished_time=item_data.get('finished_time')
@@ -789,6 +802,7 @@ class QueueManager:
                                 name=item_data.get('name'),
                                 status=load_status,
                                 total_images=len(image_files),  # Set the total count
+                                template_name=item_data.get('template_name', load_user_defaults().get('template_name', 'default')),
                                 insertion_order=item_data.get('insertion_order', self._next_order),
                                 added_time=item_data.get('added_time')
                             )
@@ -1139,7 +1153,7 @@ class GalleryTableWidget(QTableWidget):
             }
             QHeaderView::section {
                 background-color: #f0f0f0;
-                padding: 8px;
+                padding: 5px; /* reduce header height to ~60% */
                 border: none;
                 font-weight: bold;
                 border-bottom: 2px solid #3498db;
@@ -1580,8 +1594,6 @@ class CredentialSetupDialog(QDialog):
         username_status_layout.addWidget(self.username_status_label)
         username_status_layout.addStretch()
         self.username_change_btn = QPushButton("Change")
-        self.username_change_btn.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DialogApplyButton))
-        self.username_change_btn.setIconSize(QSize(16, 16))
         if not self.username_change_btn.text().startswith(" "):
             self.username_change_btn.setText(" " + self.username_change_btn.text())
         self.username_change_btn.clicked.connect(self.change_username_password)
@@ -1596,8 +1608,6 @@ class CredentialSetupDialog(QDialog):
         password_status_layout.addWidget(self.password_status_label)
         password_status_layout.addStretch()
         self.password_change_btn = QPushButton("Change")
-        self.password_change_btn.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DialogApplyButton))
-        self.password_change_btn.setIconSize(QSize(16, 16))
         if not self.password_change_btn.text().startswith(" "):
             self.password_change_btn.setText(" " + self.password_change_btn.text())
         self.password_change_btn.clicked.connect(self.change_username_password)
@@ -1612,8 +1622,6 @@ class CredentialSetupDialog(QDialog):
         api_key_status_layout.addWidget(self.api_key_status_label)
         api_key_status_layout.addStretch()
         self.api_key_change_btn = QPushButton("Change")
-        self.api_key_change_btn.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DialogApplyButton))
-        self.api_key_change_btn.setIconSize(QSize(16, 16))
         if not self.api_key_change_btn.text().startswith(" "):
             self.api_key_change_btn.setText(" " + self.api_key_change_btn.text())
         self.api_key_change_btn.clicked.connect(self.change_api_key)
@@ -1637,8 +1645,6 @@ class CredentialSetupDialog(QDialog):
         button_layout.addStretch()
         
         self.close_btn = QPushButton("Close")
-        self.close_btn.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DialogCloseButton))
-        self.close_btn.setIconSize(QSize(16, 16))
         if not self.close_btn.text().startswith(" "):
             self.close_btn.setText(" " + self.close_btn.text())
         self.close_btn.clicked.connect(self.validate_and_close)
@@ -2203,6 +2209,13 @@ class ImxUploadGUI(QMainWindow):
     
     def __init__(self):
         super().__init__()
+        # Set main window icon
+        try:
+            icon_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "imxup.ico")
+            if os.path.exists(icon_path):
+                self.setWindowIcon(QIcon(icon_path))
+        except Exception:
+            pass
         self.queue_manager = QueueManager()
         self.worker = None
         self.table_progress_widgets = {}
@@ -2254,30 +2267,26 @@ class ImxUploadGUI(QMainWindow):
         
         # Main layout - vertical to stack queue and progress
         main_layout = QVBoxLayout(central_widget)
+        # Default margins/spacing (revert to previous look)
         
         # Top section with queue and settings
         top_layout = QHBoxLayout()
+        
         
         # Left panel - Queue and controls (wider now)
         left_panel = QWidget()
         left_layout = QVBoxLayout(left_panel)
         
+        
         # Queue section
         queue_group = QGroupBox("Upload Queue")
         queue_layout = QVBoxLayout(queue_group)
         
-        # Simple drag and drop label - EXACTLY like your working test
-        self.drop_label = QLabel("Drag folders here to add them to the upload queue")
-        self.drop_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.drop_label.setStyleSheet("border: 2px dashed #ccc; padding: 20px; font-size: 14px; background-color: #f9f9f9;")
-        self.drop_label.setAcceptDrops(True)  # Enable drag and drop on the label specifically
-        self.drop_label.setMinimumHeight(80)
-        queue_layout.addWidget(self.drop_label)
+        
+        # Drag-and-drop is handled at the window level; no dedicated drop label
         
         # Add folder button
         add_folder_btn = QPushButton("Browse for Folders...")
-        add_folder_btn.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DirOpenIcon))
-        add_folder_btn.setIconSize(QSize(18, 18))
         if not add_folder_btn.text().startswith(" "):
             add_folder_btn.setText(" " + add_folder_btn.text())
         add_folder_btn.clicked.connect(self.browse_for_folders)
@@ -2298,8 +2307,6 @@ class ImxUploadGUI(QMainWindow):
         controls_layout = QHBoxLayout()
         
         self.start_all_btn = QPushButton("Start All")
-        self.start_all_btn.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_MediaPlay))
-        self.start_all_btn.setIconSize(QSize(18, 18))
         if not self.start_all_btn.text().startswith(" "):
             self.start_all_btn.setText(" " + self.start_all_btn.text())
         self.start_all_btn.clicked.connect(self.start_all_uploads)
@@ -2324,8 +2331,6 @@ class ImxUploadGUI(QMainWindow):
         controls_layout.addWidget(self.start_all_btn)
         
         self.pause_all_btn = QPushButton("Pause All")
-        self.pause_all_btn.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_MediaPause))
-        self.pause_all_btn.setIconSize(QSize(18, 18))
         if not self.pause_all_btn.text().startswith(" "):
             self.pause_all_btn.setText(" " + self.pause_all_btn.text())
         self.pause_all_btn.clicked.connect(self.pause_all_uploads)
@@ -2333,8 +2338,6 @@ class ImxUploadGUI(QMainWindow):
         controls_layout.addWidget(self.pause_all_btn)
         
         self.clear_completed_btn = QPushButton("Clear Completed")
-        self.clear_completed_btn.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_TrashIcon))
-        self.clear_completed_btn.setIconSize(QSize(18, 18))
         if not self.clear_completed_btn.text().startswith(" "):
             self.clear_completed_btn.setText(" " + self.clear_completed_btn.text())
         self.clear_completed_btn.clicked.connect(self.clear_completed)
@@ -2352,9 +2355,11 @@ class ImxUploadGUI(QMainWindow):
         right_panel = QWidget()
         right_layout = QVBoxLayout(right_panel)
         
+        
         # Settings section
         settings_group = QGroupBox("Settings")
         settings_layout = QGridLayout(settings_group)
+        
         settings_layout.setVerticalSpacing(3)
         settings_layout.setHorizontalSpacing(10)
         
@@ -2436,13 +2441,29 @@ class ImxUploadGUI(QMainWindow):
         self.confirm_delete_check.setChecked(defaults.get('confirm_delete', True))  # Load from defaults
         self.confirm_delete_check.toggled.connect(self.on_setting_changed)
         settings_layout.addWidget(self.confirm_delete_check, 5, 1)
+
+        # Auto-rename unnamed galleries after successful login
+        self.auto_rename_check = QCheckBox("Auto-rename galleries after login")
+        # Default enabled
+        self.auto_rename_check.setChecked(defaults.get('auto_rename', True))
+        self.auto_rename_check.toggled.connect(self.on_setting_changed)
+        settings_layout.addWidget(self.auto_rename_check, 6, 0, 1, 2)
+
+        # Artifact storage location options
+        self.store_in_uploaded_check = QCheckBox("Save artifacts in .uploaded folder")
+        self.store_in_uploaded_check.setChecked(defaults.get('store_in_uploaded', True))
+        self.store_in_uploaded_check.toggled.connect(self.on_setting_changed)
+        settings_layout.addWidget(self.store_in_uploaded_check, 7, 0)
+
+        self.store_in_central_check = QCheckBox("Save artifacts in central store")
+        self.store_in_central_check.setChecked(defaults.get('store_in_central', True))
+        self.store_in_central_check.toggled.connect(self.on_setting_changed)
+        settings_layout.addWidget(self.store_in_central_check, 7, 1)
         
 
         
         # Save settings button
         self.save_settings_btn = QPushButton("Save Settings")
-        self.save_settings_btn.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DialogSaveButton))
-        self.save_settings_btn.setIconSize(QSize(18, 18))
         if not self.save_settings_btn.text().startswith(" "):
             self.save_settings_btn.setText(" " + self.save_settings_btn.text())
         self.save_settings_btn.clicked.connect(self.save_upload_settings)
@@ -2470,12 +2491,10 @@ class ImxUploadGUI(QMainWindow):
         #        opacity: 0.2;
         #    }
         #""")
-        settings_layout.addWidget(self.save_settings_btn, 6, 0, 1, 2)
+        settings_layout.addWidget(self.save_settings_btn, 8, 0, 1, 2)
         
         # Manage templates button
         self.manage_templates_btn = QPushButton("Manage BBCode Templates")
-        self.manage_templates_btn.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_FileDialogDetailedView))
-        self.manage_templates_btn.setIconSize(QSize(18, 18))
         if not self.manage_templates_btn.text().startswith(" "):
             self.manage_templates_btn.setText(" " + self.manage_templates_btn.text())
         self.manage_templates_btn.clicked.connect(self.manage_templates)
@@ -2495,12 +2514,10 @@ class ImxUploadGUI(QMainWindow):
         #        xbackground-color: #1e8449;
         #    }
         #""")
-        settings_layout.addWidget(self.manage_templates_btn, 7, 0, 1, 2)
+        settings_layout.addWidget(self.manage_templates_btn, 9, 0, 1, 2)
         
         # Manage credentials button
         self.manage_credentials_btn = QPushButton("Manage Credentials")
-        self.manage_credentials_btn.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_FileDialogContentsView))
-        self.manage_credentials_btn.setIconSize(QSize(18, 18))
         if not self.manage_credentials_btn.text().startswith(" "):
             self.manage_credentials_btn.setText(" " + self.manage_credentials_btn.text())
         self.manage_credentials_btn.clicked.connect(self.manage_credentials)
@@ -2520,7 +2537,7 @@ class ImxUploadGUI(QMainWindow):
         #        xbackground-color: #21618c;
         #    }
         #""")
-        settings_layout.addWidget(self.manage_credentials_btn, 8, 0, 1, 2)
+        settings_layout.addWidget(self.manage_credentials_btn, 10, 0, 1, 2)
         
         right_layout.addWidget(settings_group)
         
@@ -2529,6 +2546,7 @@ class ImxUploadGUI(QMainWindow):
         # Log section
         log_group = QGroupBox("Log")
         log_layout = QVBoxLayout(log_group)
+        
         
         self.log_text = QTextEdit()
         self.log_text.setMinimumHeight(300)  # Much taller
@@ -2548,10 +2566,12 @@ class ImxUploadGUI(QMainWindow):
         
         # Bottom section - Overall progress (left) and Help (right)
         bottom_layout = QHBoxLayout()
+        
 
         # Overall progress group (left)
         progress_group = QGroupBox("Overall Progress")
         progress_layout = QVBoxLayout(progress_group)
+        
 
         overall_layout = QHBoxLayout()
         overall_layout.addWidget(QLabel("Overall:"))
@@ -2593,27 +2613,26 @@ class ImxUploadGUI(QMainWindow):
         bottom_layout.addWidget(progress_group, 3)  # Match left/right ratio (3:1)
 
         # Help group (right)
-        help_group = QGroupBox("Help")
-        help_layout = QVBoxLayout(help_group)
-        self.help_btn = QPushButton("Open Help")
-        self.help_btn.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_MessageBoxInformation))
-        self.help_btn.setIconSize(QSize(18, 18))
-        if not self.help_btn.text().startswith(" "):
-            self.help_btn.setText(" " + self.help_btn.text())
-        self.help_btn.setMinimumHeight(30)
-        self.help_btn.setToolTip("Open program documentation")
-        self.help_btn.clicked.connect(self.open_help_dialog)
+        stats_group = QGroupBox("Stats")
+        stats_layout = QVBoxLayout(stats_group)
+        
+        self.stats_btn = QPushButton("Open Help")
+        if not self.stats_btn.text().startswith(" "):
+            self.stats_btn.setText(" " + self.stats_btn.text())
+        self.stats_btn.setMinimumHeight(30)
+        self.stats_btn.setToolTip("Open program documentation")
+        #self.stats_btn.clicked.connect(self.open_help_dialog)
         # Center the button
         btn_row = QHBoxLayout()
         btn_row.addStretch()
-        btn_row.addWidget(self.help_btn)
+        btn_row.addWidget(self.stats_btn)
         btn_row.addStretch()
-        help_layout.addLayout(btn_row)
+        stats_layout.addLayout(btn_row)
         # Keep bottom short like the original progress box
-        help_group.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
-        help_group.setMaximumHeight(100)
+        stats_group.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
+        stats_group.setMaximumHeight(100)
 
-        bottom_layout.addWidget(help_group, 1)
+        bottom_layout.addWidget(stats_group, 1)
 
         main_layout.addLayout(bottom_layout)
         # Ensure the top section takes remaining space and bottom stays compact
@@ -2720,6 +2739,11 @@ class ImxUploadGUI(QMainWindow):
             self.worker.log_message.connect(self.add_log_message)
             self.worker.start()
             self.add_log_message(f"{timestamp()} Worker started")
+            # Propagate auto-rename preference to worker
+            try:
+                self.worker.auto_rename_enabled = self.auto_rename_check.isChecked()
+            except Exception:
+                pass
     
     def browse_for_folders(self):
         """Open folder browser to select galleries"""
@@ -3258,38 +3282,95 @@ class ImxUploadGUI(QMainWindow):
             # Generate bbcode using the item's template
             bbcode_content = generate_bbcode_from_template(template_name, template_data)
             
-            # Create shortcut content
-            shortcut_content = f"""[InternetShortcut]
-URL=https://imx.to/g/{gallery_id}
-"""
-            
-            # Save to .uploaded subfolder under original folder using standardized names
-            from imxup import build_gallery_filenames
-            gallery_folder = path
-            uploaded_subdir = os.path.join(path, ".uploaded")
-            os.makedirs(uploaded_subdir, exist_ok=True)
-            safe_gallery_name, url_filename, bbcode_filename = build_gallery_filenames(gallery_name, gallery_id)
-            folder_bbcode_path = os.path.join(uploaded_subdir, bbcode_filename)
-            folder_shortcut_path = os.path.join(uploaded_subdir, url_filename)
+            # Save artifacts as JSON and BBCode according to settings
+            from imxup import (
+                build_gallery_filenames,
+                get_central_storage_path,
+                load_user_defaults,
+            )
+            # Determine storage preferences
+            defaults = load_user_defaults()
+            store_in_uploaded = defaults.get('store_in_uploaded', True)
+            store_in_central = defaults.get('store_in_central', True)
 
-            with open(folder_bbcode_path, 'w', encoding='utf-8') as f:
-                f.write(bbcode_content)
-            with open(folder_shortcut_path, 'w', encoding='utf-8') as f:
-                f.write(shortcut_content)
+            # Ensure .uploaded exists if needed
+            if store_in_uploaded:
+                uploaded_subdir = os.path.join(path, ".uploaded")
+                os.makedirs(uploaded_subdir, exist_ok=True)
+
+            # Build filenames
+            _, json_filename, bbcode_filename = build_gallery_filenames(gallery_name, gallery_id)
+
+            # Compose JSON using results we have in GUI context
+            images_payload = []
+            for image_data in results.get('images', []):
+                images_payload.append({
+                    'filename': image_data.get('original_filename', ''),
+                    'uploaded_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                    'image_url': image_data.get('image_url'),
+                    'thumb_url': image_data.get('thumb_url'),
+                    'bbcode': image_data.get('bbcode'),
+                })
+
+            failures_payload = [
+                {
+                    'filename': fname,
+                    'failed_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                    'reason': reason
+                }
+                for fname, reason in results.get('failed_details', [])
+            ]
+
+            json_payload = {
+                'meta': {
+                    'gallery_name': gallery_name,
+                    'gallery_id': gallery_id,
+                    'gallery_url': f"https://imx.to/g/{gallery_id}",
+                    'status': 'completed',
+                    'started_at': datetime.fromtimestamp(self.queue_manager.items[path].start_time).strftime('%Y-%m-%d %H:%M:%S') if path in self.queue_manager.items and self.queue_manager.items[path].start_time else None,
+                    'finished_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                },
+                'settings': {
+                    'thumbnail_size': self.thumbnail_size_combo.currentIndex() + 1,
+                    'thumbnail_format': self.thumbnail_format_combo.currentIndex() + 1,
+                    'public_gallery': 1 if self.public_gallery_check.isChecked() else 0,
+                    'template_name': template_name,
+                    'parallel_batch_size': self.batch_size_spin.value()
+                },
+                'stats': {
+                    'total_images': len(results.get('images', [])) + len(results.get('failed_details', [])),
+                    'successful_count': results.get('successful_count', len(results.get('images', []))),
+                    'failed_count': results.get('failed_count', len(results.get('failed_details', []))),
+                    'upload_time': results.get('upload_time', 0),
+                    'total_size': results.get('total_size', 0),
+                    'uploaded_size': results.get('uploaded_size', 0),
+                    'avg_width': results.get('avg_width', 0),
+                    'avg_height': results.get('avg_height', 0),
+                    'transfer_speed_mb_s': (results.get('transfer_speed', 0) / (1024*1024)) if results.get('transfer_speed', 0) else 0
+                },
+                'images': images_payload,
+                'failures': failures_payload,
+                'bbcode_full': bbcode_content
+            }
+
+            # Write to .uploaded
+            if store_in_uploaded:
+                with open(os.path.join(uploaded_subdir, bbcode_filename), 'w', encoding='utf-8') as f:
+                    f.write(bbcode_content)
+                with open(os.path.join(uploaded_subdir, json_filename), 'w', encoding='utf-8') as jf:
+                    json.dump(json_payload, jf, ensure_ascii=False, indent=2)
+
+            # Write to central store
+            if store_in_central:
+                central_path = get_central_storage_path()
+                os.makedirs(central_path, exist_ok=True)
+                with open(os.path.join(central_path, bbcode_filename), 'w', encoding='utf-8') as f:
+                    f.write(bbcode_content)
+                with open(os.path.join(central_path, json_filename), 'w', encoding='utf-8') as jf:
+                    json.dump(json_payload, jf, ensure_ascii=False, indent=2)
             
-            # Save to central location with standardized naming
-            from imxup import get_central_storage_path, build_gallery_filenames
-            central_path = get_central_storage_path()
-            _, url_filename, bbcode_filename = build_gallery_filenames(gallery_name, gallery_id)
-            central_bbcode_path = os.path.join(central_path, bbcode_filename)
-            central_shortcut_path = os.path.join(central_path, url_filename)
-            
-            with open(central_bbcode_path, 'w', encoding='utf-8') as f:
-                f.write(bbcode_content)
-            with open(central_shortcut_path, 'w', encoding='utf-8') as f:
-                f.write(shortcut_content)
-            
-            self.add_log_message(f"{timestamp()} Saved gallery files to central location: {central_path}")
+            if store_in_central:
+                self.add_log_message(f"{timestamp()} Saved gallery files to central location: {central_path}")
         
         # Update display when status changes
         self.update_queue_display()
@@ -3613,6 +3694,9 @@ URL=https://imx.to/g/{gallery_id}
             template_name = self.template_combo.currentText()
             public_gallery = 1 if self.public_gallery_check.isChecked() else 0
             confirm_delete = self.confirm_delete_check.isChecked()
+            auto_rename = self.auto_rename_check.isChecked()
+            store_in_uploaded = self.store_in_uploaded_check.isChecked()
+            store_in_central = self.store_in_central_check.isChecked()
             
             # Load existing config
             config = configparser.ConfigParser()
@@ -3633,6 +3717,9 @@ URL=https://imx.to/g/{gallery_id}
             config['DEFAULTS']['template_name'] = template_name
             config['DEFAULTS']['public_gallery'] = str(public_gallery)
             config['DEFAULTS']['confirm_delete'] = str(confirm_delete)
+            config['DEFAULTS']['auto_rename'] = str(auto_rename)
+            config['DEFAULTS']['store_in_uploaded'] = str(store_in_uploaded)
+            config['DEFAULTS']['store_in_central'] = str(store_in_central)
             
             # Save to file
             with open(config_file, 'w') as f:
@@ -3653,8 +3740,6 @@ URL=https://imx.to/g/{gallery_id}
         print("DEBUG: dragEnterEvent called")
         if event.mimeData().hasUrls():
             print("DEBUG: Has URLs")
-            self.drop_label.setStyleSheet("border: 2px dashed #00f; padding: 20px; font-size: 14px; background-color: #e8f4fd;")
-            self.drop_label.setText("Drop folders here!")
             event.acceptProposedAction()
         else:
             print("DEBUG: No URLs")
@@ -3670,13 +3755,10 @@ URL=https://imx.to/g/{gallery_id}
     def dragLeaveEvent(self, event):
         """Handle drag leave"""
         print("DEBUG: dragLeaveEvent called")
-        self.drop_label.setStyleSheet("border: 2px dashed #ccc; padding: 20px; font-size: 14px; background-color: #f9f9f9;")
-        self.drop_label.setText("Drag folders here to add them to the upload queue")
     
     def dropEvent(self, event):
         """Handle drop - EXACTLY like your working test"""
         print("DEBUG: dropEvent called")
-        self.drop_label.setStyleSheet("border: 2px dashed #ccc; padding: 20px; font-size: 14px; background-color: #f9f9f9;")
         
         if event.mimeData().hasUrls():
             print("DEBUG: Processing URLs")
@@ -3691,14 +3773,10 @@ URL=https://imx.to/g/{gallery_id}
             
             if paths:
                 print(f"DEBUG: SUCCESS! Found {len(paths)} folders: {', '.join(os.path.basename(p) for p in paths)}")
-                self.drop_label.setText(f"Added {len(paths)} folders!")
                 self.add_folders(paths)
                 event.acceptProposedAction()
-                # Reset after 2 seconds
-                QTimer.singleShot(2000, lambda: self.drop_label.setText("Drag folders here to add them to the upload queue"))
             else:
                 print("DEBUG: No valid folders in drop")
-                self.drop_label.setText("No valid folders in drop")
                 event.ignore()
         else:
             print("DEBUG: No URLs in drop")
@@ -3836,16 +3914,12 @@ class TemplateManagerDialog(QDialog):
         actions_layout = QVBoxLayout()
         
         self.new_btn = QPushButton("New Template")
-        self.new_btn.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_FileIcon))
-        self.new_btn.setIconSize(QSize(16, 16))
         if not self.new_btn.text().startswith(" "):
             self.new_btn.setText(" " + self.new_btn.text())
         self.new_btn.clicked.connect(self.create_new_template)
         actions_layout.addWidget(self.new_btn)
         
         self.rename_btn = QPushButton("Rename Template")
-        self.rename_btn.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_FileDialogNewFolder))
-        self.rename_btn.setIconSize(QSize(16, 16))
         if not self.rename_btn.text().startswith(" "):
             self.rename_btn.setText(" " + self.rename_btn.text())
         self.rename_btn.clicked.connect(self.rename_template)
@@ -3853,8 +3927,6 @@ class TemplateManagerDialog(QDialog):
         actions_layout.addWidget(self.rename_btn)
         
         self.delete_btn = QPushButton("Delete Template")
-        self.delete_btn.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_TrashIcon))
-        self.delete_btn.setIconSize(QSize(16, 16))
         if not self.delete_btn.text().startswith(" "):
             self.delete_btn.setText(" " + self.delete_btn.text())
         self.delete_btn.clicked.connect(self.delete_template)
@@ -3888,8 +3960,6 @@ class TemplateManagerDialog(QDialog):
         
         for placeholder, label in placeholders:
             btn = QPushButton(label)
-            btn.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_ArrowRight))
-            btn.setIconSize(QSize(14, 14))
             if not btn.text().startswith(" "):
                 btn.setText(" " + btn.text())
             btn.setToolTip(f"Insert {placeholder}")
@@ -3921,8 +3991,6 @@ class TemplateManagerDialog(QDialog):
         button_layout = QHBoxLayout()
         
         self.save_btn = QPushButton("Save Template")
-        self.save_btn.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DialogSaveButton))
-        self.save_btn.setIconSize(QSize(16, 16))
         if not self.save_btn.text().startswith(" "):
             self.save_btn.setText(" " + self.save_btn.text())
         self.save_btn.clicked.connect(self.save_template)
@@ -3932,8 +4000,6 @@ class TemplateManagerDialog(QDialog):
         button_layout.addStretch()
         
         self.close_btn = QPushButton("Close")
-        self.close_btn.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DialogCloseButton))
-        self.close_btn.setIconSize(QSize(16, 16))
         if not self.close_btn.text().startswith(" "):
             self.close_btn.setText(" " + self.close_btn.text())
         self.close_btn.clicked.connect(self.accept)
