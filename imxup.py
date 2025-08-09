@@ -624,9 +624,17 @@ class ImxToUploader:
         if not self.username or not self.password:
             if self.api_key:
                 print(f"{timestamp()} Using API key authentication - gallery naming may be limited")
+                try:
+                    self.last_login_method = "api_key"
+                except Exception:
+                    pass
                 return True
             else:
                 print(f"{timestamp()} Warning: No stored credentials, gallery naming disabled")
+                try:
+                    self.last_login_method = "none"
+                except Exception:
+                    pass
                 return False
         
         max_retries = 3
@@ -636,32 +644,33 @@ class ImxToUploader:
                     print(f"{timestamp()} Retry attempt {attempt + 1}/{max_retries}")
                     time.sleep(2 ** attempt)  # Exponential backoff
                 
-                # Try to get Firefox cookies first
-                print(f"{timestamp()} Attempting to use Firefox cookies to bypass DDoS-Guard...")
+                # Try to get cookies first (browser + file)
+                print(f"{timestamp()} Attempting to use cookies to bypass DDoS-Guard...")
                 firefox_cookies = get_firefox_cookies("imx.to")
-                
-                # Also try loading from cookies.txt file as backup
                 file_cookies = load_cookies_from_file("cookies.txt")
-                
-                # Combine cookies (file cookies take precedence)
-                all_cookies = {**firefox_cookies, **file_cookies}
-                
+                all_cookies = {}
                 if firefox_cookies:
                     print(f"{timestamp()} Found {len(firefox_cookies)} Firefox cookies for imx.to")
-                elif file_cookies:
+                    all_cookies.update(firefox_cookies)
+                if file_cookies:
                     print(f"{timestamp()} Found {len(file_cookies)} cookies from cookies.txt")
-                elif all_cookies:
-                    print(f"{timestamp()} Found {len(all_cookies)} total cookies for imx.to")
+                    all_cookies.update(file_cookies)
+                if all_cookies:
                     # Add cookies to session
                     for name, cookie_data in all_cookies.items():
-                        self.session.cookies.set(name, cookie_data['value'], 
-                                              domain=cookie_data['domain'], 
-                                              path=cookie_data['path'])
-                    
+                        try:
+                            self.session.cookies.set(name, cookie_data['value'], domain=cookie_data['domain'], path=cookie_data['path'])
+                        except Exception:
+                            # Best effort
+                            pass
                     # Test if we're already logged in with cookies
                     test_response = self.session.get(f"{self.web_url}/user/gallery/manage")
                     if 'login' not in test_response.url and 'DDoS-Guard' not in test_response.text:
-                        print(f"{timestamp()} Successfully logged in using browser cookies")
+                        print(f"{timestamp()} Successfully authenticated using cookies (no password login)")
+                        try:
+                            self.last_login_method = "cookies"
+                        except Exception:
+                            pass
                         return True
                 
                 # Fall back to regular login
@@ -712,6 +721,10 @@ class ImxToUploader:
                             test_response = self.session.get(f"{self.web_url}/user/gallery/manage")
                             if test_response.status_code == 200 and 'login' not in test_response.url:
                                 print(f"{timestamp()} Successfully accessed user pages with cookies")
+                                try:
+                                    self.last_login_method = "cookies"
+                                except Exception:
+                                    pass
                                 return True
                             else:
                                 print(f"{timestamp()} Cannot access user pages despite cookies - login may have failed")
@@ -729,7 +742,11 @@ class ImxToUploader:
                 
                 # Check if login was successful
                 if 'user' in response.url or 'dashboard' in response.url or 'gallery' in response.url:
-                    print(f"{timestamp()} Successfully logged in to imx.to")
+                    print(f"{timestamp()} Successfully logged in with username/password")
+                    try:
+                        self.last_login_method = "credentials"
+                    except Exception:
+                        pass
                     return True
                 else:
                     print(f"{timestamp()} Login failed - check username/password")

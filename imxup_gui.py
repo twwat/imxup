@@ -462,6 +462,19 @@ class UploadWorker(QThread):
             # Login once for session reuse
             self.log_message.emit(f"{timestamp()} Logging in...")
             login_success = self.uploader.login()
+            # Report the login method used (cookies, credentials, api_key, none)
+            try:
+                method = getattr(self.uploader, 'last_login_method', None)
+                if method == 'cookies':
+                    self.log_message.emit(f"{timestamp()} Authenticated using cookies")
+                elif method == 'credentials':
+                    self.log_message.emit(f"{timestamp()} Authenticated using username/password")
+                elif method == 'api_key':
+                    self.log_message.emit(f"{timestamp()} Using API key authentication (no web login)")
+                elif method == 'none':
+                    self.log_message.emit(f"{timestamp()} No credentials available; proceeding without web login")
+            except Exception:
+                pass
             if not login_success:
                 self.log_message.emit(f"{timestamp()} Login failed - using API-only mode")
             else:
@@ -1046,9 +1059,9 @@ class GalleryTableWidget(QTableWidget):
         # Set focus policy to ensure keyboard events work
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         
-        # Enable context menu
-        self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
-        self.customContextMenuRequested.connect(self.show_context_menu)
+        # Enable context menu on the viewport to get coordinates in viewport space
+        self.viewport().setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.viewport().customContextMenuRequested.connect(self.show_context_menu)
     
     def keyPressEvent(self, event):
         """Handle key press events"""
@@ -1120,17 +1133,9 @@ class GalleryTableWidget(QTableWidget):
         
         menu = QMenu()
 
-        # Determine viewport-relative position for hit test
-        try:
-            sender_widget = self.sender()
-        except Exception:
-            sender_widget = None
-        if sender_widget is self.viewport():
-            viewport_pos = position
-            global_pos = self.viewport().mapToGlobal(position)
-        else:
-            viewport_pos = self.viewport().mapFrom(self, position)
-            global_pos = self.mapToGlobal(position)
+        # Position is already in viewport coordinates
+        viewport_pos = position
+        global_pos = self.viewport().mapToGlobal(position)
 
         # Select row under cursor if not already selected
         index = self.indexAt(viewport_pos)
@@ -1436,8 +1441,8 @@ class CredentialSetupDialog(QDialog):
         # Info text
         info_text = QLabel(
             "IMX.to Gallery Uploader credentials:\n\n"
-            "<b>• API Key:</b> Required for uploading files\n"
-            "<b>• Username & Password:</b> Required for naming galleries\n\n"
+            "• API Key: Required for uploading files\n"
+            "• Username/Password: Required for naming galleries\n\n"
             "Without username/password, all galleries will be named \'untitled gallery\'\n\n"
             "Credentials are stored in your home directory, encrypted with AES-128-CBC via Fernet using system's hostname/username as the encryption key.\n\n"
             "This means:\n"
