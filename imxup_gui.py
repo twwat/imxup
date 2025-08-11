@@ -538,17 +538,35 @@ class UploadWorker(QThread):
             if not login_success:
                 self.log_message.emit(f"{timestamp()} Login failed - using API-only mode")
             else:
-                self.log_message.emit(f"{timestamp()} Login successful")
-                # Auto-rename unnamed galleries if enabled
+                # Method-specific post-login messaging and auto-rename gating
                 try:
-                    if self.auto_rename_enabled:
-                        renamed = rename_all_unnamed_with_session(self.uploader)
-                        if renamed > 0:
-                            self.log_message.emit(f"{timestamp()} Auto-renamed {renamed} gallery(ies) after login")
-                        else:
-                            self.log_message.emit(f"{timestamp()} No unnamed galleries to auto-rename")
-                except Exception as e:
-                    self.log_message.emit(f"{timestamp()} Auto-rename error: {e}")
+                    method = getattr(self.uploader, 'last_login_method', None)
+                except Exception:
+                    method = None
+
+                if method in ('cookies', 'credentials'):
+                    self.log_message.emit(f"{timestamp()} Login successful")
+                    # Auto-rename unnamed galleries only when a web session exists
+                    try:
+                        if self.auto_rename_enabled:
+                            renamed = rename_all_unnamed_with_session(self.uploader)
+                            if renamed > 0:
+                                self.log_message.emit(f"{timestamp()} Auto-renamed {renamed} gallery(ies) after login")
+                            else:
+                                self.log_message.emit(f"{timestamp()} No unnamed galleries to auto-rename")
+                    except Exception as e:
+                        self.log_message.emit(f"{timestamp()} Auto-rename error: {e}")
+                elif method == 'api_key':
+                    # API key present; no web session to rename galleries
+                    self.log_message.emit(f"{timestamp()} API key loaded; web login skipped")
+                    try:
+                        if self.auto_rename_enabled:
+                            self.log_message.emit(f"{timestamp()} Skipping auto-rename; web session required")
+                    except Exception:
+                        pass
+                else:
+                    # Fallback: unknown method but login reported success; do not auto-rename
+                    self.log_message.emit(f"{timestamp()} Login successful")
             
             while self.running:
                 # Get next item from queue
