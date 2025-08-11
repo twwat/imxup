@@ -1090,7 +1090,7 @@ class GalleryTableWidget(QTableWidget):
         super().mouseDoubleClickEvent(event)
     
     def mousePressEvent(self, event):
-        """Handle mouse press to ensure focus"""
+        """Keep focus behavior on left-click; do not interfere with context menu events"""
         if event.button() == Qt.MouseButton.LeftButton:
             self.setFocus()
         super().mousePressEvent(event)
@@ -1137,26 +1137,43 @@ class GalleryTableWidget(QTableWidget):
         viewport_pos = position
         global_pos = self.viewport().mapToGlobal(position)
 
-        # Select row under cursor if not already selected
+        # Select row under cursor if not already selected using model index for reliability
         index = self.indexAt(viewport_pos)
         if index.isValid():
             row = index.row()
-            selected_now = {it.row() for it in self.selectedItems()}
-            if row not in selected_now:
+            if row != self.currentRow():
                 self.clearSelection()
                 self.selectRow(row)
         
-        # Build selected rows set
-        selected_rows = sorted({it.row() for it in self.selectedItems()})
+        # Build selected rows robustly via selection model (target column 1)
         selected_paths = []
-        for row in selected_rows:
-            name_item = self.item(row, 1)
-            if name_item:
-                path = name_item.data(Qt.ItemDataRole.UserRole)
-                if path:
-                    selected_paths.append(path)
+        sel_model = self.selectionModel()
+        if sel_model is not None:
+            for idx in sel_model.selectedRows(1):
+                row = idx.row()
+                name_item = self.item(row, 1)
+                if name_item:
+                    path = name_item.data(Qt.ItemDataRole.UserRole)
+                    if path:
+                        selected_paths.append(path)
 
         if selected_paths:
+            # Start Selected (ready/paused/incomplete -> queued) in display order
+            # Determine if any selected items are startable; disable if none are
+            widget = self
+            while widget and not hasattr(widget, 'queue_manager'):
+                widget = widget.parent()
+            can_start_any = False
+            if widget and hasattr(widget, 'queue_manager'):
+                for path in selected_paths:
+                    item = widget.queue_manager.get_item(path)
+                    if item and item.status in ("ready", "paused", "incomplete"):
+                        can_start_any = True
+                        break
+            start_action = menu.addAction("Start Selected")
+            start_action.setEnabled(can_start_any)
+            start_action.triggered.connect(self.start_selected_via_menu)
+
             # Delete
             delete_action = menu.addAction("Delete Selected")
             delete_action.triggered.connect(self.delete_selected_via_menu)
@@ -1167,9 +1184,11 @@ class GalleryTableWidget(QTableWidget):
 
             # Cancel (for queued items)
             queued_paths = []
-            widget = self
-            while widget and not hasattr(widget, 'queue_manager'):
-                widget = widget.parent()
+            # widget is already resolved above; if not, resolve now
+            if not (widget and hasattr(widget, 'queue_manager')):
+                widget = self
+                while widget and not hasattr(widget, 'queue_manager'):
+                    widget = widget.parent()
             if widget and hasattr(widget, 'queue_manager'):
                 for path in selected_paths:
                     item = widget.queue_manager.get_item(path)
@@ -1201,8 +1220,17 @@ class GalleryTableWidget(QTableWidget):
                     widget.browse_for_folders()
             add_action.triggered.connect(_add_from_menu)
 
+        # Only show menu if there are actions
         if menu.actions():
             menu.exec(global_pos)
+    
+    def contextMenuEvent(self, event):
+        """Fallback to ensure context menu always appears on right-click"""
+        try:
+            viewport_pos = self.viewport().mapFromGlobal(event.globalPos())
+        except Exception:
+            viewport_pos = event.pos()
+        self.show_context_menu(viewport_pos)
     
     def delete_selected_via_menu(self):
         """Delete selected items via context menu"""
@@ -1213,6 +1241,39 @@ class GalleryTableWidget(QTableWidget):
                 widget.delete_selected_items()
                 return
             widget = widget.parent()
+
+    def start_selected_via_menu(self):
+        """Start selected items in their current visual order"""
+        # Determine selected rows in visual order as shown
+        selected_rows = sorted({it.row() for it in self.selectedItems()})
+        if not selected_rows:
+            return
+        # Gather paths from column 1 for those rows
+        paths_in_order = []
+        for row in selected_rows:
+            name_item = self.item(row, 1)
+            if name_item:
+                path = name_item.data(Qt.ItemDataRole.UserRole)
+                if path:
+                    paths_in_order.append(path)
+        if not paths_in_order:
+            return
+        # Delegate to main window to start items individually preserving order
+        widget = self
+        while widget and not hasattr(widget, 'queue_manager'):
+            widget = widget.parent()
+        if not widget:
+            return
+        started = 0
+        for path in paths_in_order:
+            if widget.queue_manager.start_item(path):
+                started += 1
+        if started:
+            if hasattr(widget, 'add_log_message'):
+                from imxup import timestamp
+                widget.add_log_message(f"{timestamp()} Started {started} selected item(s)")
+            if hasattr(widget, 'update_queue_display'):
+                widget.update_queue_display()
     
     def open_folders_via_menu(self, paths):
         """Open the given gallery folders in the OS file manager"""
@@ -1470,11 +1531,16 @@ class CredentialSetupDialog(QDialog):
         self.username_status_label.setStyleSheet("color: #666; font-style: italic;")
         username_status_layout.addWidget(self.username_status_label)
         username_status_layout.addStretch()
-        self.username_change_btn = QPushButton("Change")
+        self.username_change_btn = QPushButton("Set")
         if not self.username_change_btn.text().startswith(" "):
             self.username_change_btn.setText(" " + self.username_change_btn.text())
-        self.username_change_btn.clicked.connect(self.change_username_password)
+        self.username_change_btn.clicked.connect(self.change_username)
         username_status_layout.addWidget(self.username_change_btn)
+        self.username_remove_btn = QPushButton("Remove")
+        if not self.username_remove_btn.text().startswith(" "):
+            self.username_remove_btn.setText(" " + self.username_remove_btn.text())
+        self.username_remove_btn.clicked.connect(self.remove_username)
+        username_status_layout.addWidget(self.username_remove_btn)
         status_layout.addLayout(username_status_layout)
         
         # Password status
@@ -1484,11 +1550,16 @@ class CredentialSetupDialog(QDialog):
         self.password_status_label.setStyleSheet("color: #666; font-style: italic;")
         password_status_layout.addWidget(self.password_status_label)
         password_status_layout.addStretch()
-        self.password_change_btn = QPushButton("Change")
+        self.password_change_btn = QPushButton("Set")
         if not self.password_change_btn.text().startswith(" "):
             self.password_change_btn.setText(" " + self.password_change_btn.text())
-        self.password_change_btn.clicked.connect(self.change_username_password)
+        self.password_change_btn.clicked.connect(self.change_password)
         password_status_layout.addWidget(self.password_change_btn)
+        self.password_remove_btn = QPushButton("Remove")
+        if not self.password_remove_btn.text().startswith(" "):
+            self.password_remove_btn.setText(" " + self.password_remove_btn.text())
+        self.password_remove_btn.clicked.connect(self.remove_password)
+        password_status_layout.addWidget(self.password_remove_btn)
         status_layout.addLayout(password_status_layout)
         
         # API Key status
@@ -1498,14 +1569,31 @@ class CredentialSetupDialog(QDialog):
         self.api_key_status_label.setStyleSheet("color: #666; font-style: italic;")
         api_key_status_layout.addWidget(self.api_key_status_label)
         api_key_status_layout.addStretch()
-        self.api_key_change_btn = QPushButton("Change")
+        self.api_key_change_btn = QPushButton("Set")
         if not self.api_key_change_btn.text().startswith(" "):
             self.api_key_change_btn.setText(" " + self.api_key_change_btn.text())
         self.api_key_change_btn.clicked.connect(self.change_api_key)
         api_key_status_layout.addWidget(self.api_key_change_btn)
+        self.api_key_remove_btn = QPushButton("Remove")
+        if not self.api_key_remove_btn.text().startswith(" "):
+            self.api_key_remove_btn.setText(" " + self.api_key_remove_btn.text())
+        self.api_key_remove_btn.clicked.connect(self.remove_api_key)
+        api_key_status_layout.addWidget(self.api_key_remove_btn)
         status_layout.addLayout(api_key_status_layout)
         
         layout.addWidget(status_group)
+        
+        # Remove all button under the status group
+        destructive_layout = QHBoxLayout()
+        # Place on bottom-left to reduce accidental clicks
+        destructive_layout.addStretch()  # we'll remove this and add after button to push left
+        self.remove_all_btn = QPushButton("Remove All")
+        if not self.remove_all_btn.text().startswith(" "):
+            self.remove_all_btn.setText(" " + self.remove_all_btn.text())
+        self.remove_all_btn.clicked.connect(self.remove_all_credentials)
+        destructive_layout.insertWidget(0, self.remove_all_btn)
+        destructive_layout.addStretch()
+        layout.addLayout(destructive_layout)
         
         # Hidden input fields for editing
         self.username_edit = QLineEdit()
@@ -1576,23 +1664,81 @@ class CredentialSetupDialog(QDialog):
                     self.api_key_status_label.setText("NOT SET")
                     self.api_key_status_label.setStyleSheet("color: #666; font-style: italic;")
     
-    def change_username_password(self):
-        """Open dialog to change username/password"""
+    def change_username(self):
+        """Open dialog to change username only"""
         dialog = QDialog(self)
-        dialog.setWindowTitle("Change Username & Password")
+        dialog.setWindowTitle("Set Username")
         dialog.setModal(True)
-        dialog.resize(400, 200)
+        dialog.resize(400, 140)
         
         layout = QVBoxLayout(dialog)
         
-        # Username input
+        # Username input only
         username_layout = QHBoxLayout()
         username_layout.addWidget(QLabel("Username:"))
         username_edit = QLineEdit()
         username_layout.addWidget(username_edit)
         layout.addLayout(username_layout)
         
-        # Password input
+        # Buttons
+        button_layout = QHBoxLayout()
+        button_layout.addStretch()
+        
+        save_btn = QPushButton("Save")
+        save_btn.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DialogSaveButton))
+        save_btn.setIconSize(QSize(16, 16))
+        if not save_btn.text().startswith(" "):
+            save_btn.setText(" " + save_btn.text())
+        save_btn.clicked.connect(dialog.accept)
+        button_layout.addWidget(save_btn)
+        
+        cancel_btn = QPushButton("Cancel")
+        cancel_btn.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DialogCancelButton))
+        cancel_btn.setIconSize(QSize(16, 16))
+        if not cancel_btn.text().startswith(" "):
+            cancel_btn.setText(" " + cancel_btn.text())
+        cancel_btn.clicked.connect(dialog.reject)
+        button_layout.addWidget(cancel_btn)
+        
+        layout.addLayout(button_layout)
+        
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            username = username_edit.text().strip()
+            if username:
+                try:
+                    config = configparser.ConfigParser()
+                    config_file = os.path.join(os.path.expanduser("~"), ".imxup.ini")
+                    
+                    if os.path.exists(config_file):
+                        config.read(config_file)
+                    
+                    if 'CREDENTIALS' not in config:
+                        config['CREDENTIALS'] = {}
+                    
+                    config['CREDENTIALS']['username'] = username
+                    # Don't clear API key - allow both to exist
+                    
+                    with open(config_file, 'w') as f:
+                        config.write(f)
+                    
+                    self.load_current_credentials()
+                    QMessageBox.information(self, "Success", "Username saved successfully!")
+                    
+                except Exception as e:
+                    QMessageBox.critical(self, "Error", f"Failed to save credentials: {str(e)}")
+            else:
+                QMessageBox.warning(self, "Missing Information", "Please enter a username.")
+
+    def change_password(self):
+        """Open dialog to change password only"""
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Set Password")
+        dialog.setModal(True)
+        dialog.resize(400, 140)
+        
+        layout = QVBoxLayout(dialog)
+        
+        # Password input only
         password_layout = QHBoxLayout()
         password_layout.addWidget(QLabel("Password:"))
         password_edit = QLineEdit()
@@ -1609,10 +1755,6 @@ class CredentialSetupDialog(QDialog):
         save_btn.setIconSize(QSize(16, 16))
         if not save_btn.text().startswith(" "):
             save_btn.setText(" " + save_btn.text())
-        save_btn.setIconSize(QSize(16, 16))
-        if not save_btn.text().startswith(" "):
-            save_btn.setText(" " + save_btn.text())
-        save_btn.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DialogSaveButton))
         save_btn.clicked.connect(dialog.accept)
         button_layout.addWidget(save_btn)
         
@@ -1621,20 +1763,14 @@ class CredentialSetupDialog(QDialog):
         cancel_btn.setIconSize(QSize(16, 16))
         if not cancel_btn.text().startswith(" "):
             cancel_btn.setText(" " + cancel_btn.text())
-        cancel_btn.setIconSize(QSize(16, 16))
-        if not cancel_btn.text().startswith(" "):
-            cancel_btn.setText(" " + cancel_btn.text())
-        cancel_btn.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DialogCancelButton))
         cancel_btn.clicked.connect(dialog.reject)
         button_layout.addWidget(cancel_btn)
         
         layout.addLayout(button_layout)
         
         if dialog.exec() == QDialog.DialogCode.Accepted:
-            username = username_edit.text().strip()
             password = password_edit.text()
-            
-            if username and password:
+            if password:
                 try:
                     config = configparser.ConfigParser()
                     config_file = os.path.join(os.path.expanduser("~"), ".imxup.ini")
@@ -1645,7 +1781,6 @@ class CredentialSetupDialog(QDialog):
                     if 'CREDENTIALS' not in config:
                         config['CREDENTIALS'] = {}
                     
-                    config['CREDENTIALS']['username'] = username
                     config['CREDENTIALS']['password'] = encrypt_password(password)
                     # Don't clear API key - allow both to exist
                     
@@ -1653,12 +1788,12 @@ class CredentialSetupDialog(QDialog):
                         config.write(f)
                     
                     self.load_current_credentials()
-                    QMessageBox.information(self, "Success", "Username and password saved successfully!")
+                    QMessageBox.information(self, "Success", "Password saved successfully!")
                     
                 except Exception as e:
-                    QMessageBox.critical(self, "Error", f"Failed to save credentials: {str(e)}")
+                    QMessageBox.critical(self, "Error", f"Failed to save password: {str(e)}")
             else:
-                QMessageBox.warning(self, "Missing Information", "Please enter both username and password.")
+                QMessageBox.warning(self, "Missing Information", "Please enter a password.")
     
     def change_api_key(self):
         """Open dialog to change API key"""
@@ -1723,6 +1858,112 @@ class CredentialSetupDialog(QDialog):
                     QMessageBox.critical(self, "Error", f"Failed to save API key: {str(e)}")
             else:
                 QMessageBox.warning(self, "Missing Information", "Please enter your API key.")
+
+    def remove_username(self):
+        """Remove stored username with confirmation"""
+        reply = QMessageBox.question(
+            self,
+            "Remove Username",
+            "Without username/password, all galleries will be titled 'untitled gallery'.\n\nRemove the stored username?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            config = configparser.ConfigParser()
+            config_file = os.path.join(os.path.expanduser("~"), ".imxup.ini")
+            if os.path.exists(config_file):
+                config.read(config_file)
+            if 'CREDENTIALS' not in config:
+                config['CREDENTIALS'] = {}
+            config['CREDENTIALS']['username'] = ''
+            with open(config_file, 'w') as f:
+                config.write(f)
+            self.load_current_credentials()
+            QMessageBox.information(self, "Removed", "Username removed.")
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to remove username: {str(e)}")
+
+    def remove_password(self):
+        """Remove stored password with confirmation"""
+        reply = QMessageBox.question(
+            self,
+            "Remove Password",
+            "Without username/password, all galleries will be titled 'untitled gallery'.\n\nRemove the stored password?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            config = configparser.ConfigParser()
+            config_file = os.path.join(os.path.expanduser("~"), ".imxup.ini")
+            if os.path.exists(config_file):
+                config.read(config_file)
+            if 'CREDENTIALS' not in config:
+                config['CREDENTIALS'] = {}
+            config['CREDENTIALS']['password'] = ''
+            with open(config_file, 'w') as f:
+                config.write(f)
+            self.load_current_credentials()
+            QMessageBox.information(self, "Removed", "Password removed.")
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to remove password: {str(e)}")
+
+    def remove_api_key(self):
+        """Remove stored API key with confirmation"""
+        reply = QMessageBox.question(
+            self,
+            "Remove API Key",
+            "Without an API key, it is not possible to upload anything.\n\nRemove the stored API key?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            config = configparser.ConfigParser()
+            config_file = os.path.join(os.path.expanduser("~"), ".imxup.ini")
+            if os.path.exists(config_file):
+                config.read(config_file)
+            if 'CREDENTIALS' not in config:
+                config['CREDENTIALS'] = {}
+            config['CREDENTIALS']['api_key'] = ''
+            with open(config_file, 'w') as f:
+                config.write(f)
+            self.load_current_credentials()
+            QMessageBox.information(self, "Removed", "API key removed.")
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to remove API key: {str(e)}")
+
+    def remove_all_credentials(self):
+        """Remove username, password, and API key with confirmation"""
+        reply = QMessageBox.question(
+            self,
+            "Remove All Credentials",
+            "This will remove your username, password, and API key.\n\n- Without username/password, all galleries will be titled 'untitled gallery'.\n- Without an API key, uploads are not possible.\n\nProceed?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            config = configparser.ConfigParser()
+            config_file = os.path.join(os.path.expanduser("~"), ".imxup.ini")
+            if os.path.exists(config_file):
+                config.read(config_file)
+            if 'CREDENTIALS' not in config:
+                config['CREDENTIALS'] = {}
+            config['CREDENTIALS']['username'] = ''
+            config['CREDENTIALS']['password'] = ''
+            config['CREDENTIALS']['api_key'] = ''
+            with open(config_file, 'w') as f:
+                config.write(f)
+            self.load_current_credentials()
+            QMessageBox.information(self, "Removed", "All credentials removed.")
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to remove all credentials: {str(e)}")
     
 
     
@@ -2234,8 +2475,8 @@ class ImxUploadGUI(QMainWindow):
         
         
         # Settings section
-        settings_group = QGroupBox("Settings")
-        settings_layout = QGridLayout(settings_group)
+        self.settings_group = QGroupBox("Settings")
+        settings_layout = QGridLayout(self.settings_group)
         
         settings_layout.setVerticalSpacing(3)
         settings_layout.setHorizontalSpacing(10)
@@ -2416,7 +2657,7 @@ class ImxUploadGUI(QMainWindow):
         #""")
         settings_layout.addWidget(self.manage_credentials_btn, 10, 0, 1, 2)
         
-        right_layout.addWidget(settings_group)
+        right_layout.addWidget(self.settings_group)
         
 
         
@@ -2849,10 +3090,16 @@ class ImxUploadGUI(QMainWindow):
         try:
             has_ready = any(item.status == "ready" for item in items)
             has_queued = any(item.status == "queued" for item in items)
+            has_uploading = any(item.status == "uploading" for item in items)
             # Consider 'incomplete' as resumable
             has_resumable = any(item.status == "incomplete" for item in items)
             self.start_all_btn.setEnabled(has_ready or has_resumable)
             self.pause_all_btn.setEnabled(has_queued)
+            # Disable settings when any items are queued or uploading
+            try:
+                self.settings_group.setEnabled(not (has_queued or has_uploading))
+            except Exception:
+                pass
         except Exception:
             # Controls may not be initialized yet during early calls
             pass
@@ -2987,6 +3234,12 @@ class ImxUploadGUI(QMainWindow):
                     item.status = "uploading"
         
         # Update only the specific row status instead of full table refresh
+        # Also ensure settings are disabled while uploads are active
+        try:
+            self.settings_group.setEnabled(False)
+        except Exception:
+            pass
+
         for row in range(self.gallery_table.rowCount()):
             name_item = self.gallery_table.item(row, 1)
             if name_item and name_item.data(Qt.ItemDataRole.UserRole) == path:
@@ -3272,6 +3525,14 @@ class ImxUploadGUI(QMainWindow):
             if store_in_central:
                 self.add_log_message(f"{timestamp()} Saved gallery files to central location: {central_path}")
         
+        # Re-enable settings if no remaining active (queued/uploading) items
+        try:
+            remaining = self.queue_manager.get_all_items()
+            any_active = any(i.status in ("queued", "uploading") for i in remaining)
+            self.settings_group.setEnabled(not any_active)
+        except Exception:
+            pass
+
         # Update display when status changes
         self.update_queue_display()
         
@@ -3309,6 +3570,14 @@ class ImxUploadGUI(QMainWindow):
                 item.status = "failed"
                 item.error_message = error_message
         
+        # Re-enable settings if no remaining active (queued/uploading) items
+        try:
+            remaining = self.queue_manager.get_all_items()
+            any_active = any(i.status in ("queued", "uploading") for i in remaining)
+            self.settings_group.setEnabled(not any_active)
+        except Exception:
+            pass
+
         # Update display when status changes
         self.update_queue_display()
         

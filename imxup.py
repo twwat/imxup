@@ -318,9 +318,9 @@ def get_central_storage_path():
 def sanitize_gallery_name(name):
     """Remove invalid characters from gallery name"""
     import re
-    # Keep alphanumeric, spaces, hyphens, dashes, round brackets
-    # Remove everything else (square brackets, periods, number signs, etc.)
-    sanitized = re.sub(r'[^a-zA-Z0-9,\.\s\-\(\)]', '', name)
+    # Keep alphanumeric, spaces, hyphens, dashes, round brackets, periods, underscores
+    # Remove everything else (square brackets, number signs, etc.)
+    sanitized = re.sub(r'[^a-zA-Z0-9,\.\s\-_\(\)]', '', name)
     # Remove multiple spaces
     sanitized = re.sub(r'\s+', ' ', sanitized)
     # Trim spaces
