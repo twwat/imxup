@@ -37,7 +37,7 @@ import winreg
 load_dotenv()
 
 # Application version
-__version__ = "0.2.2"
+__version__ = "0.2.3"
 
 def timestamp():
     """Return current timestamp for logging"""
@@ -355,6 +355,12 @@ def load_user_defaults():
             # Storage locations for artifacts
             defaults['store_in_uploaded'] = config.getboolean('DEFAULTS', 'store_in_uploaded', fallback=True)
             defaults['store_in_central'] = config.getboolean('DEFAULTS', 'store_in_central', fallback=True)
+            # Optional central store path (falls back to default if not set)
+            try:
+                defaults['central_store_path'] = config.get('DEFAULTS', 'central_store_path', fallback=get_default_central_store_base_path())
+            except Exception:
+                # If any parsing issue occurs, use default base path
+                defaults['central_store_path'] = get_default_central_store_base_path()
         
         return defaults
     return {}
@@ -419,11 +425,39 @@ def save_unnamed_gallery(gallery_id, intended_name):
     
     print(f"Saved unnamed gallery {gallery_id} for later renaming to '{intended_name}'")
 
+def get_default_central_store_base_path():
+    """Return the default central store BASE path (parent of galleries/templates)."""
+    return os.path.join(os.path.expanduser("~"), ".imxup")
+
+
+def get_central_store_base_path():
+    """Get the configured central store BASE path (parent of galleries/templates)."""
+    try:
+        import configparser
+        config = configparser.ConfigParser()
+        config_file = get_config_path()
+        base_path = None
+        if os.path.exists(config_file):
+            config.read(config_file)
+            if 'DEFAULTS' in config and 'central_store_path' in config['DEFAULTS']:
+                base_path = config.get('DEFAULTS', 'central_store_path', fallback=None)
+        if not base_path:
+            base_path = get_default_central_store_base_path()
+    except Exception:
+        base_path = get_default_central_store_base_path()
+    os.makedirs(base_path, exist_ok=True)
+    return base_path
+
+
 def get_central_storage_path():
-    """Get central storage path for gallery files"""
-    central_path = os.path.join(os.path.expanduser("~"), ".imxup", "galleries")
-    os.makedirs(central_path, exist_ok=True)
-    return central_path
+    """Get the galleries subfolder inside the central store base path.
+
+    Ensures the directory exists before returning.
+    """
+    base = get_central_store_base_path()
+    galleries_path = os.path.join(base, "galleries")
+    os.makedirs(galleries_path, exist_ok=True)
+    return galleries_path
 
 def sanitize_gallery_name(name):
     """Remove invalid characters from gallery name"""

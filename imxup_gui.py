@@ -1270,7 +1270,7 @@ class GalleryTableWidget(QTableWidget):
         self.setColumnWidth(0, 40)   # Order (narrow)
         self.setColumnWidth(1, 300)  # Gallery Name (wider)
         self.setColumnWidth(2, 100)  # Uploaded (wider)
-        self.setColumnWidth(3, 220)  # Progress (wider)
+        self.setColumnWidth(3, 200)  # Progress (slightly narrower)
         self.setColumnWidth(4, 120)  # Status (wider)
         self.setColumnWidth(5, 140)  # Added (wider for YYYY-MM-DD format)
         self.setColumnWidth(6, 140)  # Finished (wider for YYYY-MM-DD format)
@@ -2661,8 +2661,8 @@ class TableProgressWidget(QWidget):
         self.progress_bar.setMaximum(100)
         self.progress_bar.setTextVisible(True)
         self.progress_bar.setFormat("%p%")
-        self.progress_bar.setMinimumHeight(24)  # Taller for better visibility
-        self.progress_bar.setMaximumHeight(26)  # Control maximum height
+        self.progress_bar.setMinimumHeight(20)  # Slightly shorter
+        self.progress_bar.setMaximumHeight(22)  # Control maximum height
         self.progress_bar.setAlignment(Qt.AlignmentFlag.AlignCenter)  # Center the text
         
         # Style for better text visibility and proper sizing
@@ -2851,20 +2851,40 @@ class ImxUploadGUI(QMainWindow):
         
         # Main layout - vertical to stack queue and progress
         main_layout = QVBoxLayout(central_widget)
-        # Default margins/spacing (revert to previous look)
+        # Tight outer margins/spacing to keep boxes close to each other
+        try:
+            main_layout.setContentsMargins(6, 6, 6, 6)
+            main_layout.setSpacing(6)
+        except Exception:
+            pass
         
         # Top section with queue and settings
         top_layout = QHBoxLayout()
+        try:
+            top_layout.setContentsMargins(0, 0, 0, 0)
+            top_layout.setSpacing(6)
+        except Exception:
+            pass
         
         
         # Left panel - Queue and controls (wider now)
         left_panel = QWidget()
         left_layout = QVBoxLayout(left_panel)
+        try:
+            left_layout.setContentsMargins(0, 0, 0, 0)
+            left_layout.setSpacing(6)
+        except Exception:
+            pass
         
         
         # Queue section
         queue_group = QGroupBox("Upload Queue")
         queue_layout = QVBoxLayout(queue_group)
+        try:
+            queue_layout.setContentsMargins(10, 10, 10, 10)
+            queue_layout.setSpacing(8)
+        except Exception:
+            pass
         
         
         # Drag-and-drop is handled at the window level; no dedicated drop label
@@ -2938,11 +2958,27 @@ class ImxUploadGUI(QMainWindow):
         # Right panel - Settings and logs
         right_panel = QWidget()
         right_layout = QVBoxLayout(right_panel)
+        try:
+            # Keep the settings/log area from expanding too wide on large windows
+            right_panel.setMaximumWidth(520)
+        except Exception:
+            pass
+        try:
+            right_layout.setContentsMargins(0, 0, 0, 0)
+            right_layout.setSpacing(6)
+        except Exception:
+            pass
         
         
         # Settings section
         self.settings_group = QGroupBox("Settings")
         settings_layout = QGridLayout(self.settings_group)
+        try:
+            settings_layout.setContentsMargins(10, 10, 10, 10)
+            settings_layout.setHorizontalSpacing(12)
+            settings_layout.setVerticalSpacing(8)
+        except Exception:
+            pass
         
         settings_layout.setVerticalSpacing(3)
         settings_layout.setHorizontalSpacing(10)
@@ -3021,7 +3057,7 @@ class ImxUploadGUI(QMainWindow):
         settings_layout.addWidget(self.public_gallery_check, 5, 0)
         
         # Confirm delete
-        self.confirm_delete_check = QCheckBox("Confirm before deleting items")
+        self.confirm_delete_check = QCheckBox("Confirm before deleting")
         self.confirm_delete_check.setChecked(defaults.get('confirm_delete', True))  # Load from defaults
         self.confirm_delete_check.toggled.connect(self.on_setting_changed)
         settings_layout.addWidget(self.confirm_delete_check, 5, 1)
@@ -3033,16 +3069,19 @@ class ImxUploadGUI(QMainWindow):
         self.auto_rename_check.toggled.connect(self.on_setting_changed)
         settings_layout.addWidget(self.auto_rename_check, 6, 0, 1, 2)
 
-        # Artifact storage location options
+        # Artifact storage location options (moved to dialog; keep hidden for persistence wiring)
         self.store_in_uploaded_check = QCheckBox("Save artifacts in .uploaded folder")
         self.store_in_uploaded_check.setChecked(defaults.get('store_in_uploaded', True))
+        self.store_in_uploaded_check.setVisible(False)
         self.store_in_uploaded_check.toggled.connect(self.on_setting_changed)
-        settings_layout.addWidget(self.store_in_uploaded_check, 7, 0)
 
         self.store_in_central_check = QCheckBox("Save artifacts in central store")
         self.store_in_central_check.setChecked(defaults.get('store_in_central', True))
+        self.store_in_central_check.setVisible(False)
         self.store_in_central_check.toggled.connect(self.on_setting_changed)
-        settings_layout.addWidget(self.store_in_central_check, 7, 1)
+
+        # Track central store path (from defaults)
+        self.central_store_path_value = defaults.get('central_store_path', None)
         
 
         
@@ -3076,6 +3115,15 @@ class ImxUploadGUI(QMainWindow):
         #    }
         #""")
         settings_layout.addWidget(self.save_settings_btn, 8, 0, 1, 2)
+
+        # Manage file locations button (between Save Settings and Manage Templates)
+        self.manage_file_locations_btn = QPushButton("Manage File Locations")
+        if not self.manage_file_locations_btn.text().startswith(" "):
+            self.manage_file_locations_btn.setText(" " + self.manage_file_locations_btn.text())
+        self.manage_file_locations_btn.clicked.connect(self.manage_file_locations)
+        self.manage_file_locations_btn.setMinimumHeight(30)
+        self.manage_file_locations_btn.setMaximumHeight(34)
+        settings_layout.addWidget(self.manage_file_locations_btn, 9, 0, 1, 2)
         
         # Manage templates button
         self.manage_templates_btn = QPushButton("Manage BBCode Templates")
@@ -3098,7 +3146,7 @@ class ImxUploadGUI(QMainWindow):
         #        xbackground-color: #1e8449;
         #    }
         #""")
-        settings_layout.addWidget(self.manage_templates_btn, 9, 0, 1, 2)
+        settings_layout.addWidget(self.manage_templates_btn, 10, 0, 1, 2)
         
         # Manage credentials button
         self.manage_credentials_btn = QPushButton("Manage Credentials")
@@ -3121,7 +3169,7 @@ class ImxUploadGUI(QMainWindow):
         #        xbackground-color: #21618c;
         #    }
         #""")
-        settings_layout.addWidget(self.manage_credentials_btn, 10, 0, 1, 2)
+        settings_layout.addWidget(self.manage_credentials_btn, 11, 0, 1, 2)
         
         right_layout.addWidget(self.settings_group)
         
@@ -3130,11 +3178,26 @@ class ImxUploadGUI(QMainWindow):
         # Log section
         log_group = QGroupBox("Log")
         log_layout = QVBoxLayout(log_group)
+        try:
+            log_layout.setContentsMargins(10, 10, 10, 10)
+            log_layout.setSpacing(8)
+        except Exception:
+            pass
         
         
         self.log_text = QTextEdit()
         self.log_text.setMinimumHeight(300)  # Much taller
-        self.log_text.setFont(QFont("Consolas", 9))  # Slightly larger font
+        # Slightly larger font with reduced letter spacing
+        _log_font = QFont("Consolas")
+        try:
+            _log_font.setPointSizeF(8.5)
+        except Exception:
+            _log_font.setPointSize(9)
+        try:
+            _log_font.setLetterSpacing(QFont.SpacingType.PercentageSpacing, 98.0)
+        except Exception:
+            pass
+        self.log_text.setFont(_log_font)
         # Keep a long history in the GUI log
         try:
             self.log_text.document().setMaximumBlockCount(200000)  # ~200k lines
@@ -3144,17 +3207,27 @@ class ImxUploadGUI(QMainWindow):
         
         right_layout.addWidget(log_group, 1)  # Give it stretch priority
         
-        top_layout.addWidget(right_panel, 1)  # 1/4 width for settings/log (less space)
+        top_layout.addWidget(right_panel, 0)  # Do not give extra stretch; obey max width
         
         main_layout.addLayout(top_layout)
         
         # Bottom section - Overall progress (left) and Help (right)
         bottom_layout = QHBoxLayout()
+        try:
+            bottom_layout.setContentsMargins(0, 0, 0, 0)
+            bottom_layout.setSpacing(6)
+        except Exception:
+            pass
         
 
         # Overall progress group (left)
         progress_group = QGroupBox("Overall Progress")
         progress_layout = QVBoxLayout(progress_group)
+        try:
+            progress_layout.setContentsMargins(10, 10, 10, 10)
+            progress_layout.setSpacing(8)
+        except Exception:
+            pass
         
 
         overall_layout = QHBoxLayout()
@@ -3199,6 +3272,12 @@ class ImxUploadGUI(QMainWindow):
         # Help group (right) -> repurpose as Stats details
         stats_group = QGroupBox("Stats")
         stats_layout = QGridLayout(stats_group)
+        try:
+            stats_layout.setContentsMargins(10, 10, 10, 10)
+            stats_layout.setHorizontalSpacing(12)
+            stats_layout.setVerticalSpacing(8)
+        except Exception:
+            pass
         
         # Detailed stats labels
         self.stats_unnamed_label = QLabel("Unnamed galleries: 0")
@@ -3257,6 +3336,132 @@ class ImxUploadGUI(QMainWindow):
         if dialog.exec() == QDialog.DialogCode.Accepted:
             # Refresh template combo box and keep selection when possible
             self.refresh_template_combo(preferred=current_template)
+
+    def manage_file_locations(self):
+        """Open dialog to manage artifact storage locations and central path."""
+        try:
+            dialog = QDialog(self)
+            dialog.setWindowTitle("Manage File Locations")
+            dialog.setModal(True)
+            dialog.resize(600, 220)
+
+            vbox = QVBoxLayout(dialog)
+
+            # Informational section (match credentials dialog styling)
+            info_text = QLabel()
+            info_text.setWordWrap(True)
+            info_text.setStyleSheet("padding: 10px; background-color: #f0f8ff; border: 1px solid #ccc; border-radius: 5px;")
+            vbox.addWidget(info_text)
+
+            # Options group
+            group = QGroupBox("Storage Options")
+            grid = QGridLayout(group)
+
+            # Checkboxes mirror hidden settings checkboxes
+            uploaded_check = QCheckBox("Save artifacts in .uploaded folder")
+            uploaded_check.setChecked(self.store_in_uploaded_check.isChecked())
+            grid.addWidget(uploaded_check, 0, 0, 1, 2)
+
+            central_check = QCheckBox("Save artifacts in central store")
+            central_check.setChecked(self.store_in_central_check.isChecked())
+            grid.addWidget(central_check, 1, 0, 1, 2)
+
+            # Central store path selector
+            from imxup import (
+                get_central_store_base_path,
+                get_default_central_store_base_path,
+            )
+            current_path = self.central_store_path_value or get_central_store_base_path()
+
+            path_label = QLabel("Central store path:")
+            path_edit = QLineEdit(current_path)
+            path_edit.setReadOnly(True)
+            browse_btn = QPushButton("Browse…")
+            open_btn = QPushButton("Open Central Store")
+
+            def on_browse():
+                directory = QFileDialog.getExistingDirectory(dialog, "Select Central Store Directory", current_path, QFileDialog.Option.ShowDirsOnly)
+                if directory:
+                    path_edit.setText(directory)
+
+            browse_btn.clicked.connect(on_browse)
+
+            grid.addWidget(path_label, 2, 0)
+            grid.addWidget(path_edit, 2, 1)
+            grid.addWidget(browse_btn, 2, 2)
+            grid.addWidget(open_btn, 2, 3)
+
+            def set_path_controls_enabled(enabled: bool):
+                path_label.setEnabled(enabled)
+                path_edit.setEnabled(enabled)
+                browse_btn.setEnabled(enabled)
+                open_btn.setEnabled(enabled)
+
+            set_path_controls_enabled(central_check.isChecked())
+            central_check.toggled.connect(set_path_controls_enabled)
+
+            # Dynamic info text
+            def update_info_label():
+                base = path_edit.text().strip() or get_central_store_base_path() or get_default_central_store_base_path()
+                galleries_path = os.path.join(base, "galleries")
+                templates_path = os.path.join(base, "templates")
+                info_text.setText(
+                    "Galleries and templates are stored in the central store:\n\n"
+                    f"Galleries folder: {galleries_path}\n"
+                    f"Templates folder: {templates_path}\n\n"
+                    f"Default base path (if unset): {get_default_central_store_base_path()}"
+                )
+
+            update_info_label()
+            # Update info when path changes via browse or programmatically
+            path_edit.textChanged.connect(lambda _=None: update_info_label())
+
+            # Open in OS file browser
+            def on_open_folder():
+                base = path_edit.text().strip() or get_central_store_base_path()
+                try:
+                    os.makedirs(base, exist_ok=True)
+                except Exception:
+                    pass
+                QDesktopServices.openUrl(QUrl.fromLocalFile(base))
+
+            open_btn.clicked.connect(on_open_folder)
+
+            vbox.addWidget(group)
+
+            # Buttons (match credentials dialog layout)
+            button_layout = QHBoxLayout()
+            button_layout.addStretch()
+            save_btn = QPushButton("Save")
+            if not save_btn.text().startswith(" "):
+                save_btn.setText(" " + save_btn.text())
+            close_btn = QPushButton("Close")
+            if not close_btn.text().startswith(" "):
+                close_btn.setText(" " + close_btn.text())
+            button_layout.addWidget(save_btn)
+            button_layout.addWidget(close_btn)
+            vbox.addLayout(button_layout)
+
+            def on_save():
+                # Push values back to hidden settings and mark settings dirty
+                self.store_in_uploaded_check.setChecked(uploaded_check.isChecked())
+                self.store_in_central_check.setChecked(central_check.isChecked())
+                self.central_store_path_value = path_edit.text().strip()
+                self.on_setting_changed()
+                dialog.accept()
+
+            def on_close():
+                dialog.reject()
+
+            save_btn.clicked.connect(on_save)
+            close_btn.clicked.connect(on_close)
+
+            dialog.exec()
+        except Exception as e:
+            try:
+                self.add_log_message(f"{timestamp()} Error opening File Locations dialog: {e}")
+            except Exception:
+                pass
 
     def _on_templates_directory_changed(self, _path):
         """Handle updates to the templates directory by refreshing the combo box."""
@@ -3735,7 +3940,12 @@ class ImxUploadGUI(QMainWindow):
         settings = QSettings("ImxUploader", "Stats")
         total_galleries = settings.value("total_galleries", 0, type=int)
         total_images_acc = settings.value("total_images", 0, type=int)
-        total_size_acc = settings.value("total_size_bytes", 0, type=int)
+        # Prefer v2 string key to avoid int-size issues; fall back to legacy
+        total_size_bytes_v2 = settings.value("total_size_bytes_v2", "0")
+        try:
+            total_size_acc = int(str(total_size_bytes_v2))
+        except Exception:
+            total_size_acc = settings.value("total_size_bytes", 0, type=int)
         fastest_kbps = settings.value("fastest_kbps", 0.0, type=float)
         self.stats_total_galleries_label.setText(f"Total galleries uploaded: {total_galleries}")
         self.stats_total_images_label.setText(f"Total images uploaded: {total_images_acc}")
@@ -4106,7 +4316,13 @@ class ImxUploadGUI(QMainWindow):
             settings = QSettings("ImxUploader", "Stats")
             total_galleries = settings.value("total_galleries", 0, type=int) + 1
             total_images_acc = settings.value("total_images", 0, type=int) + successful_count
-            total_size_acc = settings.value("total_size_bytes", 0, type=int) + int(results.get('uploaded_size', 0) or 0)
+            # Read v2 string key; fall back to legacy numeric, then add this run's uploaded_size
+            base_total_str = settings.value("total_size_bytes_v2", "0")
+            try:
+                base_total = int(str(base_total_str))
+            except Exception:
+                base_total = settings.value("total_size_bytes", 0, type=int)
+            total_size_acc = base_total + int(results.get('uploaded_size', 0) or 0)
             # Current and fastest speeds in KB/s
             transfer_speed = float(results.get('transfer_speed', 0) or 0)
             current_kbps = transfer_speed / 1024.0
@@ -4115,7 +4331,8 @@ class ImxUploadGUI(QMainWindow):
                 fastest_kbps = current_kbps
             settings.setValue("total_galleries", total_galleries)
             settings.setValue("total_images", total_images_acc)
-            settings.setValue("total_size_bytes", total_size_acc)
+            # Store as string to avoid platform int limits
+            settings.setValue("total_size_bytes_v2", str(total_size_acc))
             settings.setValue("fastest_kbps", fastest_kbps)
             settings.sync()
             # Update current speed immediately for Stats box
@@ -4447,6 +4664,7 @@ class ImxUploadGUI(QMainWindow):
             auto_rename = self.auto_rename_check.isChecked()
             store_in_uploaded = self.store_in_uploaded_check.isChecked()
             store_in_central = self.store_in_central_check.isChecked()
+            central_store_path = (self.central_store_path_value or "").strip()
             
             # Load existing config
             config = configparser.ConfigParser()
@@ -4470,6 +4688,8 @@ class ImxUploadGUI(QMainWindow):
             config['DEFAULTS']['auto_rename'] = str(auto_rename)
             config['DEFAULTS']['store_in_uploaded'] = str(store_in_uploaded)
             config['DEFAULTS']['store_in_central'] = str(store_in_central)
+            # Persist central store path (empty string implies default)
+            config['DEFAULTS']['central_store_path'] = central_store_path
             
             # Save to file
             with open(config_file, 'w') as f:
