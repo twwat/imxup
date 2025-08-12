@@ -35,6 +35,7 @@ from PyQt6.QtGui import QDragEnterEvent, QDropEvent, QIcon, QFont, QPixmap, QPai
 
 # Import the core uploader functionality
 from imxup import ImxToUploader, load_user_defaults, timestamp, sanitize_gallery_name, encrypt_password, decrypt_password, rename_all_unnamed_with_session, get_config_path
+from imxup_core import UploadEngine
 
 # Single instance communication port
 COMMUNICATION_PORT = 27849
@@ -113,401 +114,90 @@ class GUIImxToUploader(ImxToUploader):
         self.worker_thread = worker_thread
     
     def upload_folder(self, folder_path, gallery_name=None, thumbnail_size=3, thumbnail_format=2, max_retries=3, public_gallery=1, parallel_batch_size=4, template_name="default"):
-        """
-        Upload folder without interactive prompts
-        """
-        start_time = time.time()
-        
-        if not os.path.exists(folder_path):
-            raise FileNotFoundError(f"Folder not found: {folder_path}")
-        
-        # Get all image files in folder
-        image_extensions = ('.jpg', '.jpeg', '.png', '.gif')
-        all_image_files = [f for f in os.listdir(folder_path) if f.lower().endswith(image_extensions) and os.path.isfile(os.path.join(folder_path, f))]
-        # If resuming, skip already uploaded files
+        """GUI-friendly upload delegating to the shared UploadEngine."""
+        # Non-blocking signals and resume support
         current_item = self.worker_thread.current_item if self.worker_thread else None
-        already_uploaded = set()
-        if current_item and getattr(current_item, 'uploaded_files', None):
-            already_uploaded = set(current_item.uploaded_files)
-        image_files = [f for f in all_image_files if f not in already_uploaded]
-        # Maintain the original total for progress/percent
-        original_total_images = len(all_image_files)
-        
-        # Pre-scan dimensions and total size for GUI stats (use ALL images for consistency on resume)
-        image_dimensions_map = {}
-        total_size = 0
-        for f in all_image_files:
-            fp = os.path.join(folder_path, f)
-            try:
-                from PIL import Image
-                with Image.open(fp) as img:
-                    width, height = img.size
-                    image_dimensions_map[f] = (width, height)
-            except Exception:
-                image_dimensions_map[f] = (0, 0)
-            try:
-                total_size += os.path.getsize(fp)
-            except OSError:
-                pass
-        
-        if not image_files:
-            raise ValueError(f"No image files found in {folder_path}")
-        
-        # Signal gallery start with original total count (for accurate resume progress)
-        if self.worker_thread:
-            self.worker_thread.gallery_started.emit(folder_path, original_total_images)
-        
-        # Create gallery name (default to folder name if not provided)
+        already_uploaded = set(getattr(current_item, 'uploaded_files', set())) if current_item else set()
+
+        # Emit start with original total
+        try:
+            image_extensions = ('.jpg', '.jpeg', '.png', '.gif')
+            original_total = len([
+                f for f in os.listdir(folder_path)
+                if f.lower().endswith(image_extensions) and os.path.isfile(os.path.join(folder_path, f))
+            ])
+            if self.worker_thread:
+                self.worker_thread.gallery_started.emit(folder_path, original_total)
+        except Exception:
+            pass
+
+        # Sanitize name like CLI
         if not gallery_name:
             gallery_name = os.path.basename(folder_path)
-        
-        # Sanitize gallery name
-        from imxup import sanitize_gallery_name
         original_name = gallery_name
         gallery_name = sanitize_gallery_name(gallery_name)
         if original_name != gallery_name and self.worker_thread:
             self.worker_thread.log_message.emit(f"{timestamp()} Sanitized gallery name: '{original_name}' -> '{gallery_name}'")
         
-        # Use existing gallery if resuming; otherwise create a new one (skip login since it's already done)
-        gallery_id = None
-        initial_completed = 0
-        initial_uploaded_size = 0
-        preseed_images = []  # Preserve first image in API-only fallback
-        files_to_upload = []
-        if current_item and current_item.gallery_id:
-            gallery_id = current_item.gallery_id
-            if self.worker_thread:
-                self.worker_thread.log_message.emit(f"{timestamp()} Resuming existing gallery {gallery_id}")
-            files_to_upload = image_files
-        else:
-            gallery_id = self.create_gallery_with_name(gallery_name, public_gallery, skip_login=True)
-            if not gallery_id:
-                # API-only fallback: upload first image to create gallery, then reuse same loop for the rest
-                if self.worker_thread:
-                    self.worker_thread.log_message.emit(f"{timestamp()} Using API-only upload (no gallery naming)")
-                first_file = image_files[0]
-                first_image_path = os.path.join(folder_path, first_file)
-                if self.worker_thread:
-                    self.worker_thread.log_message.emit(f"{timestamp()} Uploading first image: {first_file}")
-                first_response = self.upload_image(
-                    first_image_path,
-                    create_gallery=True,
-                    thumbnail_size=thumbnail_size,
-                    thumbnail_format=thumbnail_format
-                )
-                if first_response.get('status') != 'success':
-                    raise Exception(f"{timestamp()} Failed to create gallery: {first_response}")
-                gallery_id = first_response['data'].get('gallery_id')
-                # Save for later renaming (with sanitized name)
-                from imxup import save_unnamed_gallery
-                save_unnamed_gallery(gallery_id, gallery_name)
-                preseed_images = [first_response['data']]
-                initial_completed = 1
-                try:
-                    initial_uploaded_size = os.path.getsize(first_image_path)
-                except Exception:
-                    initial_uploaded_size = 0
-                # Optional: emit a progress update for the first image
-                if self.worker_thread:
-                    percent_once = int((initial_completed / max(original_total_images, 1)) * 100)
-                    self.worker_thread.progress_updated.emit(
-                        folder_path, initial_completed, original_total_images, percent_once, first_file
-                    )
-                # Upload the rest
-                files_to_upload = image_files[1:]
-            else:
-                files_to_upload = image_files
-        
-        gallery_url = f"https://imx.to/g/{gallery_id}"
-        
-        # Store results
-        results = {
-            'gallery_url': gallery_url,
-            'images': list(preseed_images)
-        }
-        
-        # Upload all images to the created gallery with progress bars
-        def upload_single_image(image_file, attempt=1, pbar=None):
-            image_path = os.path.join(folder_path, image_file)
-            
+        engine = UploadEngine(self)
+
+        def on_progress(completed: int, total: int, percent: int, current_image: str):
+            if not self.worker_thread:
+                return
+            self.worker_thread.progress_updated.emit(folder_path, completed, total, percent, current_image)
+            # Throttled bandwidth: approximate from uploaded_bytes
             try:
-                response = self.upload_image(
-                    image_path, 
-                    gallery_id=gallery_id,
-                    thumbnail_size=thumbnail_size,
-                    thumbnail_format=thumbnail_format
-                )
-                
-                if response.get('status') == 'success':
-                    return image_file, response['data'], None
-                else:
-                    error_msg = f"API error: {response}"
-                    return image_file, None, error_msg
+                now_ts = time.time()
+                if now_ts - self.worker_thread._bw_last_emit >= 0.1:
+                    total_bytes = 0
+                    max_elapsed = 0.0
+                    for it in self.worker_thread.queue_manager.get_all_items():
+                        if it.status == "uploading" and it.start_time:
+                            total_bytes += getattr(it, 'uploaded_bytes', 0)
+                            max_elapsed = max(max_elapsed, now_ts - it.start_time)
+                    if max_elapsed > 0:
+                        kbps = (total_bytes / max_elapsed) / 1024.0
+                        self.worker_thread.bandwidth_updated.emit(kbps)
+                        self.worker_thread._bw_last_emit = now_ts
+                if now_ts - self.worker_thread._stats_last_emit >= 0.5:
+                    self.worker_thread._emit_queue_stats()
+                    self.worker_thread._stats_last_emit = now_ts
+            except Exception:
+                pass
                     
-            except Exception as e:
-                error_msg = f"Network error: {str(e)}"
-                return image_file, None, error_msg
-        
-        # Upload images with retries, maintaining order
-        uploaded_images = []
-        failed_images = []
-        # Seed uploaded_images with already uploaded data for correct progress and final aggregation
-        if current_item and current_item.uploaded_images_data:
-            uploaded_images.extend([(fname, data) for fname, data in current_item.uploaded_images_data])
-        # Position map for stable ordering without fragile index lookups
-        file_position = {fname: idx for idx, fname in enumerate(all_image_files)}
-        
-        # Rolling concurrency
-        import concurrent.futures, queue
-        with ThreadPoolExecutor(max_workers=parallel_batch_size) as executor:
-            remaining = queue.Queue()
-            for f in files_to_upload:
-                remaining.put(f)
-            futures_map = {}
-            # Prime pool
-            for _ in range(min(parallel_batch_size, remaining.qsize())):
-                img = remaining.get()
-                futures_map[executor.submit(upload_single_image, img, 1)] = img
-            
-            while futures_map:
-                done, _ = concurrent.futures.wait(list(futures_map.keys()), return_when=concurrent.futures.FIRST_COMPLETED)
-                for fut in done:
-                    img = futures_map.pop(fut)
-                    image_file, image_data, error = fut.result()
-                    if image_data:
-                        uploaded_images.append((image_file, image_data))
-                        # Track uploaded file for resume capability
-                        if self.worker_thread and self.worker_thread.current_item and self.worker_thread.current_item.path == folder_path:
-                            try:
-                                self.worker_thread.current_item.uploaded_files.add(image_file)
-                                self.worker_thread.current_item.uploaded_images_data.append((image_file, image_data))
-                            except Exception:
-                                pass
-                    if self.worker_thread:
-                        # Update uploaded bytes cheaply without repeatedly statting files later
-                        try:
-                            if self.worker_thread.current_item and self.worker_thread.current_item.path == folder_path:
-                                fp = os.path.join(folder_path, image_file)
-                                self.worker_thread.current_item.uploaded_bytes += os.path.getsize(fp)
-                        except Exception:
-                            pass
-                        self.worker_thread.log_message.emit(f"{timestamp()} ✓ Uploaded: {image_file}")
-                        # Emit periodic queue stats
-                        try:
-                            now_ts = time.time()
-                            if now_ts - self.worker_thread._stats_last_emit >= 0.5:
-                                self.worker_thread._emit_queue_stats()
-                                self.worker_thread._stats_last_emit = now_ts
-                        except Exception:
-                            pass
-                    else:
-                        failed_images.append((image_file, error))
-                        if self.worker_thread:
-                            self.worker_thread.log_message.emit(f"{timestamp()} ✗ Failed: {image_file} - {error}")
-                    
-                    # Update progress
-                    completed_count = initial_completed + len(uploaded_images)
-                    progress_percent = int((completed_count / max(original_total_images, 1)) * 100)
-                    if self.worker_thread:
-                        self.worker_thread.progress_updated.emit(
-                            folder_path, completed_count, original_total_images, progress_percent, image_file
-                        )
-                        self.worker_thread.log_message.emit(f"{timestamp()} Progress: {completed_count}/{original_total_images} ({progress_percent}%)")
-                        # Emit throttled bandwidth update ~10Hz
-                        try:
-                            now_ts = time.time()
-                            if now_ts - self.worker_thread._bw_last_emit >= 0.1:
-                                # Aggregate uploaded_bytes across active items
-                                total_bytes = 0
-                                max_elapsed = 0.0
-                                for it in self.worker_thread.queue_manager.get_all_items():
-                                    if it.status == "uploading" and it.start_time:
-                                        total_bytes += getattr(it, 'uploaded_bytes', 0)
-                                        max_elapsed = max(max_elapsed, now_ts - it.start_time)
-                                if max_elapsed > 0:
-                                    kbps = (total_bytes / max_elapsed) / 1024.0
-                                    self.worker_thread.bandwidth_updated.emit(kbps)
-                                    self.worker_thread._bw_last_emit = now_ts
-                        except Exception:
-                            pass
-                    
-                    # Only submit new uploads if no soft stop has been requested for this item
-                    if not remaining.empty():
-                        soft_stop = False
-                        if self.worker_thread and self.worker_thread.current_item and self.worker_thread.current_item.path == folder_path:
-                            soft_stop = getattr(self.worker_thread, '_soft_stop_requested_for', None) == folder_path
-                        if not soft_stop:
-                            nxt = remaining.get()
-                            futures_map[executor.submit(upload_single_image, nxt, 1)] = nxt
-        
-        # Retry failed uploads with parallel processing (skip if soft stop requested)
-        retry_count = 0
-        soft_stop_requested = False
-        if self.worker_thread and self.worker_thread.current_item and self.worker_thread.current_item.path == folder_path:
-            soft_stop_requested = getattr(self.worker_thread, '_soft_stop_requested_for', None) == folder_path
-        while failed_images and retry_count < max_retries and not soft_stop_requested:
-            retry_count += 1
-            retry_failed = []
-            
+        def on_log(message: str):
             if self.worker_thread:
-                self.worker_thread.log_message.emit(f"{timestamp()} Retrying {len(failed_images)} failed uploads (attempt {retry_count}/{max_retries})")
-            
-            # Rolling retries
-            import concurrent.futures, queue
-            with ThreadPoolExecutor(max_workers=parallel_batch_size) as executor:
-                remaining = queue.Queue()
-                for img, _ in failed_images:
-                    remaining.put(img)
-                futures_map = {}
-                for _ in range(min(parallel_batch_size, remaining.qsize())):
-                    img = remaining.get()
-                    futures_map[executor.submit(upload_single_image, img, retry_count + 1)] = img
-                
-                while futures_map:
-                    done, _ = concurrent.futures.wait(list(futures_map.keys()), return_when=concurrent.futures.FIRST_COMPLETED)
-                    for fut in done:
-                        img = futures_map.pop(fut)
-                        image_file, image_data, error = fut.result()
-                        if image_data:
-                            uploaded_images.append((image_file, image_data))
-                            # Track uploaded file for resume capability (retry path)
-                            if self.worker_thread and self.worker_thread.current_item and self.worker_thread.current_item.path == folder_path:
-                                try:
-                                    self.worker_thread.current_item.uploaded_files.add(image_file)
-                                    self.worker_thread.current_item.uploaded_images_data.append((image_file, image_data))
-                                    # Also update uploaded_bytes incrementally
-                                    try:
-                                        fp = os.path.join(folder_path, image_file)
-                                        self.worker_thread.current_item.uploaded_bytes += os.path.getsize(fp)
-                                    except Exception:
-                                        pass
-                                except Exception:
-                                    pass
-                            if self.worker_thread:
-                                self.worker_thread.log_message.emit(f"{timestamp()} ✓ Retry successful: {image_file}")
-                        else:
-                            retry_failed.append((image_file, error))
-                            if self.worker_thread:
-                                self.worker_thread.log_message.emit(f"{timestamp()} ✗ Retry failed: {image_file} - {error}")
-                        
-                        completed_count = initial_completed + len(uploaded_images)
-                        progress_percent = int((completed_count / max(original_total_images, 1)) * 100)
-                        if self.worker_thread:
-                            self.worker_thread.progress_updated.emit(
-                                folder_path, completed_count, original_total_images, progress_percent, image_file
-                            )
-                            # Emit throttled bandwidth update ~10Hz
-                            try:
-                                now_ts = time.time()
-                                if now_ts - self.worker_thread._bw_last_emit >= 0.1:
-                                    total_bytes = 0
-                                    max_elapsed = 0.0
-                                    for it in self.worker_thread.queue_manager.get_all_items():
-                                        if it.status == "uploading" and it.start_time:
-                                            total_bytes += getattr(it, 'uploaded_bytes', 0)
-                                            max_elapsed = max(max_elapsed, now_ts - it.start_time)
-                                    if max_elapsed > 0:
-                                        kbps = (total_bytes / max_elapsed) / 1024.0
-                                        self.worker_thread.bandwidth_updated.emit(kbps)
-                                        self.worker_thread._bw_last_emit = now_ts
-                                # Periodic queue stats during retry as well
-                                if now_ts - self.worker_thread._stats_last_emit >= 0.5:
-                                    self.worker_thread._emit_queue_stats()
-                                    self.worker_thread._stats_last_emit = now_ts
-                            except Exception:
-                                pass
-                        if not remaining.empty():
-                            nxt = remaining.get()
-                            futures_map[executor.submit(upload_single_image, nxt, retry_count + 1)] = nxt
-            
-            # Re-evaluate soft stop each iteration
-            soft_stop_requested = False
+                self.worker_thread.log_message.emit(f"{timestamp()} {message}")
+
+        def should_soft_stop() -> bool:
             if self.worker_thread and self.worker_thread.current_item and self.worker_thread.current_item.path == folder_path:
-                soft_stop_requested = getattr(self.worker_thread, '_soft_stop_requested_for', None) == folder_path
-            failed_images = retry_failed
-        
-        # Sort uploaded images by original file order (use position map; unknowns go last)
-        uploaded_images.sort(key=lambda x: file_position.get(x[0], 10**9))
-        
-        # Add to results in correct order
-        for _, image_data in uploaded_images:
-            results['images'].append(image_data)
-        
-        # Calculate statistics
-        end_time = time.time()
-        upload_time = end_time - start_time
-        
-        # Calculate transfer speed and dimension stats (robust to edge cases)
-        try:
-            uploaded_size = initial_uploaded_size + sum(
-                os.path.getsize(os.path.join(folder_path, img_file)) for img_file, _ in uploaded_images
-            )
-        except Exception:
-            uploaded_size = 0
-        transfer_speed = uploaded_size / upload_time if upload_time > 0 else 0
-        
-        try:
-            successful_dimensions = []
-            # Include first image in averages if API-only fallback used
-            if initial_completed == 1 and preseed_images:
-                first_file = image_files[0]
-                w, h = image_dimensions_map.get(first_file, (0, 0))
-                if w > 0 and h > 0:
-                    successful_dimensions.append((w, h))
-            for img_file, _ in uploaded_images:
-                w, h = image_dimensions_map.get(img_file, (0, 0))
-                if w > 0 and h > 0:
-                    successful_dimensions.append((w, h))
-            avg_width = sum(w for w, h in successful_dimensions) / len(successful_dimensions) if successful_dimensions else 0
-            avg_height = sum(h for w, h in successful_dimensions) / len(successful_dimensions) if successful_dimensions else 0
-            
-            max_width = max(w for w, h in successful_dimensions) if successful_dimensions else 0
-            max_height = max(h for w, h in successful_dimensions) if successful_dimensions else 0
-            min_width = min(w for w, h in successful_dimensions) if successful_dimensions else 0
-            min_height = min(h for w, h in successful_dimensions) if successful_dimensions else 0
-        except Exception:
-            avg_width = 0
-            avg_height = 0
-            max_width = 0
-            max_height = 0
-            min_width = 0
-            min_height = 0
-        
-        # Add statistics to results
-        results.update({
-            'gallery_id': gallery_id,
-            'gallery_name': gallery_name,
-            'upload_time': upload_time,
-            'total_size': total_size,
-            'uploaded_size': uploaded_size,
-            'transfer_speed': transfer_speed,
-            'avg_width': avg_width,
-            'avg_height': avg_height,
-            'max_width': max_width,
-            'max_height': max_height,
-            'min_width': min_width,
-            'min_height': min_height,
-            'successful_count': initial_completed + len(uploaded_images),
-            'failed_count': len(failed_images),
-            'failed_details': failed_images
-        })
-        
-        # Ensure .uploaded exists; do not create a separate gallery_{id} folder here
-        uploaded_subdir = os.path.join(folder_path, ".uploaded")
-        os.makedirs(uploaded_subdir, exist_ok=True)
-        
-        # Create shortcut file (.url) to the gallery in .uploaded using standardized naming
-        from imxup import build_gallery_filenames
-        shortcut_content = f"""[InternetShortcut]
-URL=https://imx.to/g/{gallery_id}
-"""
-        _, url_filename, _ = build_gallery_filenames(gallery_name, gallery_id)
-        uploaded_shortcut_path = os.path.join(uploaded_subdir, url_filename)
-        with open(uploaded_shortcut_path, 'w', encoding='utf-8') as f:
-            f.write(shortcut_content)
-        
-        # Files will be created in on_gallery_completed when gallery_id is available
-        print(f"{timestamp()} Gallery upload completed successfully")
+                return getattr(self.worker_thread, '_soft_stop_requested_for', None) == folder_path
+            return False
+
+        def on_image_uploaded(fname: str, data: Dict[str, Any], size_bytes: int):
+            if self.worker_thread and self.worker_thread.current_item and self.worker_thread.current_item.path == folder_path:
+                try:
+                    self.worker_thread.current_item.uploaded_files.add(fname)
+                    self.worker_thread.current_item.uploaded_images_data.append((fname, data))
+                    self.worker_thread.current_item.uploaded_bytes += int(size_bytes or 0)
+                except Exception:
+                    pass
+
+        results = engine.run(
+            folder_path=folder_path,
+            gallery_name=gallery_name,
+            thumbnail_size=thumbnail_size,
+            thumbnail_format=thumbnail_format,
+            max_retries=max_retries,
+            public_gallery=public_gallery,
+            parallel_batch_size=parallel_batch_size,
+            template_name=template_name,
+            already_uploaded=already_uploaded,
+            on_progress=on_progress,
+            on_log=on_log,
+            should_soft_stop=should_soft_stop,
+            on_image_uploaded=on_image_uploaded,
+        )
         
         return results
 
@@ -670,16 +360,7 @@ class UploadWorker(QThread):
                 parallel_batch_size=defaults.get('parallel_batch_size', 4),
                 template_name=item.template_name
             )
-            # Save artifacts in worker thread to avoid blocking GUI
-            try:
-                self._save_artifacts(item.path, results)
-                results['artifacts_saved'] = True
-            except Exception as _e:
-                # Log but do not fail the upload
-                try:
-                    self.log_message.emit(f"{timestamp()} Artifact save error: {_e}")
-                except Exception:
-                    pass
+            # Defer artifact writing to on_gallery_completed where UI context is available
             
             # Check if item was paused during upload
             if item.status == "paused":
@@ -742,134 +423,7 @@ class UploadWorker(QThread):
             self.queue_manager.update_item_status(item.path, "failed")
             self.gallery_failed.emit(item.path, error_msg)
     
-    def _save_artifacts(self, path: str, results: dict) -> None:
-        """Write BBCode and JSON artifacts to disk. Runs in worker thread."""
-        try:
-            from imxup import (
-                build_gallery_filenames,
-                get_central_storage_path,
-                load_user_defaults,
-            )
-            # Determine storage preferences
-            defaults = load_user_defaults()
-            store_in_uploaded = defaults.get('store_in_uploaded', True)
-            store_in_central = defaults.get('store_in_central', True)
-            gallery_id = results.get('gallery_id', '')
-            gallery_name = results.get('gallery_name', os.path.basename(path))
-            if not gallery_id or not gallery_name:
-                return
-            # Ensure .uploaded exists if needed
-            uploaded_subdir = os.path.join(path, ".uploaded")
-            if store_in_uploaded:
-                os.makedirs(uploaded_subdir, exist_ok=True)
-            # Build filenames
-            _, json_filename, bbcode_filename = build_gallery_filenames(gallery_name, gallery_id)
-            # Build BBCode from results images
-            all_images_bbcode = ""
-            for image_data in results.get('images', []):
-                all_images_bbcode += image_data.get('bbcode', '') + "  "
-            # Save BBCode
-            if store_in_uploaded:
-                with open(os.path.join(uploaded_subdir, bbcode_filename), 'w', encoding='utf-8') as f:
-                    f.write(all_images_bbcode.strip())
-            if store_in_central:
-                central_path = get_central_storage_path()
-                os.makedirs(central_path, exist_ok=True)
-                with open(os.path.join(central_path, bbcode_filename), 'w', encoding='utf-8') as f:
-                    f.write(all_images_bbcode.strip())
-            # Build images JSON entries
-            images_payload = []
-            for image_data in results.get('images', []):
-                orig_name = image_data.get('original_filename', '') or ''
-                try:
-                    if '.' in orig_name:
-                        base, ext = os.path.splitext(orig_name)
-                        filename_norm = base + ext.lower()
-                    else:
-                        filename_norm = orig_name
-                except Exception:
-                    filename_norm = orig_name
-                img_url = image_data.get('image_url') or ''
-                thumb_url = image_data.get('thumb_url')
-                try:
-                    if not thumb_url and img_url:
-                        parts = img_url.split('/i/')
-                        if len(parts) == 2 and parts[1]:
-                            image_id = parts[1].split('/')[0]
-                            _, ext = os.path.splitext(filename_norm)
-                            ext = (ext.lower() or '.jpg') if ext else '.jpg'
-                            thumb_url = f"https://imx.to/u/t/{image_id}{ext}"
-                except Exception:
-                    pass
-                images_payload.append({
-                    'filename': filename_norm,
-                    'uploaded_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-                    'image_url': img_url,
-                    'thumb_url': thumb_url,
-                    'bbcode': image_data.get('bbcode'),
-                })
-            # Failures
-            failures_payload = [
-                {
-                    'filename': fname,
-                    'failed_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-                    'reason': reason
-                }
-                for fname, reason in results.get('failed_details', [])
-            ]
-            # Compose JSON
-            json_payload = {
-                'meta': {
-                    'gallery_name': gallery_name,
-                    'gallery_id': gallery_id,
-                    'gallery_url': f"https://imx.to/g/{gallery_id}",
-                    'status': 'completed',
-                    'started_at': None,
-                    'finished_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-                },
-                'settings': {
-                    'thumbnail_size': results.get('thumbnail_size', 0),
-                    'thumbnail_format': results.get('thumbnail_format', 0),
-                    'public_gallery': results.get('public_gallery', 1),
-                    'template_name': results.get('template_name', 'default'),
-                    'parallel_batch_size': results.get('parallel_batch_size', 0)
-                },
-                'stats': {
-                    'total_images': results.get('total_images', 0),
-                    'successful_count': results.get('successful_count', 0),
-                    'failed_count': results.get('failed_count', 0),
-                    'upload_time': results.get('upload_time', 0),
-                    'total_size': results.get('total_size', 0),
-                    'uploaded_size': results.get('uploaded_size', 0),
-                    'avg_width': results.get('avg_width', 0),
-                    'avg_height': results.get('avg_height', 0),
-                    'max_width': results.get('max_width', 0),
-                    'max_height': results.get('max_height', 0),
-                    'min_width': results.get('min_width', 0),
-                    'min_height': results.get('min_height', 0),
-                    'transfer_speed_mb_s': (results.get('transfer_speed', 0) / (1024*1024)) if results.get('transfer_speed', 0) else 0
-                },
-                'images': images_payload,
-                'failures': failures_payload,
-                'bbcode_full': all_images_bbcode.strip()
-            }
-            # Write JSON
-            if store_in_uploaded:
-                with open(os.path.join(uploaded_subdir, json_filename), 'w', encoding='utf-8') as jf:
-                    json.dump(json_payload, jf, ensure_ascii=False, indent=2)
-            if store_in_central:
-                central_path = get_central_storage_path()
-                with open(os.path.join(central_path, json_filename), 'w', encoding='utf-8') as jf:
-                    json.dump(json_payload, jf, ensure_ascii=False, indent=2)
-            try:
-                self.log_message.emit(f"{timestamp()} Saved gallery files to central location: {get_central_storage_path()}")
-                # Emit queue stats after artifacts are saved
-                self._emit_queue_stats(force=True)
-            except Exception:
-                pass
-        except Exception:
-            # Swallow any artifact exceptions here to not impact worker
-            pass
+    # Legacy helper removed; artifacts are saved via core save_gallery_artifacts in on_gallery_completed
     
 
 
@@ -1077,6 +631,10 @@ class QueueManager:
                     continue
             avg_w = sum(w for w, _ in dims) / len(dims) if dims else 0.0
             avg_h = sum(h for _, h in dims) / len(dims) if dims else 0.0
+            max_w = max((w for w, _ in dims), default=0.0)
+            max_h = max((h for _, h in dims), default=0.0)
+            min_w = min((w for w, _ in dims), default=0.0)
+            min_h = min((h for _, h in dims), default=0.0)
             with QMutexLocker(self.mutex):
                 if path in self.items:
                     item = self.items[path]
@@ -2536,9 +2094,9 @@ class BBCodeViewerDialog(QDialog):
         # Central location files in standardized naming (fallback to legacy if not found)
         from imxup import build_gallery_filenames
         if gallery_id and gallery_name:
-            _, url_filename, bbcode_filename = build_gallery_filenames(gallery_name, gallery_id)
+            _, json_filename, bbcode_filename = build_gallery_filenames(gallery_name, gallery_id)
             central_bbcode = os.path.join(self.central_path, bbcode_filename)
-            central_url = os.path.join(self.central_path, url_filename)
+            central_url = None
         else:
             # Fallback to legacy naming detection for read-only purposes
             central_bbcode = os.path.join(self.central_path, f"{self.folder_name}_bbcode.txt")
@@ -2548,12 +2106,12 @@ class BBCodeViewerDialog(QDialog):
         import glob
         uploaded_dir = os.path.join(self.folder_path, ".uploaded")
         if gallery_id and gallery_name:
-            _, url_filename, bbcode_filename = build_gallery_filenames(gallery_name, gallery_id)
+            _, json_filename, bbcode_filename = build_gallery_filenames(gallery_name, gallery_id)
             folder_bbcode_files = glob.glob(os.path.join(uploaded_dir, bbcode_filename))
-            folder_url_files = glob.glob(os.path.join(uploaded_dir, url_filename))
+            folder_url_files = []
         else:
             folder_bbcode_files = glob.glob(os.path.join(uploaded_dir, f"{self.folder_name}_bbcode.txt"))
-            folder_url_files = glob.glob(os.path.join(uploaded_dir, f"{self.folder_name}.url"))
+            folder_url_files = []
         
         return {
             'central_bbcode': central_bbcode,
@@ -4209,127 +3767,28 @@ class ImxUploadGUI(QMainWindow):
             # Generate bbcode using the item's template
             bbcode_content = generate_bbcode_from_template(template_name, template_data)
             
-            # Save artifacts as JSON and BBCode according to settings
-            from imxup import (
-                build_gallery_filenames,
-                get_central_storage_path,
-                load_user_defaults,
-                __version__ as IMXUP_VERSION,
-            )
-            # Determine storage preferences
-            defaults = load_user_defaults()
-            store_in_uploaded = defaults.get('store_in_uploaded', True)
-            store_in_central = defaults.get('store_in_central', True)
-
-            # Ensure .uploaded exists if needed
-            if store_in_uploaded:
-                uploaded_subdir = os.path.join(path, ".uploaded")
-                os.makedirs(uploaded_subdir, exist_ok=True)
-
-            # Build filenames
-            _, json_filename, bbcode_filename = build_gallery_filenames(gallery_name, gallery_id)
-
-            # Compose JSON using results we have in GUI context
-            images_payload = []
-            for image_data in results.get('images', []):
-                orig_name = image_data.get('original_filename', '') or ''
-                # Ensure lowercase extension for filename
-                try:
-                    if '.' in orig_name:
-                        base, ext = os.path.splitext(orig_name)
-                        filename_norm = base + ext.lower()
-                    else:
-                        filename_norm = orig_name
-                except Exception:
-                    filename_norm = orig_name
-                img_url = image_data.get('image_url') or ''
-                # Derive thumb_url as /u/t/{id}.ext when possible
-                thumb_url = image_data.get('thumb_url')
-                try:
-                    if not thumb_url and img_url:
-                        # Extract id from /i/{id}
-                        # Accept forms like https://imx.to/i/68uhhf
-                        parts = img_url.split('/i/')
-                        if len(parts) == 2 and parts[1]:
-                            image_id = parts[1].split('/')[0]
-                            # Choose extension from filename if available; fallback to jpg
-                            _, ext = os.path.splitext(filename_norm)
-                            ext = (ext.lower() or '.jpg') if ext else '.jpg'
-                            thumb_url = f"https://imx.to/u/t/{image_id}{ext}"
-                except Exception:
-                    pass
-                images_payload.append({
-                    'filename': filename_norm,
-                    'uploaded_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-                    'image_url': img_url,
-                    'thumb_url': thumb_url,
-                    'bbcode': image_data.get('bbcode'),
-                })
-
-            failures_payload = [
-                {
-                    'filename': fname,
-                    'failed_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-                    'reason': reason
-                }
-                for fname, reason in results.get('failed_details', [])
-            ]
-
-            json_payload = {
-                'meta': {
-                    'gallery_name': gallery_name,
-                    'gallery_id': gallery_id,
-                    'gallery_url': f"https://imx.to/g/{gallery_id}",
-                    'status': 'completed',
+            # Save artifacts through shared core helper
+            try:
+                from imxup import save_gallery_artifacts
+                written = save_gallery_artifacts(
+                    folder_path=path,
+                    results={
+                        **results,
                     'started_at': datetime.fromtimestamp(self.queue_manager.items[path].start_time).strftime('%Y-%m-%d %H:%M:%S') if path in self.queue_manager.items and self.queue_manager.items[path].start_time else None,
-                    'finished_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-                    'uploader_version': IMXUP_VERSION,
-                },
-                'settings': {
                     'thumbnail_size': self.thumbnail_size_combo.currentIndex() + 1,
                     'thumbnail_format': self.thumbnail_format_combo.currentIndex() + 1,
                     'public_gallery': 1 if self.public_gallery_check.isChecked() else 0,
-                    'template_name': template_name,
-                    'parallel_batch_size': self.batch_size_spin.value()
-                },
-                'stats': {
-                    'total_images': len(results.get('images', [])) + len(results.get('failed_details', [])),
-                    'successful_count': results.get('successful_count', len(results.get('images', []))),
-                    'failed_count': results.get('failed_count', len(results.get('failed_details', []))),
-                    'upload_time': results.get('upload_time', 0),
-                    'total_size': results.get('total_size', 0),
-                    'uploaded_size': results.get('uploaded_size', 0),
-                    'avg_width': results.get('avg_width', 0),
-                    'avg_height': results.get('avg_height', 0),
-                    'max_width': results.get('max_width', 0),
-                    'max_height': results.get('max_height', 0),
-                    'min_width': results.get('min_width', 0),
-                    'min_height': results.get('min_height', 0),
-                    'transfer_speed_mb_s': (results.get('transfer_speed', 0) / (1024*1024)) if results.get('transfer_speed', 0) else 0
-                },
-                'images': images_payload,
-                'failures': failures_payload,
-                'bbcode_full': bbcode_content
-            }
-
-            # Write to .uploaded
-            if store_in_uploaded:
-                with open(os.path.join(uploaded_subdir, bbcode_filename), 'w', encoding='utf-8') as f:
-                    f.write(bbcode_content)
-                with open(os.path.join(uploaded_subdir, json_filename), 'w', encoding='utf-8') as jf:
-                    json.dump(json_payload, jf, ensure_ascii=False, indent=2)
-
-            # Write to central store
-            if store_in_central:
-                central_path = get_central_storage_path()
-                os.makedirs(central_path, exist_ok=True)
-                with open(os.path.join(central_path, bbcode_filename), 'w', encoding='utf-8') as f:
-                    f.write(bbcode_content)
-                with open(os.path.join(central_path, json_filename), 'w', encoding='utf-8') as jf:
-                    json.dump(json_payload, jf, ensure_ascii=False, indent=2)
-            
-            if store_in_central:
-                self.add_log_message(f"{timestamp()} Saved gallery files to central location: {central_path}")
+                        'parallel_batch_size': self.batch_size_spin.value(),
+                    },
+                    template_name=template_name,
+                )
+                try:
+                    if written.get('central'):
+                        self.add_log_message(f"{timestamp()} Saved gallery files to central location: {os.path.dirname(list(written['central'].values())[0])}")
+                except Exception:
+                    pass
+            except Exception as e:
+                self.add_log_message(f"{timestamp()} Artifact save error: {e}")
         
         # Re-enable settings if no remaining active (queued/uploading) items
         try:

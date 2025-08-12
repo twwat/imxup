@@ -552,88 +552,7 @@ def remove_unnamed_gallery(gallery_id):
             
             print(f"{timestamp()} Removed {gallery_id} from unnamed galleries list")
 
-def get_firefox_cookies(domain="imx.to"):
-    """Extract cookies from Firefox browser for the given domain"""
-    try:
-        # Find Firefox profile directory
-        if platform.system() == "Windows":
-            firefox_dir = os.path.join(os.environ['APPDATA'], 'Mozilla', 'Firefox', 'Profiles')
-        else:
-            firefox_dir = os.path.join(os.path.expanduser("~"), '.mozilla', 'firefox')
-        
-        if not os.path.exists(firefox_dir):
-            print(f"Firefox profiles directory not found: {firefox_dir}")
-            return {}
-        
-        # Find the default profile (usually ends with .default-release)
-        profiles = [d for d in os.listdir(firefox_dir) if d.endswith('.default-release')]
-        if not profiles:
-            # Try any profile that contains 'default'
-            profiles = [d for d in os.listdir(firefox_dir) if 'default' in d]
-        
-        if not profiles:
-            print(f"{timestamp()} No Firefox profile found")
-            return {}
-        
-        profile_dir = os.path.join(firefox_dir, profiles[0])
-        cookie_file = os.path.join(profile_dir, 'cookies.sqlite')
-        
-        if not os.path.exists(cookie_file):
-            print(f"{timestamp()} Firefox cookie file not found: {cookie_file}")
-            return {}
-        
-        # Extract cookies from the database
-        cookies = {}
-        conn = sqlite3.connect(cookie_file)
-        cursor = conn.cursor()
-        
-        cursor.execute("""
-            SELECT name, value, host, path, expiry, isSecure
-            FROM moz_cookies 
-            WHERE host LIKE ?
-        """, (f'%{domain}%',))
-        
-        for row in cursor.fetchall():
-            name, value, host, path, expires, secure = row
-            cookies[name] = {
-                'value': value,
-                'domain': host,
-                'path': path,
-                'secure': bool(secure)
-            }
-        
-        conn.close()
-        
-        return cookies
-        
-    except Exception as e:
-        print(f"{timestamp()} Error extracting Firefox cookies: {e}")
-        return {}
-
-def load_cookies_from_file(cookie_file="cookies.txt"):
-    """Load cookies from a text file in Netscape format"""
-    cookies = {}
-    try:
-        if os.path.exists(cookie_file):
-            with open(cookie_file, 'r') as f:
-                for line in f:
-                    line = line.strip()
-                    if line and not line.startswith('#') and '\t' in line:
-                        parts = line.split('\t')
-                        if len(parts) >= 7 and 'imx.to' in parts[0]:
-                            domain, subdomain, path, secure, expiry, name, value = parts[:7]
-                            cookies[name] = {
-                                'value': value,
-                                'domain': domain,
-                                'path': path,
-                                'secure': secure == 'TRUE'
-                            }
-            print(f"{timestamp()} Loaded {len(cookies)} cookies from {cookie_file}")
-        else:
-            print(f"{timestamp()} Cookie file not found: {cookie_file}")
-    except Exception as e:
-        print(f"{timestamp()} Error loading cookies: {e}")
-    return cookies
+from imxup_cookies import get_firefox_cookies, load_cookies_from_file
 
 def get_template_path():
     """Get the template directory path (~/.imxup/templates)."""
@@ -703,6 +622,149 @@ def generate_bbcode_from_template(template_name, data):
     
     template_content = templates[template_name]
     return apply_template(template_content, data)
+
+from typing import Optional
+
+def save_gallery_artifacts(
+    folder_path: str,
+    results: dict,
+    template_name: str = "default",
+    store_in_uploaded: Optional[bool] = None,
+    store_in_central: Optional[bool] = None,
+) -> dict:
+    """Save BBCode and JSON artifacts for a completed gallery.
+
+    Parameters:
+    - folder_path: path to the source image folder
+    - results: the results dict returned by upload_folder (must contain keys used below)
+    - template_name: which template to use for full bbcode generation
+    - store_in_uploaded/store_in_central: overrides for storage locations. When None, read defaults
+
+    Returns: dict with paths written: { 'uploaded': {'bbcode': str, 'json': str}, 'central': {...}}
+    """
+    # Determine storage preferences
+    defaults = load_user_defaults()
+    if store_in_uploaded is None:
+        store_in_uploaded = defaults.get('store_in_uploaded', True)
+    if store_in_central is None:
+        store_in_central = defaults.get('store_in_central', True)
+
+    gallery_id = results.get('gallery_id', '')
+    gallery_name = results.get('gallery_name') or os.path.basename(folder_path)
+    if not gallery_id or not gallery_name:
+        return {}
+
+    # Ensure .uploaded exists if needed
+    uploaded_subdir = os.path.join(folder_path, ".uploaded")
+    if store_in_uploaded:
+        os.makedirs(uploaded_subdir, exist_ok=True)
+
+    # Build filenames
+    safe_gallery_name, json_filename, bbcode_filename = build_gallery_filenames(gallery_name, gallery_id)
+
+    # Prepare template data from results for full bbcode
+    total_size = results.get('total_size', 0)
+    successful_images = results.get('successful_count', len(results.get('images', [])))
+    avg_width = int(results.get('avg_width', 0) or 0)
+    avg_height = int(results.get('avg_height', 0) or 0)
+    extension = "JPG"
+    try:
+        # Best-effort derive the most common extension from images if present
+        exts = []
+        for img in results.get('images', []):
+            orig = img.get('original_filename') or ''
+            if orig:
+                _, ext = os.path.splitext(orig)
+                if ext:
+                    exts.append(ext.upper().lstrip('.'))
+        if exts:
+            extension = max(set(exts), key=exts.count)
+    except Exception:
+        pass
+
+    # All-images bbcode (space-separated)
+    all_images_bbcode = "".join([(img.get('bbcode') or '') + "  " for img in results.get('images', [])]).strip()
+
+    template_data = {
+        'folder_name': gallery_name,
+        'width': avg_width,
+        'height': avg_height,
+        'longest': max(avg_width, avg_height),
+        'extension': extension,
+        'picture_count': successful_images,
+        'folder_size': f"{total_size / (1024*1024):.1f} MB",
+        'gallery_link': f"https://imx.to/g/{gallery_id}",
+        'all_images': all_images_bbcode,
+    }
+    bbcode_content = generate_bbcode_from_template(template_name, template_data)
+
+    # Compose JSON payload (align with CLI structure)
+    json_payload = {
+        'meta': {
+            'gallery_name': gallery_name,
+            'gallery_id': gallery_id,
+            'gallery_url': f"https://imx.to/g/{gallery_id}",
+            'status': 'completed',
+            'started_at': results.get('started_at') or None,
+            'finished_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+            'uploader_version': __version__,
+        },
+        'settings': {
+            'thumbnail_size': results.get('thumbnail_size'),
+            'thumbnail_format': results.get('thumbnail_format'),
+            'public_gallery': results.get('public_gallery'),
+            'template_name': template_name,
+            'parallel_batch_size': results.get('parallel_batch_size'),
+        },
+        'stats': {
+            'total_images': results.get('total_images') or (successful_images + results.get('failed_count', 0)),
+            'successful_count': successful_images,
+            'failed_count': results.get('failed_count', 0),
+            'upload_time': results.get('upload_time', 0),
+            'total_size': total_size,
+            'uploaded_size': results.get('uploaded_size', 0),
+            'avg_width': results.get('avg_width', 0),
+            'avg_height': results.get('avg_height', 0),
+            'max_width': results.get('max_width', 0),
+            'max_height': results.get('max_height', 0),
+            'min_width': results.get('min_width', 0),
+            'min_height': results.get('min_height', 0),
+            'transfer_speed_mb_s': (results.get('transfer_speed', 0) / (1024*1024)) if results.get('transfer_speed', 0) else 0,
+        },
+        'images': results.get('images', []),
+        'failures': [
+            {
+                'filename': fname,
+                'failed_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                'reason': reason,
+            }
+            for fname, reason in results.get('failed_details', [])
+        ],
+        'bbcode_full': bbcode_content,
+    }
+
+    written_paths = {}
+    # Save BBCode and JSON to .uploaded
+    if store_in_uploaded:
+        with open(os.path.join(uploaded_subdir, bbcode_filename), 'w', encoding='utf-8') as f:
+            f.write(bbcode_content)
+        with open(os.path.join(uploaded_subdir, json_filename), 'w', encoding='utf-8') as jf:
+            json.dump(json_payload, jf, ensure_ascii=False, indent=2)
+        written_paths.setdefault('uploaded', {})['bbcode'] = os.path.join(uploaded_subdir, bbcode_filename)
+        written_paths.setdefault('uploaded', {})['json'] = os.path.join(uploaded_subdir, json_filename)
+
+    # Save to central location as well
+    if store_in_central:
+        central_path = get_central_storage_path()
+        os.makedirs(central_path, exist_ok=True)
+        with open(os.path.join(central_path, bbcode_filename), 'w', encoding='utf-8') as f:
+            f.write(bbcode_content)
+        with open(os.path.join(central_path, json_filename), 'w', encoding='utf-8') as jf:
+            json.dump(json_payload, jf, ensure_ascii=False, indent=2)
+        written_paths.setdefault('central', {})['bbcode'] = os.path.join(central_path, bbcode_filename)
+        written_paths.setdefault('central', {})['json'] = os.path.join(central_path, json_filename)
+
+    return written_paths
 
 class ImxToUploader:
     def _get_credentials(self):
@@ -1461,21 +1523,40 @@ class ImxToUploader:
             'all_images': all_images_bbcode.strip()
         }
         
-        # Generate bbcode using specified template
+        # Generate bbcode using specified template and save artifacts centrally
         bbcode_content = generate_bbcode_from_template(template_name, template_data)
-        
-        uploaded_bbcode_path = os.path.join(uploaded_subdir, bbcode_filename)
-        with open(uploaded_bbcode_path, 'w', encoding='utf-8') as f:
-            f.write(bbcode_content)
-        
-        # Also save to central location
-        central_path = get_central_storage_path()
-        safe_gallery_name, json_filename, bbcode_filename = build_gallery_filenames(gallery_name, gallery_id)
-        central_bbcode_path = os.path.join(central_path, bbcode_filename)
-        with open(central_bbcode_path, 'w', encoding='utf-8') as f:
-            f.write(bbcode_content)
-        
-        print(f"{timestamp()} Saved gallery files to central location: {central_path}")
+        try:
+            save_gallery_artifacts(
+                folder_path=folder_path,
+                results={
+                    'gallery_id': gallery_id,
+                    'gallery_name': gallery_name,
+                    'images': results['images'],
+                    'total_size': total_size,
+                    'successful_count': results.get('successful_count', 0),
+                    'failed_count': results.get('failed_count', 0),
+                    'upload_time': upload_time,
+                    'uploaded_size': uploaded_size,
+                    'transfer_speed': transfer_speed,
+                    'avg_width': avg_width,
+                    'avg_height': avg_height,
+                    'max_width': max_width,
+                    'max_height': max_height,
+                    'min_width': min_width,
+                    'min_height': min_height,
+                    'failed_details': failed_images,
+                    'thumbnail_size': thumbnail_size,
+                    'thumbnail_format': thumbnail_format,
+                    'public_gallery': public_gallery,
+                    'parallel_batch_size': parallel_batch_size,
+                    'total_images': len(image_files),
+                    'started_at': datetime.fromtimestamp(start_time).strftime('%Y-%m-%d %H:%M:%S'),
+                },
+                template_name=template_name,
+            )
+            print(f"{timestamp()} Saved gallery files to central and/or .uploaded as configured")
+        except Exception as e:
+            print(f"{timestamp()} Error writing artifacts: {e}")
 
         # Compose and save JSON artifact at both locations
         try:
@@ -1609,10 +1690,14 @@ class ImxToUploader:
             with open(uploaded_json_path, 'w', encoding='utf-8') as jf:
                 json.dump(json_payload, jf, ensure_ascii=False, indent=2)
 
-            # Save JSON to central
-            central_json_path = os.path.join(central_path, json_filename)
-            with open(central_json_path, 'w', encoding='utf-8') as jf:
-                json.dump(json_payload, jf, ensure_ascii=False, indent=2)
+            # Save JSON to central (use helper paths; central_path defined earlier may not exist here)
+            try:
+                central_path = get_central_storage_path()
+                central_json_path = os.path.join(central_path, json_filename)
+                with open(central_json_path, 'w', encoding='utf-8') as jf:
+                    json.dump(json_payload, jf, ensure_ascii=False, indent=2)
+            except Exception:
+                pass
         except Exception as e:
             print(f"{timestamp()} Error writing JSON artifact: {e}")
         
@@ -1795,31 +1880,45 @@ def main():
     try:
         uploader = ImxToUploader()
         all_results = []
-        
+
         # Login once for all galleries
         print(f"{timestamp()} Logging in for all galleries...")
         if not uploader.login():
             print(f"{timestamp()} Login failed - falling back to API-only uploads")
-        
+
+        # Use shared UploadEngine for consistent behavior
+        from imxup_core import UploadEngine
+        engine = UploadEngine(uploader)
+
         # Process multiple galleries
         for folder_path in expanded_paths:
-            # Use folder name as gallery name if not specified
             gallery_name = args.name if args.name else None
-            
+
             try:
                 print(f"{timestamp()} Starting upload: {os.path.basename(folder_path)}")
-                results = uploader.upload_folder(
-                    folder_path, 
-                    gallery_name,
+                results = engine.run(
+                    folder_path=folder_path,
+                    gallery_name=gallery_name,
                     thumbnail_size=args.size,
                     thumbnail_format=args.format,
                     max_retries=args.max_retries,
                     public_gallery=public_gallery,
                     parallel_batch_size=args.parallel,
-                    template_name=args.template or "default"
+                    template_name=args.template or "default",
                 )
+
+                # Save artifacts through shared helper
+                try:
+                    save_gallery_artifacts(
+                        folder_path=folder_path,
+                        results=results,
+                        template_name=args.template or "default",
+                    )
+                except Exception as e:
+                    print(f"{timestamp()} Artifact save error: {e}")
+
                 all_results.append(results)
-                
+
             except KeyboardInterrupt:
                 print(f"\n{timestamp()} Upload interrupted by user")
                 break
