@@ -558,18 +558,65 @@ def rename_all_unnamed_with_session(uploader: 'ImxToUploader') -> int:
     if not unnamed_galleries:
         return 0
     success_count = 0
+    attempted = 0
     for gallery_id, intended_name in unnamed_galleries.items():
-        if uploader.rename_gallery_with_session(gallery_id, intended_name):
-            # Inform GUI (if present) about the rename
+        attempted += 1
+        ok = uploader.rename_gallery_with_session(gallery_id, intended_name)
+        # If blocked by DDoS-Guard or got 403, stop further attempts
+        status = getattr(uploader, '_last_rename_status_code', None)
+        ddos = bool(getattr(uploader, '_last_rename_ddos', False))
+        if status == 403 or ddos:
+            # If we used cookies and credentials exist, try credentials-only once for this gallery
+            try:
+                last_method = getattr(uploader, 'last_login_method', None)
+            except Exception:
+                last_method = None
+            has_creds = bool(getattr(uploader, 'username', None) and getattr(uploader, 'password', None))
+            retried_ok = False
+            if last_method == 'cookies' and has_creds:
+                if getattr(uploader, 'login_with_credentials_only', None) and uploader.login_with_credentials_only():
+                    retried_ok = uploader.rename_gallery_with_session(gallery_id, intended_name)
+                    status = getattr(uploader, '_last_rename_status_code', None)
+                    ddos = bool(getattr(uploader, '_last_rename_ddos', False))
+            if retried_ok:
+                ok = True
+            else:
+                # Hard stop further renames to avoid hammering while blocked
+                try:
+                    if hasattr(uploader, 'worker_thread') and uploader.worker_thread is not None:
+                        uploader.worker_thread.log_message.emit(
+                            f"{timestamp()} [renaming] Stopping auto-rename due to {'DDoS-Guard' if ddos else 'HTTP 403'}"
+                        )
+                except Exception:
+                    pass
+                # Do not continue processing additional galleries
+                break
+        if ok:
             try:
                 if hasattr(uploader, 'worker_thread') and uploader.worker_thread is not None:
                     uploader.worker_thread.log_message.emit(
-                        f"{timestamp()} Successfully renamed gallery '{gallery_id}' to '{intended_name}'"
+                        f"{timestamp()} [renaming] Successfully renamed gallery '{gallery_id}' to '{intended_name}'"
                     )
+                    try:
+                        # Notify GUI to update Renamed column if available
+                        if hasattr(uploader.worker_thread, 'gallery_renamed'):
+                            uploader.worker_thread.gallery_renamed.emit(gallery_id)
+                    except Exception:
+                        pass
             except Exception:
                 pass
             remove_unnamed_gallery(gallery_id)
             success_count += 1
+        else:
+            # Log explicit failure for visibility
+            try:
+                if hasattr(uploader, 'worker_thread') and uploader.worker_thread is not None:
+                    reason = "DDoS-Guard" if ddos else (f"HTTP {status}" if status else "unknown error")
+                    uploader.worker_thread.log_message.emit(
+                        f"{timestamp()} [renaming] Failed to rename gallery '{gallery_id}' to '{intended_name}' ({reason})"
+                    )
+            except Exception:
+                pass
     return success_count
 
 def remove_unnamed_gallery(gallery_id):
@@ -893,7 +940,7 @@ class ImxToUploader:
                         print(f"{timestamp()} Found {len(firefox_cookies)} Firefox cookies for imx.to")
                         all_cookies.update(firefox_cookies)
                     if file_cookies:
-                        print(f"{timestamp()} Found {len(file_cookies)} cookies from cookies.txt")
+                        print(f"{timestamp()} Loaded cookies from cookies.txt")
                         all_cookies.update(file_cookies)
                     if all_cookies:
                         for name, cookie_data in all_cookies.items():
@@ -927,12 +974,12 @@ class ImxToUploader:
                     pass
                 return False
         
-        max_retries = 3
+        max_retries = 1
         for attempt in range(max_retries):
             try:
                 if attempt > 0:
                     print(f"{timestamp()} Retry attempt {attempt + 1}/{max_retries}")
-                    time.sleep(2 ** attempt)  # Exponential backoff
+                    time.sleep(1)
                 
                 # Try to get cookies first (browser + file) if enabled
                 use_cookies = True
@@ -954,7 +1001,7 @@ class ImxToUploader:
                         print(f"{timestamp()} Found {len(firefox_cookies)} Firefox cookies for imx.to")
                         all_cookies.update(firefox_cookies)
                     if file_cookies:
-                        print(f"{timestamp()} Found {len(file_cookies)} cookies from cookies.txt")
+                        print(f"{timestamp()} Loaded cookies from cookies.txt")
                         all_cookies.update(file_cookies)
                     if all_cookies:
                         # Add cookies to session
@@ -1066,6 +1113,41 @@ class ImxToUploader:
                     return False
         
         return False
+
+    def login_with_credentials_only(self) -> bool:
+        """Login using stored username/password without attempting cookies.
+
+        Returns True on success and sets last_login_method to 'credentials'.
+        """
+        if not self.username or not self.password:
+            return False
+        try:
+            # Fresh session without any cookie loading
+            self.session = requests.Session()
+            self.session.headers.update({
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:141.0) Gecko/20100101 Firefox/141.0',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                'Accept-Language': 'en-US',
+                'Accept-Encoding': 'gzip, deflate, br, zstd',
+                'DNT': '1'
+            })
+            # Submit login form directly
+            login_data = {
+                'usr_email': self.username,
+                'pwd': self.password,
+                'remember': '1',
+                'doLogin': 'Login'
+            }
+            response = self.session.post(f"{self.web_url}/login.php", data=login_data)
+            if 'user' in response.url or 'dashboard' in response.url or 'gallery' in response.url:
+                try:
+                    self.last_login_method = "credentials"
+                except Exception:
+                    pass
+                return True
+            return False
+        except Exception:
+            return False
     
     def create_gallery_with_name(self, gallery_name, public_gallery=1, skip_login=False):
         """Create a gallery with a specific name using web interface"""
@@ -1146,6 +1228,13 @@ class ImxToUploader:
             
             # Get the edit gallery page
             edit_page = self.session.get(f"{self.web_url}/user/gallery/edit?id={gallery_id}")
+            # Track last rename status for caller logic
+            try:
+                self._last_rename_status_code = getattr(edit_page, 'status_code', None)
+                self._last_rename_ddos = bool('DDoS-Guard' in (edit_page.text or ''))
+            except Exception:
+                self._last_rename_status_code = None
+                self._last_rename_ddos = False
             
             # Check if we can access the edit page
             if edit_page.status_code != 200:
@@ -1167,6 +1256,13 @@ class ImxToUploader:
             }
             
             response = self.session.post(f"{self.web_url}/user/gallery/edit?id={gallery_id}", data=rename_data)
+            # Track last rename status for caller logic
+            try:
+                self._last_rename_status_code = getattr(response, 'status_code', None)
+                self._last_rename_ddos = bool('DDoS-Guard' in (response.text or ''))
+            except Exception:
+                self._last_rename_status_code = None
+                self._last_rename_ddos = False
             
             if response.status_code == 200:
                 # Check if the rename was actually successful

@@ -7,12 +7,16 @@ Provides drag-and-drop interface with queue management and progress tracking
 import sys
 import os
 import json
+import logging
 import socket
 import threading
 import time
 import configparser
 from pathlib import Path
 from datetime import datetime
+import sys
+import ctypes
+from functools import cmp_to_key
 from queue import Queue, Empty
 from dataclasses import dataclass, field
 from typing import List, Optional, Dict, Any
@@ -31,11 +35,13 @@ from PyQt6.QtCore import (
     Qt, QThread, pyqtSignal, QTimer, QMimeData, QUrl, 
     QMutex, QMutexLocker, QSettings, QSize, QObject
 )
-from PyQt6.QtGui import QDragEnterEvent, QDropEvent, QIcon, QFont, QPixmap, QPainter, QColor, QSyntaxHighlighter, QTextCharFormat, QDesktopServices, QPainterPath, QPen, QFontMetrics
+from PyQt6.QtGui import QDragEnterEvent, QDropEvent, QIcon, QFont, QPixmap, QPainter, QColor, QSyntaxHighlighter, QTextCharFormat, QDesktopServices, QPainterPath, QPen, QFontMetrics, QTextDocument
 
 # Import the core uploader functionality
 from imxup import ImxToUploader, load_user_defaults, timestamp, sanitize_gallery_name, encrypt_password, decrypt_password, rename_all_unnamed_with_session, get_config_path, build_gallery_filenames, get_central_storage_path
 from imxup_core import UploadEngine
+from imxup_storage import QueueStore
+from imxup_logging import get_logger
 
 # Single instance communication port
 COMMUNICATION_PORT = 27849
@@ -125,10 +131,29 @@ class GUIImxToUploader(ImxToUploader):
         # Emit start with original total
         try:
             image_extensions = ('.jpg', '.jpeg', '.png', '.gif')
-            original_total = len([
+            # Match Windows Explorer order for total determination (stable across views)
+            def _natural_key(n: str):
+                import re as _re
+                parts = _re.split(r"(\d+)", n)
+                out = []
+                for p in parts:
+                    out.append(int(p) if p.isdigit() else p.lower())
+                return tuple(out)
+            def _explorer_sort(names):
+                if sys.platform != 'win32':
+                    return sorted(names, key=_natural_key)
+                try:
+                    _cmp = ctypes.windll.shlwapi.StrCmpLogicalW
+                    _cmp.argtypes = [ctypes.c_wchar_p, ctypes.c_wchar_p]
+                    _cmp.restype = ctypes.c_int
+                    return sorted(names, key=cmp_to_key(lambda a, b: _cmp(a, b)))
+                except Exception:
+                    return sorted(names, key=_natural_key)
+            names = [
                 f for f in os.listdir(folder_path)
                 if f.lower().endswith(image_extensions) and os.path.isfile(os.path.join(folder_path, f))
-            ])
+            ]
+            original_total = len(_explorer_sort(names))
             if self.worker_thread:
                 self.worker_thread.gallery_started.emit(folder_path, original_total)
         except Exception:
@@ -177,6 +202,7 @@ class GUIImxToUploader(ImxToUploader):
                     
         def on_log(message: str):
             if self.worker_thread:
+                # Pass through categorized messages from engine
                 self.worker_thread.log_message.emit(f"{timestamp()} {message}")
 
         def should_soft_stop() -> bool:
@@ -212,12 +238,29 @@ class GUIImxToUploader(ImxToUploader):
         try:
             if self.worker_thread and self.worker_thread.current_item and self.worker_thread.current_item.path == folder_path:
                 item = self.worker_thread.current_item
-                # Build ordering map based on all images in the folder, like the engine
+                # Build ordering map based on Explorer order (match engine)
                 image_extensions = ('.jpg', '.jpeg', '.png', '.gif')
-                all_image_files = [
+                def _natural_key(n: str):
+                    import re as _re
+                    parts = _re.split(r"(\d+)", n)
+                    out = []
+                    for p in parts:
+                        out.append(int(p) if p.isdigit() else p.lower())
+                    return tuple(out)
+                def _explorer_sort(names):
+                    if sys.platform != 'win32':
+                        return sorted(names, key=_natural_key)
+                    try:
+                        _cmp = ctypes.windll.shlwapi.StrCmpLogicalW
+                        _cmp.argtypes = [ctypes.c_wchar_p, ctypes.c_wchar_p]
+                        _cmp.restype = ctypes.c_int
+                        return sorted(names, key=cmp_to_key(lambda a, b: _cmp(a, b)))
+                    except Exception:
+                        return sorted(names, key=_natural_key)
+                all_image_files = _explorer_sort([
                     f for f in os.listdir(folder_path)
                     if f.lower().endswith(image_extensions) and os.path.isfile(os.path.join(folder_path, f))
-                ]
+                ])
                 file_position = {fname: idx for idx, fname in enumerate(all_image_files)}
                 # Collect enriched image data from accumulated uploads across runs
                 combined_by_name = {}
@@ -247,7 +290,7 @@ class GUIImxToUploader(ImxToUploader):
                     except Exception:
                         enriched.setdefault('size_bytes', 0)
                     combined_by_name[fname] = enriched
-                # Order by original order
+                # Order by original folder order (Explorer sort)
                 ordered = sorted(combined_by_name.items(), key=lambda kv: file_position.get(kv[0], 10**9))
                 merged_images = [data for _fname, data in ordered]
                 if merged_images:
@@ -276,6 +319,7 @@ class UploadWorker(QThread):
     gallery_completed = pyqtSignal(str, dict)  # path, results
     gallery_failed = pyqtSignal(str, str)  # path, error_message
     gallery_exists = pyqtSignal(str, list)  # gallery_name, existing_files
+    gallery_renamed = pyqtSignal(str)  # gallery_id
     log_message = pyqtSignal(str)
     bandwidth_updated = pyqtSignal(float)  # current KB/s across active uploads
     queue_stats = pyqtSignal(dict)  # aggregate status stats for GUI updates
@@ -307,23 +351,23 @@ class UploadWorker(QThread):
             self.uploader = GUIImxToUploader(worker_thread=self)
             
             # Login once for session reuse
-            self.log_message.emit(f"{timestamp()} Logging in...")
+            self.log_message.emit(f"{timestamp()} [auth] Logging in...")
             login_success = self.uploader.login()
             # Report the login method used (cookies, credentials, api_key, none)
             try:
                 method = getattr(self.uploader, 'last_login_method', None)
                 if method == 'cookies':
-                    self.log_message.emit(f"{timestamp()} Authenticated using cookies")
+                    self.log_message.emit(f"{timestamp()} [auth] Authenticated using cookies")
                 elif method == 'credentials':
-                    self.log_message.emit(f"{timestamp()} Authenticated using username/password")
+                    self.log_message.emit(f"{timestamp()} [auth] Authenticated using username/password")
                 elif method == 'api_key':
-                    self.log_message.emit(f"{timestamp()} Using API key authentication (no web login)")
+                    self.log_message.emit(f"{timestamp()} [auth] Using API key authentication (no web login)")
                 elif method == 'none':
-                    self.log_message.emit(f"{timestamp()} No credentials available; proceeding without web login")
+                    self.log_message.emit(f"{timestamp()} [auth] No credentials available; proceeding without web login")
             except Exception:
                 pass
             if not login_success:
-                self.log_message.emit(f"{timestamp()} Login failed - using API-only mode")
+                self.log_message.emit(f"{timestamp()} [auth] Login failed - using API-only mode")
             else:
                 # Method-specific post-login messaging and auto-rename gating
                 try:
@@ -332,7 +376,7 @@ class UploadWorker(QThread):
                     method = None
 
                 if method in ('cookies', 'credentials'):
-                    self.log_message.emit(f"{timestamp()} Login successful using {method}")
+                    self.log_message.emit(f"{timestamp()} [auth] Login successful using {method}")
                     # Auto-rename unnamed galleries only when a web session exists
                     try:
                         if self.auto_rename_enabled:
@@ -340,20 +384,27 @@ class UploadWorker(QThread):
                             if renamed > 0:
                                 self.log_message.emit(f"{timestamp()} Auto-renamed {renamed} gallery(ies) after login")
                             else:
-                                self.log_message.emit(f"{timestamp()} No unnamed galleries to auto-rename")
+                                # Only report none if the unnamed list is actually empty.
+                                try:
+                                    from imxup import get_unnamed_galleries
+                                    if not get_unnamed_galleries():
+                                        self.log_message.emit(f"{timestamp()} No unnamed galleries to auto-rename")
+                                except Exception:
+                                    # Fall back to quiet if we cannot check
+                                    pass
                     except Exception as e:
                         self.log_message.emit(f"{timestamp()} Auto-rename error: {e}")
                 elif method == 'api_key':
                     # API key present; no web session to rename galleries
-                    self.log_message.emit(f"{timestamp()} API key loaded; web login skipped")
+                    self.log_message.emit(f"{timestamp()} [auth] API key loaded; web login skipped")
                     try:
                         if self.auto_rename_enabled:
-                            self.log_message.emit(f"{timestamp()} Skipping auto-rename; web session required")
+                            self.log_message.emit(f"{timestamp()} [auth] Skipping auto-rename; web session required")
                     except Exception:
                         pass
                 else:
                     # Fallback: unknown method but login reported success; do not auto-rename
-                    self.log_message.emit(f"{timestamp()} Login successful")
+                    self.log_message.emit(f"{timestamp()} [auth] Login successful")
             
             while self.running:
                 # Get next item from queue
@@ -449,17 +500,30 @@ class UploadWorker(QThread):
                     failed_count = results.get('failed_count', 0)
                     if failed_count and results.get('successful_count', 0) > 0:
                         self.queue_manager.update_item_status(item.path, "failed")
-                        # Still generate files and show as failed with partial content
+                        # Save artifacts in worker thread to avoid blocking UI
+                        try:
+                            self._save_artifacts_for_result(item, results)
+                        except Exception:
+                            pass
+                        # Notify GUI
                         self.gallery_completed.emit(item.path, results)
-                        self.log_message.emit(f"{timestamp()} Completed with failures: {item.name} -> {item.gallery_url}")
+                        # Redundant legacy line; replaced by engine summary tagged [uploads]
+                        pass
                         try:
                             self._emit_queue_stats(force=True)
                         except Exception:
                             pass
                     else:
                         self.queue_manager.update_item_status(item.path, "completed")
+                        # Save artifacts in worker thread to avoid blocking UI
+                        try:
+                            self._save_artifacts_for_result(item, results)
+                        except Exception:
+                            pass
+                        # Notify GUI
                         self.gallery_completed.emit(item.path, results)
-                        self.log_message.emit(f"{timestamp()} Completed: {item.name} -> {item.gallery_url}")
+                        # Redundant legacy line; replaced by engine summary tagged [uploads:gallery]
+                        pass
                         try:
                             self._emit_queue_stats(force=True)
                         except Exception:
@@ -489,7 +553,29 @@ class UploadWorker(QThread):
             self.queue_manager.update_item_status(item.path, "failed")
             self.gallery_failed.emit(item.path, error_msg)
     
-    # Legacy helper removed; artifacts are saved via core save_gallery_artifacts in on_gallery_completed
+    # Write artifacts from the worker to avoid blocking the GUI thread
+    def _save_artifacts_for_result(self, item: GalleryQueueItem, results: dict) -> None:
+        try:
+            from imxup import save_gallery_artifacts
+            written = save_gallery_artifacts(
+                folder_path=item.path,
+                results=results,
+                template_name=item.template_name or "default",
+            )
+            try:
+                parts = []
+                if written.get('central'):
+                    central_dir = os.path.dirname(list(written['central'].values())[0])
+                    parts.append(f"central: {central_dir}")
+                if written.get('uploaded'):
+                    uploaded_dir = os.path.dirname(list(written['uploaded'].values())[0])
+                    parts.append(f"folder: {uploaded_dir}")
+                if parts:
+                    self.log_message.emit(f"{timestamp()} [fileio] Saved gallery files to {', '.join(parts)}")
+            except Exception:
+                pass
+        except Exception as e:
+            self.log_message.emit(f"{timestamp()} Artifact save error: {e}")
     
 
 
@@ -501,8 +587,15 @@ class QueueManager:
         self.queue = Queue()
         self.mutex = QMutex()
         self.settings = QSettings("ImxUploader", "QueueManager")
+        # SQLite-backed store for durable state
+        self.store = QueueStore()
         self._next_order = 0  # Track insertion order
         self._version = 0  # Bumped on any change for cheap UI polling
+        # One-time migration from legacy QSettings into SQLite, then load from DB
+        try:
+            self.store.migrate_from_qsettings_if_needed(self.settings)
+        except Exception:
+            pass
         self.load_persistent_queue()
 
     def _inc_version(self):
@@ -513,10 +606,9 @@ class QueueManager:
             return self._version
     
     def save_persistent_queue(self):
-        """Save queue state to persistent storage"""
+        """Save queue state (non-blocking) using SQLite store."""
         queue_data = []
         for item in self.items.values():
-            # Save all items except failed ones (unless they're completed)
             if item.status in ["ready", "queued", "paused", "completed", "incomplete"]:
                 queue_data.append({
                     'path': item.path,
@@ -531,9 +623,7 @@ class QueueManager:
                     'insertion_order': item.insertion_order,
                     'added_time': item.added_time,
                     'finished_time': item.finished_time,
-                    'uploaded_files': list(getattr(item, 'uploaded_files', set())),
-                    'uploaded_images_data': list(getattr(item, 'uploaded_images_data', [])),
-                    # Persist pre-scan and transfer stats so GUI can render after restart
+                    # Intentionally omit heavy per-image lists from GUI thread snapshot
                     'total_size': int(getattr(item, 'total_size', 0) or 0),
                     'avg_width': float(getattr(item, 'avg_width', 0.0) or 0.0),
                     'avg_height': float(getattr(item, 'avg_height', 0.0) or 0.0),
@@ -545,28 +635,24 @@ class QueueManager:
                     'uploaded_bytes': int(getattr(item, 'uploaded_bytes', 0) or 0),
                     'final_kibps': float(getattr(item, 'final_kibps', 0.0) or 0.0),
                 })
-        
-        self.settings.setValue("queue_items", queue_data)
-        self.settings.sync()  # Force sync to disk
-        print(f"DEBUG: Saved {len(queue_data)} items to persistent storage")
-        #print(f"DEBUG: Current items in memory: {list(self.items.keys())}")
-        #print(f"DEBUG: Items being saved: {[item['path'] for item in queue_data]}")
+        try:
+            self.store.bulk_upsert_async(queue_data)
+        except Exception:
+            pass
     
     def load_persistent_queue(self):
-        """Load queue state from persistent storage"""
-        queue_data = self.settings.value("queue_items", [])
-        print(f"DEBUG: Loading persistent queue with {len(queue_data)} items")
+        """Load queue state from SQLite store (post-migration)."""
+        try:
+            queue_data = self.store.load_all_items()
+        except Exception:
+            queue_data = []
         if queue_data:
             for item_data in queue_data:
                 path = item_data.get('path', '')
                 status = item_data.get('status', 'ready')
-                
-                #print(f"DEBUG: Loading item: {path} (status: {status})")
-                
-                # For completed items, don't check if path exists (might be moved/deleted)
+                # For completed items, don't check path existence
                 if status == "completed" or (os.path.exists(path) and os.path.isdir(path)):
                     if status == "completed":
-                        # Restore completed item with saved data
                         item = GalleryQueueItem(
                             path=path,
                             name=item_data.get('name'),
@@ -581,80 +667,50 @@ class QueueManager:
                             added_time=item_data.get('added_time'),
                             finished_time=item_data.get('finished_time')
                         )
-                        # Restore persisted scan/size/transfer stats
-                        try:
-                            item.total_size = int(item_data.get('total_size', 0) or 0)
-                            item.avg_width = float(item_data.get('avg_width', 0.0) or 0.0)
-                            item.avg_height = float(item_data.get('avg_height', 0.0) or 0.0)
-                            item.max_width = float(item_data.get('max_width', 0.0) or 0.0)
-                            item.max_height = float(item_data.get('max_height', 0.0) or 0.0)
-                            item.min_width = float(item_data.get('min_width', 0.0) or 0.0)
-                            item.min_height = float(item_data.get('min_height', 0.0) or 0.0)
-                            item.scan_complete = bool(item_data.get('scan_complete', False))
-                            item.uploaded_bytes = int(item_data.get('uploaded_bytes', 0) or 0)
-                            item.final_kibps = float(item_data.get('final_kibps', 0.0) or 0.0)
-                        except Exception:
-                            pass
-                        self._next_order = max(self._next_order, item.insertion_order + 1)
-                        self.items[path] = item
-                        #print(f"DEBUG: Loaded completed item: {path}")
                     else:
-                        # Check for images and count them for non-completed items
-                        image_extensions = ('.jpg', '.jpeg', '.png', '.gif')
-                        image_files = []
-                        for f in os.listdir(path):
-                            if f.lower().endswith(image_extensions) and os.path.isfile(os.path.join(path, f)):
-                                image_files.append(f)
-                        
-                        if image_files:
-                            # Reset status to "ready" when loading to prevent auto-start
-                            load_status = "ready" if status in ["queued", "uploading"] else status
-                            item = GalleryQueueItem(
-                                path=path,
-                                name=item_data.get('name'),
-                                status=load_status,
-                                total_images=len(image_files),  # Set the total count
-                                template_name=item_data.get('template_name', load_user_defaults().get('template_name', 'default')),
-                                insertion_order=item_data.get('insertion_order', self._next_order),
-                                added_time=item_data.get('added_time')
-                            )
-                            # Restore uploaded_files if present
-                            uploaded_files = set(item_data.get('uploaded_files', []))
-                            if uploaded_files:
-                                item.uploaded_files = uploaded_files
-                            # Restore uploaded_images_data if present
-                            uploaded_images_data = item_data.get('uploaded_images_data', [])
-                            if uploaded_images_data:
-                                item.uploaded_images_data = uploaded_images_data
-                            # Restore persisted scan/size/transfer stats
-                            try:
-                                item.total_size = int(item_data.get('total_size', 0) or 0)
-                                item.avg_width = float(item_data.get('avg_width', 0.0) or 0.0)
-                                item.avg_height = float(item_data.get('avg_height', 0.0) or 0.0)
-                                item.max_width = float(item_data.get('max_width', 0.0) or 0.0)
-                                item.max_height = float(item_data.get('max_height', 0.0) or 0.0)
-                                item.min_width = float(item_data.get('min_width', 0.0) or 0.0)
-                                item.min_height = float(item_data.get('min_height', 0.0) or 0.0)
-                                item.scan_complete = bool(item_data.get('scan_complete', False))
-                                item.uploaded_bytes = int(item_data.get('uploaded_bytes', 0) or 0)
-                                item.final_kibps = float(item_data.get('final_kibps', 0.0) or 0.0)
-                            except Exception:
-                                pass
-                            self._next_order = max(self._next_order, item.insertion_order + 1)
-                            self.items[path] = item
-                            #print(f"DEBUG: Loaded item: {path}")
-                        else:
-                            print(f"DEBUG: Skipped item (no images): {path}")
+                        load_status = "ready" if status in ["queued", "uploading"] else status
+                        item = GalleryQueueItem(
+                            path=path,
+                            name=item_data.get('name'),
+                            status=load_status,
+                            total_images=int(item_data.get('total_images', 0) or 0),
+                            template_name=item_data.get('template_name', load_user_defaults().get('template_name', 'default')),
+                            insertion_order=item_data.get('insertion_order', self._next_order),
+                            added_time=item_data.get('added_time')
+                        )
+                    # Restore optional fields
+                    try:
+                        item.total_size = int(item_data.get('total_size', 0) or 0)
+                        item.avg_width = float(item_data.get('avg_width', 0.0) or 0.0)
+                        item.avg_height = float(item_data.get('avg_height', 0.0) or 0.0)
+                        item.max_width = float(item_data.get('max_width', 0.0) or 0.0)
+                        item.max_height = float(item_data.get('max_height', 0.0) or 0.0)
+                        item.min_width = float(item_data.get('min_width', 0.0) or 0.0)
+                        item.min_height = float(item_data.get('min_height', 0.0) or 0.0)
+                        item.scan_complete = bool(item_data.get('scan_complete', False))
+                        item.uploaded_bytes = int(item_data.get('uploaded_bytes', 0) or 0)
+                        item.final_kibps = float(item_data.get('final_kibps', 0.0) or 0.0)
+                        # uploaded_files may be a list (from store)
+                        uploaded_files = set(item_data.get('uploaded_files', []))
+                        if uploaded_files:
+                            item.uploaded_files = uploaded_files
+                        uploaded_images_data = item_data.get('uploaded_images_data', [])
+                        if uploaded_images_data:
+                            item.uploaded_images_data = uploaded_images_data
+                    except Exception:
+                        pass
+                    self._next_order = max(self._next_order, item.insertion_order + 1)
+                    self.items[path] = item
                 else:
                     print(f"DEBUG: Skipped item (path doesn't exist): {path}")
         
-        print(f"DEBUG: Loaded {len(self.items)} items total")
+        
     
     def clear_persistent_queue(self):
         """Clear persistent queue storage (for testing)"""
         self.settings.remove("queue_items")
         self.settings.sync()
-        print("DEBUG: Cleared persistent queue storage")
+        
         
     def add_item(self, path: str, name: Optional[str] = None, template_name: str = "default") -> bool:
         """Add a gallery to the queue"""
@@ -725,7 +781,7 @@ class QueueManager:
                 try:
                     total_size += os.path.getsize(fp)
                     # Sample a limited number of images for dimensions to keep scan fast
-                    if sampled < 25:
+                    if sampled < 10:
                         from PIL import Image
                         with Image.open(fp) as img:
                             w, h = img.size
@@ -840,15 +896,23 @@ class QueueManager:
     def renumber_insertion_orders(self):
         """Renumber insertion orders to be sequential (1, 2, 3, ...)"""
         with QMutexLocker(self.mutex):
-            # Sort items by current insertion order to maintain relative order
-            sorted_items = sorted(self.items.values(), key=lambda x: x.insertion_order)
-            
-            # Renumber starting from 1
-            for i, item in enumerate(sorted_items, 1):
-                item.insertion_order = i
-            
-            # Update the next order counter
-            self._next_order = len(self.items) + 1
+            self._renumber_insertion_orders_locked()
+
+    def _renumber_insertion_orders_locked(self):
+        """Internal: caller must hold self.mutex. Renumber and persist order."""
+        # Sort items by current insertion order to maintain relative order
+        sorted_items = sorted(self.items.values(), key=lambda x: x.insertion_order)
+        # Renumber starting from 1
+        for i, item in enumerate(sorted_items, 1):
+            item.insertion_order = i
+        # Update the next order counter
+        self._next_order = len(self.items) + 1
+        # Persist ordering asynchronously
+        try:
+            ordered_paths = [it.path for it in sorted_items]
+            self.store._executor.submit(self.store.update_insertion_orders, ordered_paths)
+        except Exception:
+            pass
     
     def clear_completed(self):
         """Remove completed items"""
@@ -862,9 +926,13 @@ class QueueManager:
             
             # Renumber remaining items (don't save persistent queue yet)
             if to_remove:
-                self.renumber_insertion_orders()
-            
-            return len(to_remove)
+                self._renumber_insertion_orders_locked()
+        # Purge from SQLite in background (by status is simple and safe)
+        try:
+            self.store._executor.submit(self.store.delete_by_status, ["completed", "failed"])
+        except Exception:
+            pass
+        return len(to_remove)
     
     def remove_items(self, paths: List[str]) -> int:
         """Remove specific items from the queue"""
@@ -901,8 +969,12 @@ class QueueManager:
             if removed_count > 0:
                 self.renumber_insertion_orders()
                 #print(f"DEBUG: Renumbered items after deletion")
-            
-            return removed_count
+        # Purge from SQLite in background
+        try:
+            self.store._executor.submit(self.store.delete_by_paths, list(paths))
+        except Exception:
+            pass
+        return removed_count
     
     def _force_add_item(self, path: str, name: str, template_name: str = "default"):
         """Force add an item (for duplicate handling)"""
@@ -992,34 +1064,48 @@ class GalleryTableWidget(QTableWidget):
         self.setSortingEnabled(True)
         self.horizontalHeader().setSortIndicatorShown(False)  # No initial sort indicator
         
-        # Styling - consolidated single stylesheet
-        self.setStyleSheet("""
-            QTableWidget {
-                gridline-color: rgba(128, 128, 128, 0.1);
-                alternate-background-color: rgba(240, 240, 240, 0.3);
-                border: 1px solid #ccc;
+        # Styling - theme-aware stylesheet for light/dark modes
+        try:
+            pal = self.palette()
+            bg = pal.window().color()
+            is_dark = (0.2126 * bg.redF() + 0.7152 * bg.greenF() + 0.0722 * bg.blueF()) < 0.5
+        except Exception:
+            is_dark = False
+        table_bg = "#1e1e1e" if is_dark else "white"
+        gridline = "rgba(255, 255, 255, 0.08)" if is_dark else "rgba(128, 128, 128, 0.1)"
+        alt_bg = "rgba(64, 64, 64, 0.35)" if is_dark else "rgba(240, 240, 240, 0.3)"
+        border = "#444444" if is_dark else "#cccccc"
+        header_bg = "#333333" if is_dark else "#f0f0f0"
+        header_hover = "#3a3a3a" if is_dark else "#e0e0e0"
+        header_bottom = "#3498db" if not is_dark else "#2d6ea3"
+        selected_bg = "#1f6aa5" if is_dark else "#2980b9"
+        self.setStyleSheet(f"""
+            QTableWidget {{
+                gridline-color: {gridline};
+                alternate-background-color: {alt_bg};
+                border: 1px solid {border};
                 border-radius: 4px;
-                background-color: white;
-            }
-            QTableWidget::item {
+                background-color: {table_bg};
+            }}
+            QTableWidget::item {{
                 padding: 0px 4px;
                 border: none;
-            }
-            QTableWidget::item:selected {
-                background-color: #2980b9;
+            }}
+            QTableWidget::item:selected {{
+                background-color: {selected_bg};
                 color: white;
-            }
-            QHeaderView::section {
-                background-color: #f0f0f0;
+            }}
+            QHeaderView::section {{
+                background-color: {header_bg};
                 padding: 2px 4px; /* narrower header padding */
                 border: none;
                 font-weight: bold;
                 font-size: 12px; /* smaller header text */
-                border-bottom: 2px solid #3498db;
-            }
-            QHeaderView::section:hover {
-                background-color: #e0e0e0;
-            }
+                border-bottom: 2px solid {header_bottom};
+            }}
+            QHeaderView::section:hover {{
+                background-color: {header_hover};
+            }}
         """)
         self.setShowGrid(True)
         self.setAlternatingRowColors(True)
@@ -1554,6 +1640,22 @@ class ActionButtonWidget(QWidget):
         self.cancel_btn = QPushButton("Cancel")
         self.cancel_btn.setFixedSize(65, 25)
         self.cancel_btn.setVisible(False)
+        try:
+            assets_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets")
+            def _make_icon(names: list[str], fallback_std: Optional[QStyle.StandardPixmap] = None) -> QIcon:
+                for name in names:
+                    p = os.path.join(assets_dir, name)
+                    if os.path.exists(p):
+                        return QIcon(p)
+                return self.style().standardIcon(fallback_std) if fallback_std is not None else QIcon()
+            # Use pause.png as requested
+            self.cancel_btn.setIcon(_make_icon(["pause.png"], QStyle.StandardPixmap.SP_MediaPause))
+            self.cancel_btn.setIconSize(QSize(16, 16))
+            self.cancel_btn.setText("")
+            self.cancel_btn.setToolTip("Pause/Cancel queued item")
+            self.cancel_btn.setStyleSheet(icon_btn_style)
+        except Exception:
+            pass
         #self.cancel_btn.setStyleSheet("""
         #    QPushButton {
         #        background-color: #f7c370;
@@ -1649,6 +1751,19 @@ class CredentialSetupDialog(QDialog):
         self.resize(500, 430)
         
         layout = QVBoxLayout(self)
+
+        # Theme-aware colors
+        try:
+            pal = self.palette()
+            bg = pal.window().color()
+            # Simple luminance check
+            is_dark = (0.2126 * bg.redF() + 0.7152 * bg.greenF() + 0.0722 * bg.blueF()) < 0.5
+        except Exception:
+            is_dark = False
+        self._muted_color = "#aaaaaa" if is_dark else "#666666"
+        self._text_color = "#dddddd" if is_dark else "#333333"
+        self._panel_bg = "#2e2e2e" if is_dark else "#f0f8ff"
+        self._panel_border = "#444444" if is_dark else "#cccccc"
         
         # Info text
         info_text = QLabel(
@@ -1666,7 +1781,7 @@ class CredentialSetupDialog(QDialog):
             
         )
         info_text.setWordWrap(True)
-        info_text.setStyleSheet("padding: 10px; background-color: #f0f8ff; border: 1px solid #ccc; border-radius: 5px;")
+        info_text.setStyleSheet(f"padding: 10px; background-color: {self._panel_bg}; border: 1px solid {self._panel_border}; border-radius: 5px; color: {self._text_color};")
         layout.addWidget(info_text)
         
 
@@ -1679,7 +1794,7 @@ class CredentialSetupDialog(QDialog):
         username_status_layout = QHBoxLayout()
         username_status_layout.addWidget(QLabel("Username: "))
         self.username_status_label = QLabel("NOT SET")
-        self.username_status_label.setStyleSheet("color: #666; font-style: italic;")
+        self.username_status_label.setStyleSheet(f"color: {self._muted_color}; font-style: italic;")
         username_status_layout.addWidget(self.username_status_label)
         username_status_layout.addStretch()
         self.username_change_btn = QPushButton("Set")
@@ -1698,7 +1813,7 @@ class CredentialSetupDialog(QDialog):
         password_status_layout = QHBoxLayout()
         password_status_layout.addWidget(QLabel("Password: "))
         self.password_status_label = QLabel("NOT SET")
-        self.password_status_label.setStyleSheet("color: #666; font-style: italic;")
+        self.password_status_label.setStyleSheet(f"color: {self._muted_color}; font-style: italic;")
         password_status_layout.addWidget(self.password_status_label)
         password_status_layout.addStretch()
         self.password_change_btn = QPushButton("Set")
@@ -1717,7 +1832,7 @@ class CredentialSetupDialog(QDialog):
         api_key_status_layout = QHBoxLayout()
         api_key_status_layout.addWidget(QLabel("API Key: "))
         self.api_key_status_label = QLabel("NOT SET")
-        self.api_key_status_label.setStyleSheet("color: #666; font-style: italic;")
+        self.api_key_status_label.setStyleSheet(f"color: {self._muted_color}; font-style: italic;")
         api_key_status_layout.addWidget(self.api_key_status_label)
         api_key_status_layout.addStretch()
         self.api_key_change_btn = QPushButton("Set")
@@ -1736,7 +1851,7 @@ class CredentialSetupDialog(QDialog):
         cookies_status_layout = QHBoxLayout()
         cookies_status_layout.addWidget(QLabel("Firefox cookies: "))
         self.cookies_status_label = QLabel("Unknown")
-        self.cookies_status_label.setStyleSheet("color: #666; font-style: italic;")
+        self.cookies_status_label.setStyleSheet(f"color: {self._muted_color}; font-style: italic;")
         cookies_status_layout.addWidget(self.cookies_status_label)
         cookies_status_layout.addStretch()
         self.cookies_enable_btn = QPushButton("Enable")
@@ -2490,10 +2605,226 @@ class LogViewerDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("Log Viewer")
         self.setModal(False)
-        self.resize(900, 700)
+        self.resize(1000, 720)
+
+        self.follow_enabled = True
 
         layout = QVBoxLayout(self)
 
+        # Prepare logger and settings (used by both tabs)
+        try:
+            from imxup_logging import get_logger as _get_logger
+            self._logger = _get_logger()
+            settings = self._logger.get_settings()
+        except Exception:
+            self._logger = None
+            settings = {
+                'enabled': True,
+                'rotation': 'daily',
+                'backup_count': 7,
+                'compress': True,
+                'max_bytes': 10485760,
+                'level_file': 'INFO',
+                'level_gui': 'INFO',
+            }
+
+        # Build Settings tab content
+        header = QGroupBox("Log Settings")
+        grid = QGridLayout(header)
+
+        self.chk_enabled = QCheckBox("Enable file logging")
+        self.chk_enabled.setChecked(bool(settings.get('enabled', True)))
+        grid.addWidget(self.chk_enabled, 0, 0, 1, 2)
+
+        self.cmb_rotation = QComboBox()
+        self.cmb_rotation.addItems(["daily", "size"])
+        try:
+            idx = ["daily", "size"].index(str(settings.get('rotation', 'daily')).lower())
+        except Exception:
+            idx = 0
+        self.cmb_rotation.setCurrentIndex(idx)
+        grid.addWidget(QLabel("Rotation:"), 1, 0)
+        grid.addWidget(self.cmb_rotation, 1, 1)
+
+        self.spn_backup = QSpinBox()
+        self.spn_backup.setRange(0, 3650)
+        self.spn_backup.setValue(int(settings.get('backup_count', 7)))
+        grid.addWidget(QLabel("Backups to keep:"), 1, 2)
+        grid.addWidget(self.spn_backup, 1, 3)
+
+        self.chk_compress = QCheckBox("Compress rotated logs (.gz)")
+        self.chk_compress.setChecked(bool(settings.get('compress', True)))
+        grid.addWidget(self.chk_compress, 2, 0, 1, 2)
+
+        self.spn_max_bytes = QSpinBox()
+        self.spn_max_bytes.setRange(1024, 1024 * 1024 * 1024)
+        self.spn_max_bytes.setSingleStep(1024 * 1024)
+        self.spn_max_bytes.setValue(int(settings.get('max_bytes', 10485760)))
+        grid.addWidget(QLabel("Max size (bytes, size mode):"), 2, 2)
+        grid.addWidget(self.spn_max_bytes, 2, 3)
+
+        self.cmb_gui_level = QComboBox()
+        levels = ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
+        self.cmb_gui_level.addItems(levels)
+        try:
+            self.cmb_gui_level.setCurrentIndex(levels.index(str(settings.get('level_gui', 'INFO')).upper()))
+        except Exception:
+            pass
+        grid.addWidget(QLabel("GUI level:"), 3, 0)
+        grid.addWidget(self.cmb_gui_level, 3, 1)
+
+        self.cmb_file_level = QComboBox()
+        self.cmb_file_level.addItems(levels)
+        try:
+            self.cmb_file_level.setCurrentIndex(levels.index(str(settings.get('level_file', 'INFO')).upper()))
+        except Exception:
+            pass
+        grid.addWidget(QLabel("File level:"), 3, 2)
+        grid.addWidget(self.cmb_file_level, 3, 3)
+
+        buttons_row = QHBoxLayout()
+        self.btn_apply = QPushButton("Apply Settings")
+        self.btn_open_dir = QPushButton("Open Logs Folder")
+        buttons_row.addWidget(self.btn_apply)
+        buttons_row.addWidget(self.btn_open_dir)
+        grid.addLayout(buttons_row, 4, 0, 1, 4)
+
+        # Category toggles section
+        cats = [
+            ("uploads", "Uploads"),
+            ("auth", "Authentication"),
+            ("network", "Network"),
+            ("ui", "UI"),
+            ("queue", "Queue"),
+            ("general", "General"),
+        ]
+        row = 5
+        for cat_key, cat_label in cats:
+            try:
+                gui_key = f"cats_gui_{cat_key}"
+                file_key = f"cats_file_{cat_key}"
+                chk_gui = QCheckBox(f"Show {cat_label} in GUI log")
+                chk_file = QCheckBox(f"Write {cat_label} to file log")
+                chk_gui.setObjectName(gui_key)
+                chk_file.setObjectName(file_key)
+                chk_gui.setChecked(bool(settings.get(gui_key, True)))
+                chk_file.setChecked(bool(settings.get(file_key, True)))
+                grid.addWidget(chk_gui, row, 0, 1, 2)
+                grid.addWidget(chk_file, row, 2, 1, 2)
+                row += 1
+            except Exception:
+                pass
+
+        # Upload success modes
+        grid.addWidget(QLabel("Upload success detail (GUI):"), row, 0)
+        self.cmb_gui_upload_mode = QComboBox()
+        self.cmb_gui_upload_mode.addItems(["none", "file", "gallery", "both"])
+        try:
+            self.cmb_gui_upload_mode.setCurrentText(str(settings.get("upload_success_mode_gui", "gallery")))
+        except Exception:
+            pass
+        grid.addWidget(self.cmb_gui_upload_mode, row, 1)
+        grid.addWidget(QLabel("Upload success detail (File):"), row, 2)
+        self.cmb_file_upload_mode = QComboBox()
+        self.cmb_file_upload_mode.addItems(["none", "file", "gallery", "both"])
+        try:
+            self.cmb_file_upload_mode.setCurrentText(str(settings.get("upload_success_mode_file", "gallery")))
+        except Exception:
+            pass
+        grid.addWidget(self.cmb_file_upload_mode, row, 3)
+        row += 1
+
+        def on_apply():
+            if not self._logger:
+                return
+            try:
+                # Collect category toggles
+                cat_kwargs = {}
+                for cat_key, _label in cats:
+                    gui_key = f"cats_gui_{cat_key}"
+                    file_key = f"cats_file_{cat_key}"
+                    w_gui = header.findChild(QCheckBox, gui_key)
+                    w_file = header.findChild(QCheckBox, file_key)
+                    if w_gui is not None:
+                        cat_kwargs[gui_key] = w_gui.isChecked()
+                    if w_file is not None:
+                        cat_kwargs[file_key] = w_file.isChecked()
+                self._logger.update_settings(
+                    enabled=self.chk_enabled.isChecked(),
+                    rotation=self.cmb_rotation.currentText().lower(),
+                    backup_count=self.spn_backup.value(),
+                    compress=self.chk_compress.isChecked(),
+                    max_bytes=self.spn_max_bytes.value(),
+                    level_gui=self.cmb_gui_level.currentText(),
+                    level_file=self.cmb_file_level.currentText(),
+                    upload_success_mode_gui=self.cmb_gui_upload_mode.currentText(),
+                    upload_success_mode_file=self.cmb_file_upload_mode.currentText(),
+                    **cat_kwargs,
+                )
+                # Reload log content to reflect format changes
+                try:
+                    self.log_view.setPlainText(self._logger.read_current_log(tail_bytes=2 * 1024 * 1024))
+                except Exception:
+                    pass
+            except Exception:
+                pass
+
+        def on_open_dir():
+            try:
+                from PyQt6.QtGui import QDesktopServices
+                from PyQt6.QtCore import QUrl
+                logs_dir = self._logger.get_logs_dir() if self._logger else None
+                if logs_dir and os.path.exists(logs_dir):
+                    QDesktopServices.openUrl(QUrl.fromLocalFile(logs_dir))
+            except Exception:
+                pass
+
+        self.btn_apply.clicked.connect(on_apply)
+        self.btn_open_dir.clicked.connect(on_open_dir)
+
+        # Build Logs tab
+        logs_container = QWidget()
+        logs_vbox = QVBoxLayout(logs_container)
+
+        # Toolbar row
+        toolbar = QHBoxLayout()
+        self.cmb_file_select = QComboBox()
+        self.cmb_tail = QComboBox()
+        self.cmb_tail.addItems(["128 KB", "512 KB", "2 MB", "Full"])
+        self.cmb_tail.setCurrentIndex(2)
+        self.chk_follow = QCheckBox("Follow")
+        self.chk_follow.setChecked(True)
+        self.btn_refresh = QPushButton("Refresh")
+        self.btn_clear = QPushButton("Clear View")
+        self.find_input = QLineEdit()
+        self.find_input.setPlaceholderText("Find...")
+        self.btn_find = QPushButton("Find Next")
+        toolbar.addWidget(QLabel("File:"))
+        toolbar.addWidget(self.cmb_file_select, 2)
+        toolbar.addWidget(QLabel("Tail:"))
+        toolbar.addWidget(self.cmb_tail)
+        toolbar.addStretch()
+        toolbar.addWidget(self.chk_follow)
+        toolbar.addWidget(self.btn_refresh)
+        toolbar.addWidget(self.btn_clear)
+        toolbar.addWidget(self.find_input, 1)
+        toolbar.addWidget(self.btn_find)
+        logs_vbox.addLayout(toolbar)
+
+        # Filters row (separate line): 1 x 6
+        self._filters_row: Dict[str, QCheckBox] = {}
+        filters_bar = QHBoxLayout()
+        filters_bar.addWidget(QLabel("View:"))
+        for cat_key, cat_label in cats:
+            cb = QCheckBox(cat_label)
+            cb.setChecked(True)
+            self._filters_row[cat_key] = cb
+            filters_bar.addWidget(cb)
+        filters_bar.addStretch()
+        logs_vbox.addLayout(filters_bar)
+
+        # Body: log view only (filters moved to toolbar)
+        body_hbox = QHBoxLayout()
         self.log_view = QPlainTextEdit()
         self.log_view.setReadOnly(True)
         try:
@@ -2501,9 +2832,183 @@ class LogViewerDialog(QDialog):
         except Exception:
             pass
         self.log_view.setFont(QFont("Consolas", 10))
-        if initial_text:
-            self.log_view.setPlainText(initial_text)
-        layout.addWidget(self.log_view)
+        body_hbox.addWidget(self.log_view, 1)
+        logs_vbox.addLayout(body_hbox)
+
+        # Tabs: Logs | Settings
+        tabs = QTabWidget(self)
+        # Settings tab
+        settings_container = QWidget()
+        sc_vbox = QVBoxLayout(settings_container)
+        sc_vbox.addWidget(header)
+        sc_vbox.addStretch()
+        tabs.addTab(logs_container, "Logs")
+        tabs.addTab(settings_container, "Log Settings")
+        layout.addWidget(tabs)
+
+        # Populate initial log content via loader (with tail selection default)
+        def _tail_bytes_from_choice(text: str) -> int | None:
+            t = (text or "").lower()
+            if "full" in t:
+                return None
+            if "128" in t:
+                return 128 * 1024
+            if "512" in t:
+                return 512 * 1024
+            return 2 * 1024 * 1024
+
+        def _normalize_dates(block: str) -> str:
+            if not block:
+                return ""
+            try:
+                from datetime import datetime as _dt
+                today = _dt.now().strftime("%Y-%m-%d ")
+                lines = block.splitlines()
+                out = []
+                for line in lines:
+                    if len(line) >= 8 and line[2:3] == ":" and line[5:6] == ":":
+                        out.append(today + line)
+                    else:
+                        out.append(line)
+                return "\n".join(out)
+            except Exception:
+                return block
+
+        def _load_logs_list():
+            self.cmb_file_select.clear()
+            self.cmb_file_select.addItem("Current (imxup.log)", userData="__current__")
+            try:
+                if self._logger:
+                    logs_dir = self._logger.get_logs_dir()
+                    files = []
+                    for name in os.listdir(logs_dir):
+                        if name.startswith("imxup.log"):
+                            files.append(name)
+                    files.sort(reverse=True)
+                    for name in files:
+                        self.cmb_file_select.addItem(name, userData=os.path.join(logs_dir, name))
+            except Exception:
+                pass
+
+        def _read_selected_file() -> str:
+            # Read according to file selection and tail size
+            tail = _tail_bytes_from_choice(self.cmb_tail.currentText())
+            try:
+                if self.cmb_file_select.currentData() == "__current__" and self._logger:
+                    return self._logger.read_current_log(tail_bytes=tail) or ""
+                # Else fallback to reading the selected path
+                path = self.cmb_file_select.currentData()
+                if not path:
+                    return ""
+                if str(path).endswith(".gz"):
+                    import gzip
+                    with gzip.open(path, "rb") as f:
+                        data = f.read()
+                    if tail:
+                        data = data[-int(tail):]
+                    return data.decode("utf-8", errors="replace")
+                else:
+                    if tail and os.path.exists(path):
+                        size = os.path.getsize(path)
+                        with open(path, "rb") as f:
+                            if size > tail:
+                                f.seek(-tail, os.SEEK_END)
+                            data = f.read()
+                        return data.decode("utf-8", errors="replace")
+                    with open(path, "r", encoding="utf-8", errors="replace") as f:
+                        return f.read()
+            except Exception:
+                return ""
+
+        def _apply_initial_content():
+            try:
+                block = initial_text or _read_selected_file()
+            except Exception:
+                block = initial_text
+            norm = _normalize_dates(block)
+            self.log_view.setPlainText(norm)
+
+        _load_logs_list()
+        _apply_initial_content()
+
+        # Wire toolbar actions
+        def _strip_datetime_prefix(s: str) -> str:
+            try:
+                t = s.lstrip()
+                # YYYY-MM-DD HH:MM:SS
+                if len(t) >= 19 and t[4] == '-' and t[7] == '-' and t[10] == ' ' and t[13] == ':' and t[16] == ':':
+                    return t[19:].lstrip()
+                # HH:MM:SS
+                if len(t) >= 8 and t[2] == ':' and t[5] == ':':
+                    return t[8:].lstrip()
+                return s
+            except Exception:
+                return s
+
+        def _filter_block_by_view_cats(block: str) -> str:
+            if not block:
+                return ""
+            try:
+                lines = block.splitlines()
+                out = []
+                for line in lines:
+                    # Extract token after optional date/time prefix
+                    head = _strip_datetime_prefix(line)
+                    cat = "general"
+                    if head.startswith("[") and "]" in head:
+                        token = head[1:head.find("]")]
+                        cat = token.split(":")[0] or "general"
+                    if cat in self._filters_row and not self._filters_row[cat].isChecked():
+                        continue
+                    out.append(line)
+                return "\n".join(out)
+            except Exception:
+                return block
+
+        def on_refresh():
+            text = _normalize_dates(_read_selected_file())
+            text = _filter_block_by_view_cats(text)
+            self.log_view.setPlainText(text)
+
+        self.btn_refresh.clicked.connect(on_refresh)
+        self.cmb_file_select.currentIndexChanged.connect(on_refresh)
+        self.cmb_tail.currentIndexChanged.connect(on_refresh)
+
+        # Changing view filters should refilter the current view
+        def on_filter_changed(_=None):
+            # Re-apply filtering to current content by simulating a refresh
+            on_refresh()
+        # Bind filters row checkboxes
+        for _key, cb in self._filters_row.items():
+            try:
+                cb.toggled.connect(on_filter_changed)
+            except Exception:
+                pass
+
+        def on_clear():
+            self.log_view.clear()
+        self.btn_clear.clicked.connect(on_clear)
+
+        def on_follow_toggle(_=None):
+            self.follow_enabled = self.chk_follow.isChecked()
+        self.chk_follow.toggled.connect(on_follow_toggle)
+
+        # Find functionality
+        def on_find_next():
+            pattern = (self.find_input.text() or "").strip()
+            if not pattern:
+                return
+            doc: QTextDocument = self.log_view.document()
+            cursor = self.log_view.textCursor()
+            # Move one char to avoid matching the same selection
+            if cursor.hasSelection():
+                cursor.setPosition(cursor.selectionEnd())
+            found = doc.find(pattern, cursor)
+            if not found.isNull():
+                self.log_view.setTextCursor(found)
+                self.log_view.ensureCursorVisible()
+        self.btn_find.clicked.connect(on_find_next)
+        self.find_input.returnPressed.connect(on_find_next)
 
         button_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
         button_box.rejected.connect(self.reject)
@@ -2512,7 +3017,36 @@ class LogViewerDialog(QDialog):
 
     def append_message(self, message: str):
         try:
-            self.log_view.appendPlainText(message)
+            # Determine category like [uploads], [uploads:file], [auth], etc.
+            category = "general"
+            head = message
+            try:
+                parts = message.split(" ", 1)
+                if len(parts) > 1 and parts[0].count(":") == 2:
+                    head = parts[1]
+                if head.startswith("[") and "]" in head:
+                    token = head[1:head.find("]")]
+                    category = token.split(":")[0] or "general"
+            except Exception:
+                pass
+            # Apply viewer-only filters
+            # Apply viewer-only filters (toolbar row)
+            if category in getattr(self, '_filters_row', {}) and not self._filters_row[category].isChecked():
+                return
+            # Ensure date is visible in the log viewer if time-only
+            from datetime import datetime as _dt
+            if isinstance(message, str) and len(message) >= 9 and message[2:3] == ":":
+                today = _dt.now().strftime("%Y-%m-%d ")
+                line = today + message
+            else:
+                line = message
+            # Append and optionally follow
+            self.log_view.appendPlainText(line)
+            if self.follow_enabled:
+                cursor = self.log_view.textCursor()
+                cursor.movePosition(cursor.MoveOperation.End)
+                self.log_view.setTextCursor(cursor)
+                self.log_view.ensureCursorVisible()
         except Exception:
             pass
 
@@ -3367,13 +3901,25 @@ class ImxUploadGUI(QMainWindow):
             self.stats_total_galleries_text_label,
             self.stats_total_images_text_label,
         ):
-            lbl.setStyleSheet("color: #333;")
+            try:
+                pal = self.palette()
+                bg = pal.window().color()
+                is_dark = (0.2126 * bg.redF() + 0.7152 * bg.greenF() + 0.0722 * bg.blueF()) < 0.5
+            except Exception:
+                is_dark = False
+            lbl.setStyleSheet(f"color: {'#dddddd' if is_dark else '#333333'};")
         for lbl in (
             self.stats_unnamed_value_label,
             self.stats_total_galleries_value_label,
             self.stats_total_images_value_label,
         ):
-            lbl.setStyleSheet("color: #333;")
+            try:
+                pal = self.palette()
+                bg = pal.window().color()
+                is_dark = (0.2126 * bg.redF() + 0.7152 * bg.greenF() + 0.0722 * bg.blueF()) < 0.5
+            except Exception:
+                is_dark = False
+            lbl.setStyleSheet(f"color: {'#eeeeee' if is_dark else '#333333'};")
             try:
                 lbl.setFont(QFont("Consolas", 10))
             except Exception:
@@ -3392,8 +3938,12 @@ class ImxUploadGUI(QMainWindow):
         #stats_layout.addWidget(self.stats_current_speed_label, 1, 1)
         #stats_layout.addWidget(self.stats_fastest_speed_label, 2, 1)
         
-        # Keep bottom short like the original progress box; do not expand horizontally
+        # Keep bottom short like the original progress box; fix width to avoid jitter
         stats_group.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        try:
+            stats_group.setFixedWidth(260)
+        except Exception:
+            pass
         stats_group.setMinimumWidth(160)
         stats_group.setMaximumHeight(100)
 
@@ -3420,13 +3970,25 @@ class ImxUploadGUI(QMainWindow):
             self.speed_fastest_text_label,
             self.speed_transferred_text_label,
         ):
-            lbl.setStyleSheet("color: #333;")
+            try:
+                pal = self.palette()
+                bg = pal.window().color()
+                is_dark = (0.2126 * bg.redF() + 0.7152 * bg.greenF() + 0.0722 * bg.blueF()) < 0.5
+            except Exception:
+                is_dark = False
+            lbl.setStyleSheet(f"color: {'#dddddd' if is_dark else '#333333'};")
         for lbl in (
             self.speed_current_value_label,
             self.speed_fastest_value_label,
             self.speed_transferred_value_label,
         ):
-            lbl.setStyleSheet("color: #333;")
+            try:
+                pal = self.palette()
+                bg = pal.window().color()
+                is_dark = (0.2126 * bg.redF() + 0.7152 * bg.greenF() + 0.0722 * bg.blueF()) < 0.5
+            except Exception:
+                is_dark = False
+            lbl.setStyleSheet(f"color: {'#eeeeee' if is_dark else '#333333'};")
             try:
                 lbl.setFont(QFont("Consolas", 10))
             except Exception:
@@ -3450,9 +4012,12 @@ class ImxUploadGUI(QMainWindow):
         speed_layout.addWidget(self.speed_transferred_value_label, 2, 1)
 
         
-        # Keep bottom short like the original progress box; do not expand horizontally
+        # Keep bottom short like the original progress box; fix width to avoid jitter
         speed_group.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
-        speed_group.setMinimumWidth(160)
+        try:
+            speed_group.setFixedWidth(200)
+        except Exception:
+            pass
         speed_group.setMaximumHeight(100)
         bottom_layout.addWidget(speed_group, 1)
 
@@ -3529,11 +4094,11 @@ class ImxUploadGUI(QMainWindow):
         if not api_key_is_set():
             dialog = CredentialSetupDialog(self)
             if dialog.exec() == QDialog.DialogCode.Accepted:
-                self.add_log_message(f"{timestamp()} Credentials saved securely")
+                self.add_log_message(f"{timestamp()} [auth] Credentials saved securely")
             else:
-                self.add_log_message(f"{timestamp()} Credential setup cancelled")
+                self.add_log_message(f"{timestamp()} [auth] Credential setup cancelled")
         else:
-            self.add_log_message(f"{timestamp()} API key found; skipping credential setup dialog")
+            self.add_log_message(f"{timestamp()} [auth] API key found; skipping credential setup dialog")
     
     def manage_templates(self):
         """Open template management dialog"""
@@ -3554,10 +4119,19 @@ class ImxUploadGUI(QMainWindow):
 
             vbox = QVBoxLayout(dialog)
 
-            # Informational section (match credentials dialog styling)
+            # Informational section (theme-aware for readability)
             info_text = QLabel()
             info_text.setWordWrap(True)
-            info_text.setStyleSheet("padding: 10px; background-color: #f0f8ff; border: 1px solid #ccc; border-radius: 5px;")
+            try:
+                pal = dialog.palette()
+                bg = pal.window().color()
+                is_dark = (0.2126 * bg.redF() + 0.7152 * bg.greenF() + 0.0722 * bg.blueF()) < 0.5
+            except Exception:
+                is_dark = False
+            panel_bg = "#2e2e2e" if is_dark else "#f0f8ff"
+            panel_border = "#444444" if is_dark else "#cccccc"
+            text_color = "#dddddd" if is_dark else "#333333"
+            info_text.setStyleSheet(f"padding: 10px; background-color: {panel_bg}; border: 1px solid {panel_border}; border-radius: 5px; color: {text_color};")
             vbox.addWidget(info_text)
 
             # Options group
@@ -3743,11 +4317,12 @@ class ImxUploadGUI(QMainWindow):
             self.worker.gallery_completed.connect(self.on_gallery_completed)
             self.worker.gallery_failed.connect(self.on_gallery_failed)
             self.worker.gallery_exists.connect(self.on_gallery_exists)
+            self.worker.gallery_renamed.connect(self.on_gallery_renamed)
             self.worker.log_message.connect(self.add_log_message)
             self.worker.bandwidth_updated.connect(self.on_bandwidth_updated)
             self.worker.queue_stats.connect(self.on_queue_stats)
             self.worker.start()
-            self.add_log_message(f"{timestamp()} Worker thread started")
+            self.add_log_message(f"{timestamp()} [general] Worker thread started")
             # Propagate auto-rename preference to worker
             try:
                 self.worker.auto_rename_enabled = self.auto_rename_check.isChecked()
@@ -3818,7 +4393,7 @@ class ImxUploadGUI(QMainWindow):
             result = self.queue_manager.add_item(path, template_name=template_name)
             if result == True:
                 added_count += 1
-                self.add_log_message(f"{timestamp()} Added to queue: {os.path.basename(path)}")
+                self.add_log_message(f"{timestamp()} [queue] Added to queue: {os.path.basename(path)}")
             elif result == "duplicate":
                 # Handle duplicate gallery
                 gallery_name = sanitize_gallery_name(os.path.basename(path))
@@ -3838,11 +4413,11 @@ class ImxUploadGUI(QMainWindow):
                     # Force add the item
                     self.queue_manager._force_add_item(path, gallery_name, template_name)
                     added_count += 1
-                    self.add_log_message(f"{timestamp()} Added to queue (user confirmed): {os.path.basename(path)}")
+                    self.add_log_message(f"{timestamp()} [queue] Added to queue (user confirmed): {os.path.basename(path)}")
                 else:
-                    self.add_log_message(f"{timestamp()} Skipped: {os.path.basename(path)} (user cancelled)")
+                    self.add_log_message(f"{timestamp()} [queue] Skipped: {os.path.basename(path)} (user cancelled)")
             else:
-                self.add_log_message(f"{timestamp()} Failed to add: {os.path.basename(path)} (no images or already in queue)")
+                self.add_log_message(f"{timestamp()} [queue] Failed to add: {os.path.basename(path)} (no images or already in queue)")
         
         if added_count > 0:
             self.update_queue_display()
@@ -3860,9 +4435,28 @@ class ImxUploadGUI(QMainWindow):
     def update_queue_display(self):
         """Update the gallery table display"""
         items = self.queue_manager.get_all_items()
-        print(f"DEBUG: update_queue_display called with {len(items)} items")
-        print(f"DEBUG: Item paths: {[item.path for item in items]}")
+        # Minimize UI stall for large refreshes
+        try:
+            prev_updates_enabled = self.gallery_table.updatesEnabled()
+            prev_sorting_enabled = self.gallery_table.isSortingEnabled()
+            self.gallery_table.setUpdatesEnabled(False)
+            self.gallery_table.setSortingEnabled(False)
+            self.gallery_table.blockSignals(True)
+        except Exception:
+            prev_updates_enabled = True
+            prev_sorting_enabled = False
         
+        
+        # Determine theme for contrast-aware rendering
+        try:
+            pal = self.palette()
+            _bg = pal.window().color()
+            _is_dark_mode = (0.2126 * _bg.redF() + 0.7152 * _bg.greenF() + 0.0722 * _bg.blueF()) < 0.5
+        except Exception:
+            _is_dark_mode = False
+        _light_fg = QColor(255, 255, 255)
+        _dark_fg = QColor(0, 0, 0)
+
         # Preserve scroll position
         scrollbar = self.gallery_table.verticalScrollBar()
         scroll_position = scrollbar.value()
@@ -3883,7 +4477,7 @@ class ImxUploadGUI(QMainWindow):
         # Clear the table first
         self.gallery_table.clearContents()
         self.gallery_table.setRowCount(len(items))
-        print(f"DEBUG: Table cleared and set to {len(items)} rows")
+        
         
         # Populate the table with current items
         # Load pending-rename map once for this refresh
@@ -3938,9 +4532,9 @@ class ImxUploadGUI(QMainWindow):
             # Color code status - use stronger color application
             if item.status == "completed":
                 status_item.setBackground(QColor(46, 204, 113))  # Green
-                status_item.setForeground(QColor(0, 0, 0))  # Black text
+                status_item.setForeground(_dark_fg if not _is_dark_mode else _light_fg)
                 status_item.setData(Qt.ItemDataRole.BackgroundRole, QColor(46, 204, 113))
-                status_item.setData(Qt.ItemDataRole.ForegroundRole, QColor(0, 0, 0))
+                status_item.setData(Qt.ItemDataRole.ForegroundRole, _dark_fg if not _is_dark_mode else _light_fg)
             elif item.status == "failed":
                 status_item.setBackground(QColor(231, 76, 60))  # Red
                 status_item.setForeground(QColor(255, 255, 255))  # White text
@@ -3948,29 +4542,29 @@ class ImxUploadGUI(QMainWindow):
                 status_item.setData(Qt.ItemDataRole.ForegroundRole, QColor(255, 255, 255))
             elif item.status == "uploading":
                 status_item.setBackground(QColor(52, 152, 219))  # Blue
-                status_item.setForeground(QColor(0, 0, 0))  # Black text
+                status_item.setForeground(_dark_fg if not _is_dark_mode else _light_fg)
                 status_item.setData(Qt.ItemDataRole.BackgroundRole, QColor(52, 152, 219))
-                status_item.setData(Qt.ItemDataRole.ForegroundRole, QColor(0, 0, 0))
+                status_item.setData(Qt.ItemDataRole.ForegroundRole, _dark_fg if not _is_dark_mode else _light_fg)
             elif item.status == "paused":
                 status_item.setBackground(QColor(241, 196, 15))  # Yellow
-                status_item.setForeground(QColor(0, 0, 0))  # Black text
+                status_item.setForeground(_dark_fg if not _is_dark_mode else _light_fg)
                 status_item.setData(Qt.ItemDataRole.BackgroundRole, QColor(241, 196, 15))
-                status_item.setData(Qt.ItemDataRole.ForegroundRole, QColor(0, 0, 0))
+                status_item.setData(Qt.ItemDataRole.ForegroundRole, _dark_fg if not _is_dark_mode else _light_fg)
             elif item.status == "incomplete":
                 status_item.setBackground(QColor(241, 196, 15))  # Yellow (same as paused)
-                status_item.setForeground(QColor(0, 0, 0))
+                status_item.setForeground(_dark_fg if not _is_dark_mode else _light_fg)
                 status_item.setData(Qt.ItemDataRole.BackgroundRole, QColor(241, 196, 15))
-                status_item.setData(Qt.ItemDataRole.ForegroundRole, QColor(0, 0, 0))
+                status_item.setData(Qt.ItemDataRole.ForegroundRole, _dark_fg if not _is_dark_mode else _light_fg)
             elif item.status == "queued":
                 status_item.setBackground(QColor(189, 195, 199))  # Light gray
-                status_item.setForeground(QColor(0, 0, 0))  # Black text
+                status_item.setForeground(_dark_fg if not _is_dark_mode else _light_fg)
                 status_item.setData(Qt.ItemDataRole.BackgroundRole, QColor(189, 195, 199))
-                status_item.setData(Qt.ItemDataRole.ForegroundRole, QColor(0, 0, 0))
+                status_item.setData(Qt.ItemDataRole.ForegroundRole, _dark_fg if not _is_dark_mode else _light_fg)
             elif item.status == "scanning":
                 status_item.setBackground(QColor(200, 200, 200))  # Neutral gray
-                status_item.setForeground(QColor(0, 0, 0))
+                status_item.setForeground(_dark_fg if not _is_dark_mode else _light_fg)
                 status_item.setData(Qt.ItemDataRole.BackgroundRole, QColor(200, 200, 200))
-                status_item.setData(Qt.ItemDataRole.ForegroundRole, QColor(0, 0, 0))
+                status_item.setData(Qt.ItemDataRole.ForegroundRole, _dark_fg if not _is_dark_mode else _light_fg)
             elif item.status == "ready":
                 # Default styling for ready items
                 pass
@@ -4041,11 +4635,12 @@ class ImxUploadGUI(QMainWindow):
                 if item.status == "uploading" and transfer_text:
                     font.setBold(True)
                     xfer_item.setFont(font)
-                    xfer_item.setForeground(QColor(0, 0, 0, 255))
+                    # Highlight active transfer in blue-ish to match header accent, keep contrast in both themes
+                    xfer_item.setForeground(QColor(173, 216, 255, 255) if _is_dark_mode else QColor(20, 90, 150, 255))
                 elif item.status in ("completed", "failed") and transfer_text:
                     font.setBold(False)
                     xfer_item.setFont(font)
-                    xfer_item.setForeground(QColor(0, 0, 0, 160))
+                    xfer_item.setForeground(QColor(255, 255, 255, 200) if _is_dark_mode else QColor(0, 0, 0, 160))
             except Exception:
                 pass
             self.gallery_table.setItem(row, 9, xfer_item)
@@ -4089,6 +4684,7 @@ class ImxUploadGUI(QMainWindow):
             action_widget.stop_btn.clicked.connect(lambda checked, path=item.path: self.stop_single_item(path))
             action_widget.view_btn.clicked.connect(lambda checked, path=item.path: self.view_bbcode_files(path))
             action_widget.cancel_btn.clicked.connect(lambda checked, path=item.path: self.cancel_single_item(path))
+            # Optional: use the pause action when item is uploading, cancel when queued
             action_widget.update_buttons(item.status)
             self.gallery_table.setCellWidget(row, 7, action_widget)
         
@@ -4131,6 +4727,14 @@ class ImxUploadGUI(QMainWindow):
         except Exception:
             # Controls may not be initialized yet during early calls
             pass
+        finally:
+            # Restore table UI state
+            try:
+                self.gallery_table.blockSignals(False)
+                self.gallery_table.setSortingEnabled(prev_sorting_enabled)
+                self.gallery_table.setUpdatesEnabled(prev_updates_enabled)
+            except Exception:
+                pass
     
     def update_progress_display(self):
         """Update overall progress and statistics"""
@@ -4340,22 +4944,24 @@ class ImxUploadGUI(QMainWindow):
                         item.current_kibps = (float(getattr(item, 'uploaded_bytes', 0) or 0) / elapsed) / 1024.0
                 except Exception:
                     pass
-                
+
                 # Ensure status is uploading during progress updates
                 if item.status not in ["completed", "failed", "incomplete"]:
                     item.status = "uploading"
-                
+
                 # Find and update the correct row in the table
+                matched_row = None
                 for row in range(self.gallery_table.rowCount()):
                     name_item = self.gallery_table.item(row, 1)  # Gallery name is now column 1
                     if name_item and name_item.data(Qt.ItemDataRole.UserRole) == path:
+                        matched_row = row
                         # Update uploaded count
                         uploaded_text = f"{completed}/{total}"
                         uploaded_item = QTableWidgetItem(uploaded_text)
                         uploaded_item.setFlags(uploaded_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
                         uploaded_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
                         self.gallery_table.setItem(row, 2, uploaded_item)  # Uploaded is now column 2
-                        
+
                         # Update progress bar
                         progress_widget = self.gallery_table.cellWidget(row, 3)  # Progress is now column 3
                         if isinstance(progress_widget, TableProgressWidget):
@@ -4390,7 +4996,7 @@ class ImxUploadGUI(QMainWindow):
                         except Exception:
                             pass
                         self.gallery_table.setItem(row, 9, xfer_item)
-                        
+
                         # Show appropriate status if incomplete requested; otherwise show Uploading
                         if progress_percent > 0 and progress_percent < 100:
                             if item.status == "incomplete":
@@ -4410,15 +5016,14 @@ class ImxUploadGUI(QMainWindow):
                                 status_item.setData(Qt.ItemDataRole.BackgroundRole, QColor(52, 152, 219))
                                 status_item.setData(Qt.ItemDataRole.ForegroundRole, QColor(0, 0, 0))
                             self.gallery_table.setItem(row, 4, status_item)
-                        
-                # Bandwidth updates are now emitted from worker; GUI handler will update labels
+                        break
 
                 # Update status if it's completed (100%)
-                if progress_percent >= 100:
+                if progress_percent >= 100 and matched_row is not None:
                     # Set finished timestamp if not already set
                     if not item.finished_time:
                         item.finished_time = time.time()
-                    
+
                     # If there were failures (based on item.uploaded_images vs total), show Failed; else Completed
                     final_status_text = "Completed"
                     row_failed = False
@@ -4435,16 +5040,16 @@ class ImxUploadGUI(QMainWindow):
                     else:
                         status_item.setBackground(QColor(46, 204, 113))  # Green background
                         status_item.setForeground(QColor(0, 0, 0))  # Black text
-                    self.gallery_table.setItem(row, 4, status_item)  # Status is now column 4
-                    
-                        # Update the finished time column
+                    self.gallery_table.setItem(matched_row, 4, status_item)  # Status is now column 4
+
+                    # Update the finished time column
                     finished_dt = datetime.fromtimestamp(item.finished_time)
                     finished_text = finished_dt.strftime("%Y-%m-%d %H:%M:%S")
                     finished_item = QTableWidgetItem(finished_text)
                     finished_item.setFlags(finished_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
                     finished_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
                     finished_item.setFont(QFont("Arial", 8))  # Smaller font
-                    self.gallery_table.setItem(row, 6, finished_item)
+                    self.gallery_table.setItem(matched_row, 6, finished_item)
 
                     # Compute and freeze final transfer speed for this item
                     try:
@@ -4467,37 +5072,16 @@ class ImxUploadGUI(QMainWindow):
                             xfer_item.setForeground(QColor(0, 0, 0, 160))
                     except Exception:
                         pass
-                    self.gallery_table.setItem(row, 9, xfer_item)
+                    self.gallery_table.setItem(matched_row, 9, xfer_item)
                     # Update Renamed icon at completion (may be finalized later via auto-rename)
                     try:
                         state = True if (item.gallery_id or "") else None
-                        self._set_renamed_cell_icon(row, state)
+                        self._set_renamed_cell_icon(matched_row, state)
                     except Exception:
                         pass
-                    # Update Size and Transfer columns using persisted artifacts if available
+                    # Update Size and Transfer columns without disk reads on GUI thread
                     try:
-                        # Prefer size from scan
                         size_bytes = int(getattr(item, 'total_size', 0) or 0)
-                        if size_bytes <= 0:
-                            # Attempt to read JSON artifact for total_size/uploaded_size
-                            folder_name = os.path.basename(item.path)
-                            # Try central store
-                            central_dir = get_central_storage_path()
-                            safe_name, json_name, _bb = build_gallery_filenames(item.name or folder_name, item.gallery_id or "")
-                            candidate_paths = [
-                                os.path.join(central_dir, json_name),
-                                os.path.join(item.path, ".uploaded", json_name)
-                            ]
-                            for pth in candidate_paths:
-                                try:
-                                    if os.path.exists(pth):
-                                        with open(pth, 'r', encoding='utf-8') as jf:
-                                            data = json.load(jf)
-                                        stats = (data.get('stats') or {})
-                                        size_bytes = int(stats.get('total_size') or 0)
-                                        break
-                                except Exception:
-                                    pass
                         # Render Size col (8)
                         try:
                             from imxup import format_binary_size
@@ -4507,7 +5091,7 @@ class ImxUploadGUI(QMainWindow):
                         size_item = QTableWidgetItem(size_text)
                         size_item.setFlags(size_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
                         size_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-                        self.gallery_table.setItem(row, 8, size_item)
+                        self.gallery_table.setItem(matched_row, 8, size_item)
                     except Exception:
                         pass
                     return
@@ -4631,8 +5215,13 @@ class ImxUploadGUI(QMainWindow):
                     template_name=template_name,
                 )
                 try:
+                    parts = []
                     if written.get('central'):
-                        self.add_log_message(f"{timestamp()} Saved gallery files to central location: {os.path.dirname(list(written['central'].values())[0])}")
+                        parts.append(f"central: {os.path.dirname(list(written['central'].values())[0])}")
+                    if written.get('uploaded'):
+                        parts.append(f"folder: {os.path.dirname(list(written['uploaded'].values())[0])}")
+                    if parts:
+                        self.add_log_message(f"{timestamp()} [fileio] Saved gallery files to {', '.join(parts)}")
                 except Exception:
                     pass
             except Exception as e:
@@ -4653,8 +5242,6 @@ class ImxUploadGUI(QMainWindow):
         total_size = results.get('total_size', 0)
         upload_time = results.get('upload_time', 0)
         successful_count = results.get('successful_count', 0)
-        
-        self.add_log_message(f"{timestamp()} ✓ Completed: {gallery_name} ({gallery_id})")
         try:
             from imxup import format_binary_size
             total_size_str = format_binary_size(total_size, precision=1)
@@ -4712,6 +5299,20 @@ class ImxUploadGUI(QMainWindow):
         else:
             self.add_log_message(f"{timestamp()} User chose to continue with existing gallery")
 
+    def on_gallery_renamed(self, gallery_id: str):
+        """Mark cells for the given gallery_id as renamed (check icon)."""
+        try:
+            items = self.queue_manager.get_all_items()
+            id_to_row = {}
+            for row, item in enumerate(items):
+                if item.gallery_id:
+                    id_to_row[item.gallery_id] = row
+            if gallery_id in id_to_row:
+                row = id_to_row[gallery_id]
+                self._set_renamed_cell_icon(row, True)
+        except Exception:
+            pass
+
     def on_gallery_failed(self, path: str, error_message: str):
         """Handle gallery failure"""
         with QMutexLocker(self.queue_manager.mutex):
@@ -4736,7 +5337,72 @@ class ImxUploadGUI(QMainWindow):
     
     def add_log_message(self, message: str):
         """Add message to log"""
-        self.log_text.append(message)
+        # Determine category and subtype for GUI gating and file logging
+        category = "general"
+        subtype = None
+        try:
+            # message may start with timestamp; strip it first for token parse
+            head = message
+            parts = message.split(" ", 1)
+            if len(parts) > 1 and parts[0].count(":") == 2:
+                head = parts[1]
+            if head.startswith("[") and "]" in head:
+                token = head[1:head.find("]")]
+                bits = token.split(":")
+                category = bits[0] or "general"
+                subtype = bits[1] if len(bits) > 1 else None
+        except Exception:
+            pass
+
+        # GUI visibility based on settings
+        show_in_gui = True
+        try:
+            logger = get_logger()
+            if not logger.should_emit_gui(category, logging.INFO):
+                show_in_gui = False
+            if category == "uploads" and show_in_gui:
+                if subtype == "file" and not logger.should_log_upload_file_success("gui"):
+                    show_in_gui = False
+                if subtype == "gallery" and not logger.should_log_upload_gallery_success("gui"):
+                    show_in_gui = False
+        except Exception:
+            pass
+
+        # Append to GUI log without category tags and auto-follow
+        if show_in_gui:
+            try:
+                display = message
+                # Strip leading category tag [xxx] if present (after optional time)
+                head = message
+                prefix = ""
+                parts = message.split(" ", 1)
+                if len(parts) > 1 and parts[0].count(":") == 2:
+                    prefix = parts[0] + " "
+                    head = parts[1]
+                if head.startswith("[") and "]" in head:
+                    head = head[head.find("]") + 1:].lstrip()
+                display = prefix + head
+                # Append and auto-follow vertically; keep horizontal view at line start
+                self.log_text.append(display)
+                try:
+                    cursor = self.log_text.textCursor()
+                    cursor.movePosition(cursor.MoveOperation.End)
+                    self.log_text.setTextCursor(cursor)
+                    self.log_text.ensureCursorVisible()
+                    # Reset horizontal scrollbar to show start of lines
+                    hbar = self.log_text.horizontalScrollBar()
+                    if hbar is not None:
+                        hbar.setValue(hbar.minimum())
+                except Exception:
+                    pass
+            except Exception:
+                self.log_text.append(message)
+
+        # Always write to centralized rolling logfile using category (file sink can be filtered separately)
+        try:
+            get_logger().log_to_file(message, level=logging.INFO, category=category)
+        except Exception:
+            pass
         # Retain long history; no aggressive trimming
         try:
             if getattr(self, "_log_viewer_dialog", None) is not None and self._log_viewer_dialog.isVisible():
@@ -4748,8 +5414,11 @@ class ImxUploadGUI(QMainWindow):
         """Open or focus the popout log viewer dialog"""
         try:
             if self._log_viewer_dialog is None or not self._log_viewer_dialog.isVisible():
-                # Initialize with current log text
-                initial_text = self.log_text.toPlainText()
+                # Initialize with current on-disk log if available, otherwise current GUI text
+                try:
+                    initial_text = get_logger().read_current_log(tail_bytes=2 * 1024 * 1024) or self.log_text.toPlainText()
+                except Exception:
+                    initial_text = self.log_text.toPlainText()
                 self._log_viewer_dialog = LogViewerDialog(initial_text, self)
                 self._log_viewer_dialog.show()
             else:
@@ -4761,18 +5430,18 @@ class ImxUploadGUI(QMainWindow):
     def start_single_item(self, path: str):
         """Start a single item"""
         if self.queue_manager.start_item(path):
-            self.add_log_message(f"{timestamp()} Started: {os.path.basename(path)}")
+            self.add_log_message(f"{timestamp()} [queue] Started: {os.path.basename(path)}")
             self.update_queue_display()
         else:
-            self.add_log_message(f"{timestamp()} Failed to start: {os.path.basename(path)}")
+            self.add_log_message(f"{timestamp()} [queue] Failed to start: {os.path.basename(path)}")
     
     def pause_single_item(self, path: str):
         """Pause a single item"""
         if self.queue_manager.pause_item(path):
-            self.add_log_message(f"{timestamp()} Paused: {os.path.basename(path)}")
+            self.add_log_message(f"{timestamp()} [queue] Paused: {os.path.basename(path)}")
             self.update_queue_display()
         else:
-            self.add_log_message(f"{timestamp()} Failed to pause: {os.path.basename(path)}")
+            self.add_log_message(f"{timestamp()} [queue] Failed to pause: {os.path.basename(path)}")
     
     def stop_single_item(self, path: str):
         """Mark current uploading item to finish in-flight transfers, then become incomplete."""
@@ -4781,10 +5450,10 @@ class ImxUploadGUI(QMainWindow):
             # Optimistically reflect intent in UI without persisting as failed later
             self.queue_manager.update_item_status(path, "incomplete")
             self.update_queue_display()
-            self.add_log_message(f"{timestamp()} Will stop after current transfers: {os.path.basename(path)}")
+            self.add_log_message(f"{timestamp()} [queue] Will stop after current transfers: {os.path.basename(path)}")
         else:
             # If not the actively uploading one, nothing to do
-            self.add_log_message(f"{timestamp()} Stop requested but item not currently uploading: {os.path.basename(path)}")
+            self.add_log_message(f"{timestamp()} [queue] Stop requested but item not currently uploading: {os.path.basename(path)}")
         # Ensure controls reflect latest state promptly
         self.update_queue_display()
     
@@ -4795,7 +5464,7 @@ class ImxUploadGUI(QMainWindow):
                 item = self.queue_manager.items[path]
                 if item.status == "queued":
                     item.status = "ready"
-                    self.add_log_message(f"{timestamp()} Canceled queued item: {os.path.basename(path)}")
+                    self.add_log_message(f"{timestamp()} [queue] Canceled queued item: {os.path.basename(path)}")
         
         self.update_queue_display()
     
@@ -4896,15 +5565,48 @@ class ImxUploadGUI(QMainWindow):
             self.add_log_message(f"{timestamp()} No queued items to reset")
     
     def clear_completed(self):
-        """Clear completed uploads from queue"""
-        removed_count = self.queue_manager.clear_completed()
-        if removed_count > 0:
-            self.update_queue_display()
-            QApplication.processEvents()
-            self.queue_manager.save_persistent_queue()
-            self.add_log_message(f"{timestamp()} Cleared {removed_count} completed uploads")
-        else:
-            self.add_log_message(f"{timestamp()} No completed uploads to clear")
+        """Clear completed uploads from queue with minimal UI work"""
+        try:
+            self.clear_completed_btn.setEnabled(False)
+            QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        except Exception:
+            pass
+        # Pause periodic updates to avoid contention
+        try:
+            self.update_timer.stop()
+        except Exception:
+            pass
+        try:
+            # Pre-check counts for diagnostics
+            items_snapshot = self.queue_manager.get_all_items()
+            count_completed = sum(1 for it in items_snapshot if it.status == "completed")
+            count_failed = sum(1 for it in items_snapshot if it.status == "failed")
+            self.add_log_message(f"{timestamp()} [queue] Attempting clear: completed={count_completed}, failed={count_failed}")
+
+            removed_count = self.queue_manager.clear_completed()
+            # Fallback: if nothing removed but UI shows completed, try explicit path removal
+            if removed_count == 0 and (count_completed or count_failed):
+                comp_paths = [it.path for it in items_snapshot if it.status in ("completed", "failed")]
+                if comp_paths:
+                    self.add_log_message(f"{timestamp()} [queue] Retrying clear via explicit path delete for {len(comp_paths)} item(s)")
+                    try:
+                        removed_count = self.queue_manager.remove_items(comp_paths)
+                    except Exception:
+                        removed_count = 0
+            if removed_count > 0:
+                self.update_queue_display()
+                self.add_log_message(f"{timestamp()} [queue] Cleared {removed_count} completed uploads")
+                # Persist in the background
+                self.queue_manager.save_persistent_queue()
+            else:
+                self.add_log_message(f"{timestamp()} [queue] No completed uploads to clear")
+        finally:
+            try:
+                self.update_timer.start(500)
+                QApplication.restoreOverrideCursor()
+                self.clear_completed_btn.setEnabled(True)
+            except Exception:
+                pass
     
     def delete_selected_items(self):
         """Delete selected items from the queue"""
@@ -4971,7 +5673,7 @@ class ImxUploadGUI(QMainWindow):
                 if path in self.queue_manager.items:
                     del self.queue_manager.items[path]
                     removed_count += 1
-                    self.add_log_message(f"{timestamp()} Deleted: {path}")
+                    self.add_log_message(f"{timestamp()} [queue] Deleted: {path}")
                 else:
                     self.add_log_message(f"{timestamp()} Item not found: {path}")
         
@@ -5201,12 +5903,12 @@ class ImxUploadGUI(QMainWindow):
     
     def dragEnterEvent(self, event):
         """Handle drag enter - SIMPLE VERSION"""
-        print("DEBUG: dragEnterEvent called")
+        
         if event.mimeData().hasUrls():
-            print("DEBUG: Has URLs")
+            
             event.acceptProposedAction()
         else:
-            print("DEBUG: No URLs")
+            
             event.ignore()
     
     def dragMoveEvent(self, event):
@@ -5218,32 +5920,32 @@ class ImxUploadGUI(QMainWindow):
     
     def dragLeaveEvent(self, event):
         """Handle drag leave"""
-        print("DEBUG: dragLeaveEvent called")
+        
     
     def dropEvent(self, event):
         """Handle drop - EXACTLY like your working test"""
-        print("DEBUG: dropEvent called")
+        
         
         if event.mimeData().hasUrls():
-            print("DEBUG: Processing URLs")
+            
             urls = event.mimeData().urls()
             paths = []
             for url in urls:
                 path = url.toLocalFile()
-                print(f"DEBUG: Checking path: {path}")
+                
                 if os.path.isdir(path):
-                    print(f"DEBUG: Adding folder: {path}")
+                    
                     paths.append(path)
             
             if paths:
-                print(f"DEBUG: SUCCESS! Found {len(paths)} folders: {', '.join(os.path.basename(p) for p in paths)}")
+                
                 self.add_folders(paths)
                 event.acceptProposedAction()
             else:
-                print("DEBUG: No valid folders in drop")
+                
                 event.ignore()
         else:
-            print("DEBUG: No URLs in drop")
+            
             event.ignore()
 
     def closeEvent(self, event):
@@ -5289,7 +5991,7 @@ def main():
                 folders_to_add.append(arg)
         # If another instance is running, forward the first folder (server is single-path)
         if folders_to_add and check_single_instance(folders_to_add[0]):
-            print(f"Added {folders_to_add[0]} to existing instance")
+            
             return
     
     # Create main window
@@ -5304,7 +6006,7 @@ def main():
     try:
         sys.exit(app.exec())
     except KeyboardInterrupt:
-        print("\nExiting gracefully...")
+        
         # Clean shutdown
         if hasattr(window, 'worker') and window.worker:
             window.worker.stop()

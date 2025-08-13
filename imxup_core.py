@@ -13,6 +13,10 @@ import time
 import concurrent.futures
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
+import re
+import sys
+from functools import cmp_to_key
+import ctypes
 from typing import Callable, Iterable, Optional, Tuple, List, Dict, Any, Set
 
 
@@ -57,11 +61,35 @@ class UploadEngine:
             raise FileNotFoundError(f"Folder not found: {folder_path}")
 
         # Gather image files
+        def _natural_sort_key(name: str):
+            parts = re.split(r"(\d+)", name)
+            key = []
+            for p in parts:
+                if p.isdigit():
+                    try:
+                        key.append(int(p))
+                    except Exception:
+                        key.append(p)
+                else:
+                    key.append(p.lower())
+            return tuple(key)
+        
+        def _explorer_sort(names: List[str]) -> List[str]:
+            """Windows Explorer (StrCmpLogicalW) ordering; fallback to natural sort on non-Windows."""
+            if sys.platform != "win32":
+                return sorted(names, key=_natural_sort_key)
+            try:
+                _cmp = ctypes.windll.shlwapi.StrCmpLogicalW
+                _cmp.argtypes = [ctypes.c_wchar_p, ctypes.c_wchar_p]
+                _cmp.restype = ctypes.c_int
+                return sorted(names, key=cmp_to_key(lambda a, b: _cmp(a, b)))
+            except Exception:
+                return sorted(names, key=_natural_sort_key)
         image_extensions = ('.jpg', '.jpeg', '.png', '.gif')
-        all_image_files: List[str] = [
+        all_image_files: List[str] = _explorer_sort([
             f for f in os.listdir(folder_path)
             if f.lower().endswith(image_extensions) and os.path.isfile(os.path.join(folder_path, f))
-        ]
+        ])
         if not all_image_files:
             raise ValueError(f"No image files found in {folder_path}")
 
@@ -207,11 +235,11 @@ class UploadEngine:
                     image_file, image_data, error = fut.result()
                     if image_data:
                         uploaded_images.append((image_file, image_data))
-                        # Per-image success log
+                        # Per-image success log (categorized)
                         if on_log:
                             try:
                                 img_url = image_data.get('image_url', '')
-                                on_log(f"✓ [{gallery_id}] {image_file} uploaded successfully ({img_url})")
+                                on_log(f"[uploads:file] ✓ [{gallery_id}] {image_file} uploaded successfully ({img_url})")
                             except Exception:
                                 pass
                         # Per-image callback for resume-aware consumers
@@ -239,7 +267,7 @@ class UploadEngine:
             retry_count += 1
             retry_failed: List[Tuple[str, str]] = []
             if on_log:
-                on_log(f"Retrying {len(failed_images)} failed uploads (attempt {retry_count}/{max_retries})")
+                on_log(f"[uploads] Retrying {len(failed_images)} failed uploads (attempt {retry_count}/{max_retries})")
             with ThreadPoolExecutor(max_workers=parallel_batch_size) as executor:
                 remaining = [img for img, _ in failed_images]
                 futures_map = {executor.submit(upload_single_image, img): img for img in remaining[:parallel_batch_size]}
@@ -261,11 +289,11 @@ class UploadEngine:
                             if on_log:
                                 try:
                                     img_url = image_data.get('image_url', '')
-                                    on_log(f"✓ [{gallery_id}] {image_file} uploaded successfully ({img_url})")
+                                    on_log(f"[uploads:file] ✓ [{gallery_id}] {image_file} uploaded successfully ({img_url})")
                                 except Exception:
                                     pass
                             if on_log:
-                                on_log(f"Retry successful: {image_file}")
+                                on_log(f"[uploads] Retry successful: {image_file}")
                         else:
                             retry_failed.append((image_file, error or "unknown error"))
                             if on_log:
@@ -413,6 +441,26 @@ class UploadEngine:
             'total_images': original_total_images,
             'started_at': datetime.fromtimestamp(start_time).strftime('%Y-%m-%d %H:%M:%S'),
         })
+
+        # Emit consolidated success at gallery level when appropriate
+        if on_log:
+            try:
+                total_attempted = len(all_image_files)
+                if failed_images:
+                    on_log(f"[uploads] ✗ Gallery '{gallery_id}' completed with failures in {upload_time:.1f}s ({results['successful_count']}/{total_attempted} images)")
+                    for fname, reason in failed_images:
+                        on_log(f"[uploads] ✗ {fname}: {reason}")
+                else:
+                    # Include gallery name and link for clarity
+                    try:
+                        gname = results.get('gallery_name') or gallery_name
+                    except Exception:
+                        gname = gallery_name
+                    on_log(
+                        f"[uploads:gallery] ✓ Uploaded {results['successful_count']} images ({int(uploaded_size)/(1024*1024):.1f} MiB) in {upload_time:.1f}s: {gname} -> {gallery_url}"
+                    )
+            except Exception:
+                pass
 
         return results
 
