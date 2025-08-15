@@ -17,7 +17,8 @@ from datetime import datetime
 import sys
 import ctypes
 from functools import cmp_to_key
-from queue import Queue, Empty
+import queue
+from queue import Queue
 from dataclasses import dataclass, field
 from typing import List, Optional, Dict, Any
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -29,7 +30,8 @@ from PyQt6.QtWidgets import (
     QMessageBox, QSystemTrayIcon, QMenu, QFrame, QScrollArea,
     QGridLayout, QSizePolicy, QTabWidget, QFileDialog, QTableWidget,
     QTableWidgetItem, QHeaderView, QDialog, QDialogButtonBox, QPlainTextEdit,
-    QLineEdit, QInputDialog, QSpacerItem, QStyle, QAbstractItemView
+    QLineEdit, QInputDialog, QSpacerItem, QStyle, QAbstractItemView,
+    QProgressDialog
 )
 from PyQt6.QtCore import (
     Qt, QThread, pyqtSignal, QTimer, QMimeData, QUrl, 
@@ -107,6 +109,8 @@ class GalleryQueueItem:
     min_width: float = 0.0
     min_height: float = 0.0
     scan_complete: bool = False
+    # Failed validation details
+    failed_files: list = field(default_factory=list)  # List of (filename, error_message) tuples
     # Resume support
     uploaded_files: set = field(default_factory=set)
     uploaded_images_data: list = field(default_factory=list)
@@ -657,12 +661,55 @@ class QueueManager:
         self.store = QueueStore()
         self._next_order = 0  # Track insertion order
         self._version = 0  # Bumped on any change for cheap UI polling
+        
+        # Single sequential worker for processing galleries
+        self._scan_worker = None
+        self._scan_queue = Queue()
+        self._scan_worker_running = False
+        
         # One-time migration from legacy QSettings into SQLite, then load from DB
         try:
             self.store.migrate_from_qsettings_if_needed(self.settings)
         except Exception:
             pass
         self.load_persistent_queue()
+        
+        # Start the single scan worker
+        self._start_scan_worker()
+
+    def _start_scan_worker(self):
+        """Start the single sequential scan worker thread."""
+        if not self._scan_worker_running:
+            self._scan_worker_running = True
+            self._scan_worker = threading.Thread(target=self._sequential_scan_worker, daemon=True)
+            self._scan_worker.start()
+
+    def _sequential_scan_worker(self):
+        """Single worker that processes galleries sequentially to avoid disk I/O bottlenecks."""
+        while self._scan_worker_running:
+            try:
+                # Get next item to scan (blocking)
+                path = self._scan_queue.get(timeout=1.0)
+                if path is None:  # Shutdown signal
+                    break
+                
+                # Process this gallery
+                self._comprehensive_scan_item(path)
+                
+                # Mark task as done
+                self._scan_queue.task_done()
+                
+            except queue.Empty:
+                # No items to process, continue loop
+                continue
+            except Exception as e:
+                print(f"Scan worker error processing {path}: {e}")
+                # Mark task as done even on error to prevent blocking
+                try:
+                    self._scan_queue.task_done()
+                except:
+                    pass
+                continue
 
     def _inc_version(self):
         self._version += 1
@@ -700,6 +747,7 @@ class QueueManager:
                     'scan_complete': bool(getattr(item, 'scan_complete', False)),
                     'uploaded_bytes': int(getattr(item, 'uploaded_bytes', 0) or 0),
                     'final_kibps': float(getattr(item, 'final_kibps', 0.0) or 0.0),
+                    'failed_files': getattr(item, 'failed_files', []),
                 })
         try:
             self.store.bulk_upsert_async(queue_data)
@@ -763,6 +811,9 @@ class QueueManager:
                         uploaded_images_data = item_data.get('uploaded_images_data', [])
                         if uploaded_images_data:
                             item.uploaded_images_data = uploaded_images_data
+                        failed_files = item_data.get('failed_files', [])
+                        if failed_files:
+                            item.failed_files = failed_files
                     except Exception:
                         pass
                     self._next_order = max(self._next_order, item.insertion_order + 1)
@@ -788,7 +839,7 @@ class QueueManager:
             if not os.path.exists(path) or not os.path.isdir(path):
                 return False
                 
-            # Check for images and count them
+            # Check for images and count them (quick check only)
             image_extensions = ('.jpg', '.jpeg', '.png', '.gif')
             image_files = []
             for f in os.listdir(path):
@@ -807,7 +858,7 @@ class QueueManager:
                 # Return special value to indicate duplicate
                 return "duplicate"
                 
-            # Create item in scanning state; start background scan after releasing lock
+            # Create item in scanning state; start comprehensive background scan after releasing lock
             item = GalleryQueueItem(
                 path=path,
                 name=gallery_name,
@@ -824,12 +875,88 @@ class QueueManager:
             # Don't add to queue automatically - wait for manual start
             self.save_persistent_queue()
             self._inc_version()
-        # Launch background scan outside the lock
-        threading.Thread(target=self._scan_item_metadata, args=(path,), daemon=True).start()
+        # Add to scan queue for sequential processing
+        self._scan_queue.put(path)
         return True
+    
+    def add_multiple_items(self, paths: List[str], template_name: str = "default") -> dict:
+        """Add multiple galleries efficiently, avoiding UI blocking."""
+        results = {
+            'added': 0,
+            'duplicates': 0,
+            'failed': 0,
+            'errors': []
+        }
+        
+        # First pass: validate and create items (fast, non-blocking)
+        items_to_scan = []
+        with QMutexLocker(self.mutex):
+            for path in paths:
+                try:
+                    if path in self.items:
+                        results['duplicates'] += 1
+                        continue
+                        
+                    # Validate path
+                    if not os.path.exists(path) or not os.path.isdir(path):
+                        results['failed'] += 1
+                        results['errors'].append(f"Path not found: {path}")
+                        continue
+                        
+                    # Quick image count check
+                    image_extensions = ('.jpg', '.jpeg', '.png', '.gif')
+                    image_files = [f for f in os.listdir(path) 
+                                 if f.lower().endswith(image_extensions) and 
+                                 os.path.isfile(os.path.join(path, f))]
+                    
+                    if not image_files:
+                        results['failed'] += 1
+                        results['errors'].append(f"No images found: {path}")
+                        continue
+                    
+                    # Check for existing gallery files
+                    gallery_name = sanitize_gallery_name(os.path.basename(path))
+                    from imxup import check_if_gallery_exists
+                    existing_files = check_if_gallery_exists(gallery_name)
+                    
+                    if existing_files:
+                        results['duplicates'] += 1
+                        continue
+                    
+                    # Create item
+                    item = GalleryQueueItem(
+                        path=path,
+                        name=gallery_name,
+                        status="scanning",
+                        total_images=len(image_files),
+                        insertion_order=self._next_order,
+                        added_time=time.time(),
+                        template_name=template_name,
+                        scan_complete=False
+                    )
+                    self._next_order += 1
+                    
+                    self.items[path] = item
+                    items_to_scan.append(path)
+                    results['added'] += 1
+                    
+                except Exception as e:
+                    results['failed'] += 1
+                    results['errors'].append(f"Error processing {path}: {str(e)}")
+        
+        # Save all items at once
+        if items_to_scan:
+            self.save_persistent_queue()
+            self._inc_version()
+            
+            # Add all items to scan queue for sequential processing
+            for path in items_to_scan:
+                self._scan_queue.put(path)
+        
+        return results
 
-    def _scan_item_metadata(self, path: str):
-        """Scan image dimensions and total size without blocking UI, then mark ready."""
+    def _comprehensive_scan_item(self, path: str):
+        """Comprehensive scan of ALL images to validate them before allowing upload."""
         try:
             image_extensions = ('.jpg', '.jpeg', '.png', '.gif')
             files = [f for f in os.listdir(path) if f.lower().endswith(image_extensions) and os.path.isfile(os.path.join(path, f))]
@@ -839,29 +966,60 @@ class QueueManager:
                         self.items[path].status = "failed"
                         self.items[path].error_message = "No images found during scan"
                 return
+            
             total_size = 0
             dims: List[tuple[int, int]] = []
-            sampled = 0
+            failed_files: List[tuple[str, str]] = []  # (filename, error_message)
+            
+            # Scan ALL images comprehensively
             for f in files:
                 fp = os.path.join(path, f)
                 try:
-                    total_size += os.path.getsize(fp)
-                    # Sample a limited number of images for dimensions to keep scan fast
-                    if sampled < 10:
-                        from PIL import Image
-                        with Image.open(fp) as img:
-                            w, h = img.size
+                    file_size = os.path.getsize(fp)
+                    total_size += file_size
+                    
+                    # Validate image with PIL - this is the critical validation step
+                    from PIL import Image
+                    with Image.open(fp) as img:
+                        # Force PIL to actually read the image data to catch corruption
+                        img.verify()
+                        # Reopen for dimensions since verify() closes the image
+                        with Image.open(fp) as img2:
+                            w, h = img2.size
                             dims.append((w, h))
-                            sampled += 1
-                except Exception:
-                    # Skip unreadable files
-                    continue
-            avg_w = sum(w for w, _ in dims) / len(dims) if dims else 0.0
-            avg_h = sum(h for _, h in dims) / len(dims) if dims else 0.0
-            max_w = max((w for w, _ in dims), default=0.0)
-            max_h = max((h for _, h in dims), default=0.0)
-            min_w = min((w for w, _ in dims), default=0.0)
-            min_h = min((h for _, h in dims), default=0.0)
+                            
+                except Exception as e:
+                    # Record failed files with specific error messages
+                    error_msg = f"Failed to validate {f}: {str(e)}"
+                    failed_files.append((f, error_msg))
+                    # Continue scanning other files to get complete picture
+            
+            # If any files failed validation, mark gallery as failed
+            if failed_files:
+                with QMutexLocker(self.mutex):
+                    if path in self.items:
+                        item = self.items[path]
+                        item.status = "failed"
+                        item.error_message = f"Image validation failed: {len(failed_files)}/{len(files)} images invalid"
+                        # Store detailed failure information for user reference
+                        item.failed_files = failed_files
+                        item.total_size = total_size
+                        item.scan_complete = True
+                self.save_persistent_queue()
+                self._inc_version()
+                return
+            
+            # All images validated successfully - calculate statistics
+            if dims:
+                avg_w = sum(w for w, _ in dims) / len(dims)
+                avg_h = sum(h for _, h in dims) / len(dims)
+                max_w = max(w for w, _ in dims)
+                max_h = max(h for _, h in dims)
+                min_w = min(w for w, _ in dims)
+                min_h = min(h for _, h in dims)
+            else:
+                avg_w = avg_h = max_w = max_h = min_w = min_h = 0.0
+            
             with QMutexLocker(self.mutex):
                 if path in self.items:
                     item = self.items[path]
@@ -876,16 +1034,17 @@ class QueueManager:
                     # Only flip to ready if not already moved forward
                     if item.status == "scanning":
                         item.status = "ready"
+            
             # Persist update
             self.save_persistent_queue()
             self._inc_version()
-            # Emit a GUI refresh if available
-            # Note: avoid calling into GUI from worker thread; GUI polls or reacts to signals
-        except Exception:
+            
+        except Exception as e:
             with QMutexLocker(self.mutex):
                 if path in self.items:
-                    self.items[path].status = "ready"  # Fail open to allow start
-                    self.items[path].scan_complete = False
+                    self.items[path].status = "failed"
+                    self.items[path].error_message = f"Scan error: {str(e)}"
+                    self.items[path].scan_complete = True
             self.save_persistent_queue()
             self._inc_version()
     
@@ -922,6 +1081,54 @@ class QueueManager:
                 self._inc_version()
                 return True
             return False
+    
+    def _force_add_item(self, path: str, name: str, template_name: str = "default"):
+        """Force add an item (for duplicate handling)"""
+        with QMutexLocker(self.mutex):
+            # Check for images and count them
+            image_extensions = ('.jpg', '.jpeg', '.png', '.gif')
+            image_files = []
+            for f in os.listdir(path):
+                if f.lower().endswith(image_extensions) and os.path.isfile(os.path.join(path, f)):
+                    image_files.append(f)
+            
+            if not image_files:
+                return False
+                
+            item = GalleryQueueItem(
+                path=path,
+                name=name,
+                status="ready",  # Items start as ready
+                total_images=len(image_files),  # Set the total count immediately
+                insertion_order=self._next_order,
+                added_time=time.time(),  # Current timestamp
+                template_name=template_name
+            )
+            self._next_order += 1
+            
+            self.items[path] = item
+            self.save_persistent_queue()
+            return True
+    
+    def get_scan_queue_status(self) -> dict:
+        """Get status of the scan queue for monitoring."""
+        return {
+            'queue_size': self._scan_queue.qsize(),
+            'worker_running': self._scan_worker_running,
+            'items_pending_scan': sum(1 for item in self.items.values() if item.status == "scanning")
+        }
+    
+    def shutdown(self):
+        """Shutdown the scan worker gracefully."""
+        self._scan_worker_running = False
+        # Send shutdown signal to worker
+        try:
+            self._scan_queue.put(None, timeout=1.0)
+        except:
+            pass
+        # Wait for worker to finish
+        if self._scan_worker and self._scan_worker.is_alive():
+            self._scan_worker.join(timeout=2.0)
     
     def get_next_item(self) -> Optional[GalleryQueueItem]:
         """Get the next queued item"""
@@ -1041,34 +1248,6 @@ class QueueManager:
         except Exception:
             pass
         return removed_count
-    
-    def _force_add_item(self, path: str, name: str, template_name: str = "default"):
-        """Force add an item (for duplicate handling)"""
-        with QMutexLocker(self.mutex):
-            # Check for images and count them
-            image_extensions = ('.jpg', '.jpeg', '.png', '.gif')
-            image_files = []
-            for f in os.listdir(path):
-                if f.lower().endswith(image_extensions) and os.path.isfile(os.path.join(path, f)):
-                    image_files.append(f)
-            
-            if not image_files:
-                return False
-                
-            item = GalleryQueueItem(
-                path=path,
-                name=name,
-                status="ready",  # Items start as ready
-                total_images=len(image_files),  # Set the total count immediately
-                insertion_order=self._next_order,
-                added_time=time.time(),  # Current timestamp
-                template_name=template_name
-            )
-            self._next_order += 1
-            
-            self.items[path] = item
-            self.save_persistent_queue()
-            return True
 
 class GalleryTableWidget(QTableWidget):
     """Table widget for gallery queue with resizable columns, sorting, and action buttons"""
@@ -1107,9 +1286,9 @@ class GalleryTableWidget(QTableWidget):
         header.setSectionResizeMode(5, QHeaderView.ResizeMode.Interactive)   # Added - resizable
         header.setSectionResizeMode(6, QHeaderView.ResizeMode.Interactive)   # Finished - resizable
         header.setSectionResizeMode(7, QHeaderView.ResizeMode.Fixed)         # action - fixed
-        header.setSectionResizeMode(8, QHeaderView.ResizeMode.Interactive)   # Size - resizable
-        header.setSectionResizeMode(9, QHeaderView.ResizeMode.Interactive)   # Transfer - resizable
-        header.setSectionResizeMode(10, QHeaderView.ResizeMode.Interactive)  # Template - resizable
+        header.setSectionResizeMode(8, QHeaderView.ResizeMode.Interactive)   # size - resizable
+        header.setSectionResizeMode(9, QHeaderView.ResizeMode.Interactive)   # transfer - resizable
+        header.setSectionResizeMode(10, QHeaderView.ResizeMode.Interactive)  # template - resizable
         header.setSectionResizeMode(11, QHeaderView.ResizeMode.Interactive)  # title - resizable
         try:
             # Allow headers to shrink more
@@ -3334,8 +3513,14 @@ class ImxUploadGUI(QMainWindow):
                 self._last_queue_version = current
                 self.update_queue_display()
             self.update_progress_display()
+            self._update_scan_status()
         self.update_timer.timeout.connect(_tick)
         self.update_timer.start(500)  # 2Hz tick
+        
+        # Add scanning status indicator to status bar
+        self.scan_status_label = QLabel("Scanning: 0")
+        self.scan_status_label.setVisible(False)
+        self.statusBar().addPermanentWidget(self.scan_status_label)
         # Log viewer dialog reference
         self._log_viewer_dialog = None
         # Lazy-loaded status icons (check/pending/uploading/failed)
@@ -3350,6 +3535,22 @@ class ImxUploadGUI(QMainWindow):
             self._load_status_icons_if_needed()
         except Exception:
             pass
+    
+    def _update_scan_status(self):
+        """Update the scanning status indicator in the status bar."""
+        try:
+            scan_status = self.queue_manager.get_scan_queue_status()
+            queue_size = scan_status['queue_size']
+            items_pending = scan_status['items_pending_scan']
+            
+            if queue_size > 0 or items_pending > 0:
+                self.scan_status_label.setText(f"Scanning: {items_pending} pending, {queue_size} in queue")
+                self.scan_status_label.setVisible(True)
+            else:
+                self.scan_status_label.setVisible(False)
+        except Exception:
+            # Hide on error
+            self.scan_status_label.setVisible(False)
 
     def _load_status_icons_if_needed(self):
         try:
@@ -3382,11 +3583,11 @@ class ImxUploadGUI(QMainWindow):
                     os.path.join(app_dir, "assets", "up.png") if app_dir else None,
                 ]
                 candidates_stop = [
-                    os.path.join(base_dir, "stop.png"),
-                    os.path.join(os.getcwd(), "stop.png"),
-                    os.path.join(base_dir, "assets", "stop.png"),
-                    os.path.join(app_dir, "stop.png") if app_dir else None,
-                    os.path.join(app_dir, "assets", "stop.png") if app_dir else None,
+                    os.path.join(base_dir, "error.png"),
+                    os.path.join(os.getcwd(), "error.png"),
+                    os.path.join(base_dir, "assets", "error.png"),
+                    os.path.join(app_dir, "error.png") if app_dir else None,
+                    os.path.join(app_dir, "assets", "error.png") if app_dir else None,
                 ]
                 chk = QPixmap()
                 for p in candidates:
@@ -3489,17 +3690,52 @@ class ImxUploadGUI(QMainWindow):
             except Exception:
                 pass
             icon = None
+            tooltip = ""
+            
             if status == "completed" and self._icon_check is not None:
                 icon = self._icon_check
+                tooltip = "Completed"
             elif status == "failed" and self._icon_stop is not None:
                 icon = self._icon_stop
+                # Get error details for failed galleries
+                try:
+                    path = self.gallery_table.item(row, 1).data(Qt.ItemDataRole.UserRole)
+                    if path and path in self.queue_manager.items:
+                        item = self.queue_manager.items[path]
+                        if item.error_message:
+                            tooltip = f"Failed: {item.error_message}"
+                            # Add failed files details if available
+                            if hasattr(item, 'failed_files') and item.failed_files:
+                                failed_count = len(item.failed_files)
+                                tooltip += f"\n\nFailed files ({failed_count}):"
+                                for filename, error in item.failed_files[:3]:  # Show first 3
+                                    tooltip += f"\n• {filename}: {error}"
+                                if failed_count > 3:
+                                    tooltip += f"\n... and {failed_count - 3} more"
+                        else:
+                            tooltip = "Failed"
+                    else:
+                        tooltip = "Failed"
+                except Exception:
+                    tooltip = "Failed"
             elif status == "uploading" and self._icon_up is not None:
                 icon = self._icon_up
+                tooltip = "Uploading"
             else:
                 icon = self._icon_pending if self._icon_pending is not None else None
+                tooltip = status.title() if isinstance(status, str) else ""
+            
             if icon is not None:
                 label = QLabel()
                 label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                if tooltip:
+                    label.setToolTip(tooltip)
+                
+                # For failed galleries, make the icon clickable to show detailed error info
+                if status == "failed":
+                    label.setCursor(Qt.CursorShape.PointingHandCursor)
+                    label.mousePressEvent = lambda event, row=row: self._show_failed_gallery_details(row)
+                
                 try:
                     row_h = self.gallery_table.rowHeight(row)
                     if not row_h or row_h <= 0:
@@ -3522,6 +3758,46 @@ class ImxUploadGUI(QMainWindow):
                 self.gallery_table.setItem(row, col, item)
         except Exception:
             pass
+
+    def _show_failed_gallery_details(self, row: int):
+        """Show detailed error information for a failed gallery."""
+        try:
+            path = self.gallery_table.item(row, 1).data(Qt.ItemDataRole.UserRole)
+            if not path or path not in self.queue_manager.items:
+                return
+            
+            item = self.queue_manager.items[path]
+            if item.status != "failed":
+                return
+            
+            # Build detailed error message
+            error_details = f"Gallery: {item.name or 'Unknown'}\n"
+            error_details += f"Path: {item.path}\n"
+            error_details += f"Status: {item.status}\n\n"
+            
+            if item.error_message:
+                error_details += f"Error: {item.error_message}\n\n"
+            
+            if hasattr(item, 'failed_files') and item.failed_files:
+                error_details += f"Failed Files ({len(item.failed_files)}):\n"
+                for filename, error in item.failed_files:
+                    error_details += f"\n• {filename}\n  {error}\n"
+            else:
+                error_details += "No specific file error details available."
+            
+            # Show in a dialog
+            from PyQt6.QtWidgets import QMessageBox
+            msg_box = QMessageBox(self)
+            msg_box.setIcon(QMessageBox.Icon.Information)
+            msg_box.setWindowTitle("Failed Gallery Details")
+            msg_box.setText(error_details)
+            msg_box.setStandardButtons(QMessageBox.StandardButton.Ok)
+            msg_box.exec()
+            
+        except Exception as e:
+            # Fallback to simple error message
+            from PyQt6.QtWidgets import QMessageBox
+            QMessageBox.warning(self, "Error", f"Failed to show error details: {str(e)}")
 
     def _set_renamed_cell_icon(self, row: int, is_renamed: bool | None):
         """Set the Renamed column cell to an icon (check/pending) if available; fallback to text.
@@ -4763,43 +5039,84 @@ class ImxUploadGUI(QMainWindow):
             self.add_folders([folder_path])
     
     def add_folders(self, folder_paths: List[str]):
-        """Add folders to the upload queue"""
-        added_count = 0
-        # Get selected template
+        """Add folders to the upload queue efficiently"""
+        if len(folder_paths) == 1:
+            # Single folder - use the old method for backward compatibility
+            self._add_single_folder(folder_paths[0])
+        else:
+            # Multiple folders - use the new efficient method
+            self._add_multiple_folders(folder_paths)
+    
+    def _add_single_folder(self, path: str):
+        """Add a single folder using the old method."""
+        template_name = self.template_combo.currentText()
+        result = self.queue_manager.add_item(path, template_name=template_name)
+        
+        if result == True:
+            self.add_log_message(f"{timestamp()} [queue] Added to queue: {os.path.basename(path)}")
+        elif result == "duplicate":
+            # Handle duplicate gallery
+            gallery_name = sanitize_gallery_name(os.path.basename(path))
+            from imxup import check_if_gallery_exists
+            existing_files = check_if_gallery_exists(gallery_name)
+            
+            message = f"Gallery '{gallery_name}' already exists with {len(existing_files)} files.\n\nContinue with upload anyway?"
+            reply = QMessageBox.question(
+                self,
+                "Gallery Already Exists",
+                message,
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No
+            )
+            
+            if reply == QMessageBox.StandardButton.Yes:
+                # Force add the item
+                self.queue_manager._force_add_item(path, gallery_name, template_name)
+                self.add_log_message(f"{timestamp()} [queue] Added to queue (user confirmed): {os.path.basename(path)}")
+            else:
+                self.add_log_message(f"{timestamp()} [queue] Skipped: {os.path.basename(path)} (user cancelled)")
+        else:
+            self.add_log_message(f"{timestamp()} [queue] Failed to add: {os.path.basename(path)} (no images or already in queue)")
+        
+        self.update_queue_display()
+    
+    def _add_multiple_folders(self, folder_paths: List[str]):
+        """Add multiple folders efficiently using the new method."""
         template_name = self.template_combo.currentText()
         
-        for path in folder_paths:
-            result = self.queue_manager.add_item(path, template_name=template_name)
-            if result == True:
-                added_count += 1
-                self.add_log_message(f"{timestamp()} [queue] Added to queue: {os.path.basename(path)}")
-            elif result == "duplicate":
-                # Handle duplicate gallery
-                gallery_name = sanitize_gallery_name(os.path.basename(path))
-                from imxup import check_if_gallery_exists
-                existing_files = check_if_gallery_exists(gallery_name)
-                
-                message = f"Gallery '{gallery_name}' already exists with {len(existing_files)} files.\n\nContinue with upload anyway?"
-                reply = QMessageBox.question(
-                    self,
-                    "Gallery Already Exists",
-                    message,
-                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                    QMessageBox.StandardButton.No
-                )
-                
-                if reply == QMessageBox.StandardButton.Yes:
-                    # Force add the item
-                    self.queue_manager._force_add_item(path, gallery_name, template_name)
-                    added_count += 1
-                    self.add_log_message(f"{timestamp()} [queue] Added to queue (user confirmed): {os.path.basename(path)}")
-                else:
-                    self.add_log_message(f"{timestamp()} [queue] Skipped: {os.path.basename(path)} (user cancelled)")
-            else:
-                self.add_log_message(f"{timestamp()} [queue] Failed to add: {os.path.basename(path)} (no images or already in queue)")
+        # Show progress dialog for multiple folders
+        progress = QProgressDialog("Adding galleries...", "Cancel", 0, len(folder_paths), self)
+        progress.setWindowModality(Qt.WindowModality.WindowModal)
+        progress.setAutoClose(True)
+        progress.setValue(0)
         
-        if added_count > 0:
+        try:
+            # Use the new efficient method
+            results = self.queue_manager.add_multiple_items(folder_paths, template_name)
+            
+            # Update progress
+            progress.setValue(len(folder_paths))
+            
+            # Show results
+            if results['added'] > 0:
+                self.add_log_message(f"{timestamp()} [queue] Added {results['added']} galleries to queue")
+            if results['duplicates'] > 0:
+                self.add_log_message(f"{timestamp()} [queue] Skipped {results['duplicates']} duplicate galleries")
+            if results['failed'] > 0:
+                self.add_log_message(f"{timestamp()} [queue] Failed to add {results['failed']} galleries")
+                # Show detailed errors if any
+                for error in results['errors'][:5]:  # Show first 5 errors
+                    self.add_log_message(f"{timestamp()} [queue] Error: {error}")
+                if len(results['errors']) > 5:
+                    self.add_log_message(f"{timestamp()} [queue] ... and {len(results['errors']) - 5} more errors")
+            
+            # Update display
             self.update_queue_display()
+            
+        except Exception as e:
+            self.add_log_message(f"{timestamp()} [queue] Error adding multiple folders: {str(e)}")
+        finally:
+            progress.close()
     
     def add_folder_from_command_line(self, folder_path: str):
         """Add folder from command line (single instance)"""
@@ -4858,7 +5175,6 @@ class ImxUploadGUI(QMainWindow):
         self.gallery_table.setRowCount(len(items))
         
         
-        # Populate the table with current items
         # Load pending-rename map once for this refresh
         try:
             from imxup import get_unnamed_galleries
@@ -6274,6 +6590,10 @@ class ImxUploadGUI(QMainWindow):
         
         # Save queue state
         self.queue_manager.save_persistent_queue()
+        
+        # Shutdown scan worker gracefully
+        if self.queue_manager:
+            self.queue_manager.shutdown()
         
         # Always stop worker and server on close
         if self.worker:

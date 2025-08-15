@@ -17,6 +17,7 @@ import sqlite3
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, Iterable, List, Optional, Tuple
+import json
 
 
 # Access central data dir path from shared helper
@@ -57,7 +58,8 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
             final_kibps REAL DEFAULT 0.0,
             gallery_id TEXT,
             gallery_url TEXT,
-            insertion_order INTEGER DEFAULT 0
+            insertion_order INTEGER DEFAULT 0,
+            failed_files TEXT
         );
         CREATE INDEX IF NOT EXISTS galleries_status_idx ON galleries(status);
         CREATE INDEX IF NOT EXISTS galleries_added_idx ON galleries(added_ts DESC);
@@ -83,6 +85,24 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
         );
         """
     )
+    # Run migrations after schema creation
+    _run_migrations(conn)
+
+def _run_migrations(conn: sqlite3.Connection) -> None:
+    """Run database migrations to add new columns/features."""
+    try:
+        # Migration 1: Add failed_files column if it doesn't exist
+        cursor = conn.execute("PRAGMA table_info(galleries)")
+        columns = [column[1] for column in cursor.fetchall()]
+        
+        if 'failed_files' not in columns:
+            print("Adding failed_files column to galleries table...")
+            conn.execute("ALTER TABLE galleries ADD COLUMN failed_files TEXT")
+            print("✓ Added failed_files column")
+            
+    except Exception as e:
+        print(f"Warning: Migration failed: {e}")
+        # Continue anyway - the app should still work
 
 
 class QueueStore:
@@ -188,13 +208,14 @@ class QueueStore:
         gallery_id = item.get('gallery_id')
         gallery_url = item.get('gallery_url')
         insertion_order = int(item.get('insertion_order', 0) or 0)
+        failed_files = json.dumps(item.get('failed_files', []))
 
         conn.execute(
             """
             INSERT INTO galleries(
                 path, name, status, added_ts, finished_ts, template, total_images, uploaded_images,
-                total_size, scan_complete, uploaded_bytes, final_kibps, gallery_id, gallery_url, insertion_order
-            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                total_size, scan_complete, uploaded_bytes, final_kibps, gallery_id, gallery_url, insertion_order, failed_files
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             ON CONFLICT(path) DO UPDATE SET
                 name=excluded.name,
                 status=excluded.status,
@@ -209,11 +230,12 @@ class QueueStore:
                 final_kibps=excluded.final_kibps,
                 gallery_id=excluded.gallery_id,
                 gallery_url=excluded.gallery_url,
-                insertion_order=excluded.insertion_order
+                insertion_order=excluded.insertion_order,
+                failed_files=excluded.failed_files
             """,
             (
                 path, name, status, added_ts, finished_ts, template, total_images, uploaded_images,
-                total_size, scan_complete, uploaded_bytes, final_kibps, gallery_id, gallery_url, insertion_order,
+                total_size, scan_complete, uploaded_bytes, final_kibps, gallery_id, gallery_url, insertion_order, failed_files,
             ),
         )
 
@@ -224,49 +246,57 @@ class QueueStore:
                 conn.execute("BEGIN")
                 try:
                     for it in items:
-                        self._upsert_gallery_row(conn, it)
-                        # Optionally persist per-image resume info when provided
-                        uploaded_files = it.get('uploaded_files') or []
-                        uploaded_images_data = it.get('uploaded_images_data') or []
-                        if uploaded_files:
-                            # Lookup gallery id for images insertion
-                            cur = conn.execute("SELECT id FROM galleries WHERE path = ?", (it.get('path', ''),))
-                            row = cur.fetchone()
-                            if not row:
-                                continue
-                            g_id = int(row[0])
-                            data_map = {}
-                            for tup in uploaded_images_data:
-                                try:
-                                    fname, data = tup
-                                    data_map[fname] = data or {}
-                                except Exception:
+                        try:
+                            self._upsert_gallery_row(conn, it)
+                            # Optionally persist per-image resume info when provided
+                            uploaded_files = it.get('uploaded_files') or []
+                            uploaded_images_data = it.get('uploaded_images_data') or []
+                            if uploaded_files:
+                                # Lookup gallery id for images insertion
+                                cur = conn.execute("SELECT id FROM galleries WHERE path = ?", (it.get('path', ''),))
+                                row = cur.fetchone()
+                                if not row:
                                     continue
-                            for fname in uploaded_files:
-                                d = data_map.get(fname, {})
-                                conn.execute(
-                                    """
-                                    INSERT OR IGNORE INTO images(gallery_fk, filename, size_bytes, width, height, uploaded_ts, url, thumb_url)
-                                    VALUES(?,?,?,?,?,?,?,?)
-                                    """,
-                                    (
-                                        g_id,
-                                        fname,
-                                        int(d.get('size_bytes', 0) or 0),
-                                        int(d.get('width', 0) or 0),
-                                        int(d.get('height', 0) or 0),
-                                        None,
-                                        d.get('image_url') or d.get('url') or "",
-                                        d.get('thumb_url') or "",
-                                    ),
-                                )
+                                g_id = int(row[0])
+                                data_map = {}
+                                for tup in uploaded_images_data:
+                                    try:
+                                        fname, data = tup
+                                        data_map[fname] = data or {}
+                                    except Exception:
+                                        continue
+                                for fname in uploaded_files:
+                                    d = data_map.get(fname, {})
+                                    conn.execute(
+                                        """
+                                        INSERT OR IGNORE INTO images(gallery_fk, filename, size_bytes, width, height, uploaded_ts, url, thumb_url)
+                                        VALUES(?,?,?,?,?,?,?,?)
+                                        """,
+                                        (
+                                            g_id,
+                                            fname,
+                                            int(d.get('size_bytes', 0) or 0),
+                                            int(d.get('width', 0) or 0),
+                                            int(d.get('height', 0) or 0),
+                                            None,
+                                            d.get('image_url') or d.get('url') or "",
+                                            d.get('thumb_url') or "",
+                                        ),
+                                    )
+                        except Exception as item_error:
+                            print(f"Warning: Failed to upsert item {it.get('path', 'unknown')}: {item_error}")
+                            # Continue with other items instead of failing completely
+                            continue
                     conn.execute("COMMIT")
-                except Exception:
+                except Exception as tx_error:
                     conn.execute("ROLLBACK")
+                    print(f"Transaction failed: {tx_error}")
                     raise
-        except Exception:
+        except Exception as e:
             # Log via print to avoid importing logging from GUI thread
-            print("ERROR: bulk_upsert failed", flush=True)
+            print(f"ERROR: bulk_upsert failed: {e}", flush=True)
+            import traceback
+            traceback.print_exc()
 
     def bulk_upsert_async(self, items: Iterable[Dict[str, Any]]) -> None:
         # Snapshot to avoid mutation while persisting
@@ -276,34 +306,77 @@ class QueueStore:
     def load_all_items(self) -> List[Dict[str, Any]]:
         with _connect(self.db_path) as conn:
             _ensure_schema(conn)
-            cur = conn.execute(
-                """
-                SELECT path, name, status, added_ts, finished_ts, template, total_images, uploaded_images,
-                       total_size, scan_complete, uploaded_bytes, final_kibps, gallery_id, gallery_url, insertion_order
-                FROM galleries
-                ORDER BY insertion_order ASC, added_ts ASC
-                """
-            )
+            
+            # Check if failed_files column exists
+            cursor = conn.execute("PRAGMA table_info(galleries)")
+            columns = [column[1] for column in cursor.fetchall()]
+            has_failed_files = 'failed_files' in columns
+            
+            if has_failed_files:
+                # New schema with failed_files column
+                cur = conn.execute(
+                    """
+                    SELECT path, name, status, added_ts, finished_ts, template, total_images, uploaded_images,
+                           total_size, scan_complete, uploaded_bytes, final_kibps, gallery_id, gallery_url, insertion_order, failed_files
+                    FROM galleries
+                    ORDER BY insertion_order ASC, added_ts ASC
+                    """
+                )
+            else:
+                # Old schema without failed_files column
+                cur = conn.execute(
+                    """
+                    SELECT path, name, status, added_ts, finished_ts, template, total_images, uploaded_images,
+                           total_size, scan_complete, uploaded_bytes, final_kibps, gallery_id, gallery_url, insertion_order
+                    FROM galleries
+                    ORDER BY insertion_order ASC, added_ts ASC
+                    """
+                )
+            
             rows = cur.fetchall()
             items: List[Dict[str, Any]] = []
             for r in rows:
-                item: Dict[str, Any] = {
-                    'path': r[0],
-                    'name': r[1],
-                    'status': r[2],
-                    'added_time': int(r[3] or 0),
-                    'finished_time': int(r[4] or 0) or None,
-                    'template_name': r[5],
-                    'total_images': int(r[6] or 0),
-                    'uploaded_images': int(r[7] or 0),
-                    'total_size': int(r[8] or 0),
-                    'scan_complete': bool(r[9] or 0),
-                    'uploaded_bytes': int(r[10] or 0),
-                    'final_kibps': float(r[11] or 0.0),
-                    'gallery_id': r[12] or "",
-                    'gallery_url': r[13] or "",
-                    'insertion_order': int(r[14] or 0),
-                }
+                if has_failed_files:
+                    # New schema - 16 columns
+                    item: Dict[str, Any] = {
+                        'path': r[0],
+                        'name': r[1],
+                        'status': r[2],
+                        'added_time': int(r[3] or 0),
+                        'finished_time': int(r[4] or 0) or None,
+                        'template_name': r[5],
+                        'total_images': int(r[6] or 0),
+                        'uploaded_images': int(r[7] or 0),
+                        'total_size': int(r[8] or 0),
+                        'scan_complete': bool(r[9] or 0),
+                        'uploaded_bytes': int(r[10] or 0),
+                        'final_kibps': float(r[11] or 0.0),
+                        'gallery_id': r[12] or "",
+                        'gallery_url': r[13] or "",
+                        'insertion_order': int(r[14] or 0),
+                        'failed_files': json.loads(r[15]) if r[15] else [],
+                    }
+                else:
+                    # Old schema - 15 columns
+                    item: Dict[str, Any] = {
+                        'path': r[0],
+                        'name': r[1],
+                        'status': r[2],
+                        'added_time': int(r[3] or 0),
+                        'finished_time': int(r[4] or 0) or None,
+                        'template_name': r[5],
+                        'total_images': int(r[6] or 0),
+                        'uploaded_images': int(r[7] or 0),
+                        'total_size': int(r[8] or 0),
+                        'scan_complete': bool(r[9] or 0),
+                        'uploaded_bytes': int(r[10] or 0),
+                        'final_kibps': float(r[11] or 0.0),
+                        'gallery_id': r[12] or "",
+                        'gallery_url': r[13] or "",
+                        'insertion_order': int(r[14] or 0),
+                        'failed_files': [],  # Default empty list for old schema
+                    }
+                
                 # Rehydrate resume helpers from images table (filenames only)
                 try:
                     gcur = conn.execute("SELECT id FROM galleries WHERE path = ?", (item['path'],))
