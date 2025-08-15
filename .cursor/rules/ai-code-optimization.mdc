@@ -1,0 +1,342 @@
+# AI Code Optimization Guidelines
+
+## Core Principles
+- **Token Efficiency**: Minimize tokens needed for AI analysis while maintaining accuracy
+- **Predictable Structure**: Consistent patterns that AI can quickly understand
+- **Clear Separation**: Distinct modules with well-defined responsibilities
+- **Self-Documenting**: Code that explains itself without extensive comments
+
+## File Structure Standards
+
+### Module Organization
+```
+imxup/
+├── imxup_gui.py          # Main window (1000 lines max)
+├── imxup_settings.py     # Settings management (1500 lines max)
+├── imxup_queue.py        # Queue operations (1200 lines max)
+├── imxup_dialogs.py      # Dialog classes (2000 lines max)
+├── imxup_components.py   # UI components (800 lines max)
+├── imxup_utils.py        # Utilities (500 lines max)
+└── imxup_core.py         # Core business logic (existing)
+```
+
+### Line Limits
+- **Maximum file size**: 2000 lines per module
+- **Target file size**: 1000-1500 lines per module
+- **Class size limit**: 500 lines per class
+- **Method size limit**: 50 lines per method
+
+## Naming Conventions
+
+### Class Names
+```python
+# Use descriptive, consistent naming
+class ComprehensiveSettingsDialog: ...      # ✅ Good
+class SettingsWindow: ...                   # ❌ Too generic
+class ImxUploadGUI: ...                     # ✅ Good
+class MainWindow: ...                       # ❌ Too generic
+```
+
+### Method Names
+```python
+# Use consistent verb prefixes
+def setup_ui(self): ...                     # ✅ Setup methods
+def setup_widgets(self): ...                # ✅ Setup methods
+def setup_layout(self): ...                 # ✅ Setup methods
+
+def load_settings(self): ...                # ✅ Load methods
+def load_templates(self): ...               # ✅ Load methods
+def load_credentials(self): ...             # ✅ Load methods
+
+def save_settings(self): ...                # ✅ Save methods
+def save_templates(self): ...               # ✅ Save methods
+def save_credentials(self): ...             # ✅ Save methods
+
+def update_display(self): ...               # ✅ Update methods
+def update_queue_display(self): ...         # ✅ Update methods
+def update_progress_display(self): ...      # ✅ Update methods
+```
+
+### Private Methods
+```python
+# Use consistent underscore prefix
+def _get_scanning_config(self): ...         # ✅ Private helper
+def _calculate_dimensions(self): ...        # ✅ Private helper
+def _update_template_list(self): ...        # ✅ Private helper
+```
+
+## Code Organization Standards
+
+### Class Structure Template
+```python
+class ClassName:
+    """Clear, concise docstring explaining purpose."""
+    
+    # === CONSTANTS ===
+    DEFAULT_SIZE = 800
+    DEFAULT_HEIGHT = 600
+    
+    # === INITIALIZATION ===
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.parent = parent
+        self.setup_ui()
+        self.setup_connections()
+        self.load_initial_state()
+    
+    # === UI SETUP ===
+    def setup_ui(self):
+        """Setup the user interface."""
+        self.create_widgets()
+        self.create_layout()
+        self.apply_styling()
+    
+    def create_widgets(self):
+        """Create all UI widgets."""
+        pass
+    
+    def create_layout(self):
+        """Create and configure layouts."""
+        pass
+    
+    # === DATA MANAGEMENT ===
+    def load_data(self):
+        """Load data from storage."""
+        pass
+    
+    def save_data(self):
+        """Save data to storage."""
+        pass
+    
+    # === EVENT HANDLERS ===
+    def on_button_clicked(self):
+        """Handle button click events."""
+        pass
+    
+    # === UTILITY METHODS ===
+    def _validate_input(self):
+        """Validate user input."""
+        pass
+```
+
+### Method Grouping
+```python
+class ClassName:
+    # === INITIALIZATION ===
+    def __init__(self): ...
+    def setup_ui(self): ...
+    
+    # === PUBLIC INTERFACE ===
+    def show_dialog(self): ...
+    def update_display(self): ...
+    
+    # === PRIVATE HELPERS ===
+    def _load_config(self): ...
+    def _save_config(self): ...
+    
+    # === EVENT HANDLERS ===
+    def on_action_triggered(self): ...
+    def on_setting_changed(self): ...
+```
+
+## Documentation Standards
+
+### Docstring Format
+```python
+def method_name(self, param1: str, param2: int) -> bool:
+    """
+    Brief description of what the method does.
+    
+    Args:
+        param1: Description of first parameter
+        param2: Description of second parameter
+    
+    Returns:
+        Description of return value
+    
+    Raises:
+        ExceptionType: When and why this exception occurs
+    """
+```
+
+### Inline Comments
+```python
+# Use comments sparingly - prefer self-documenting code
+def process_images(self, image_list: List[str]) -> List[dict]:
+    """Process a list of image paths and return metadata."""
+    
+    # Skip empty lists
+    if not image_list:
+        return []
+    
+    results = []
+    for image_path in image_list:
+        # Extract metadata using PIL
+        metadata = self._extract_image_metadata(image_path)
+        results.append(metadata)
+    
+    return results
+```
+
+## Import Organization
+
+### Import Order
+```python
+# 1. Standard library imports
+import os
+import sys
+from pathlib import Path
+from typing import List, Dict, Optional
+
+# 2. Third-party imports
+from PyQt6.QtWidgets import QDialog, QVBoxLayout
+from PyQt6.QtCore import Qt, pyqtSignal
+
+# 3. Local application imports
+from imxup_utils import load_config, save_config
+from imxup_components import CustomWidget
+```
+
+### Import Aliases
+```python
+# Use descriptive aliases for clarity
+from PyQt6.QtWidgets import QVBoxLayout as VBox
+from PyQt6.QtWidgets import QHBoxLayout as HBox
+from PyQt6.QtCore import pyqtSignal as Signal
+```
+
+## Error Handling Standards
+
+### Exception Handling Pattern
+```python
+def risky_operation(self):
+    """Perform operation that might fail."""
+    try:
+        result = self._perform_operation()
+        return result
+    except SpecificException as e:
+        # Log specific error
+        self.logger.error(f"Operation failed: {e}")
+        # Return safe default
+        return self._get_default_value()
+    except Exception as e:
+        # Log unexpected error
+        self.logger.error(f"Unexpected error: {e}")
+        # Return safe default
+        return self._get_default_value()
+```
+
+### Graceful Degradation
+```python
+def load_user_preferences(self) -> dict:
+    """Load user preferences with fallback to defaults."""
+    try:
+        return self._load_from_storage()
+    except FileNotFoundError:
+        return self._get_default_preferences()
+    except PermissionError:
+        return self._get_default_preferences()
+    except Exception as e:
+        self.logger.warning(f"Failed to load preferences: {e}")
+        return self._get_default_preferences()
+```
+
+## Performance Considerations
+
+### Lazy Loading
+```python
+class LazyLoadedDialog:
+    def __init__(self):
+        self._dialog = None
+    
+    @property
+    def dialog(self):
+        """Lazy load dialog when first accessed."""
+        if self._dialog is None:
+            self._dialog = self._create_dialog()
+        return self._dialog
+```
+
+### Efficient Updates
+```python
+def update_display(self):
+    """Update display only when necessary."""
+    if self._needs_update:
+        self._perform_update()
+        self._needs_update = False
+```
+
+## Testing Considerations
+
+### Testable Design
+```python
+class TestableClass:
+    def __init__(self, dependencies=None):
+        self.dependencies = dependencies or self._create_default_dependencies()
+    
+    def _create_default_dependencies(self):
+        """Create default dependencies for production use."""
+        return ProductionDependencies()
+    
+    def process_data(self, data):
+        """Process data using injected dependencies."""
+        return self.dependencies.process(data)
+```
+
+## Migration Guidelines
+
+### When Splitting Files
+1. **Identify logical boundaries** between functionality
+2. **Extract complete classes** rather than partial implementations
+3. **Maintain import relationships** between modules
+4. **Update all references** to moved classes/methods
+5. **Test thoroughly** after each split
+
+### Example Migration
+```python
+# Before: imxup_gui.py (8000 lines)
+class ComprehensiveSettingsDialog: ...
+class CredentialSetupDialog: ...
+class TemplateManagerDialog: ...
+
+# After: imxup_settings.py
+from imxup_dialogs import CredentialSetupDialog, TemplateManagerDialog
+
+class ComprehensiveSettingsDialog: ...
+```
+
+## AI Analysis Optimization
+
+### Context Reduction
+- **Keep related functionality together** in same module
+- **Use clear, descriptive names** that reduce need for context
+- **Implement consistent patterns** across similar functionality
+- **Minimize cross-module dependencies** where possible
+
+### Token Efficiency
+- **Eliminate redundant code** through proper abstraction
+- **Use consistent naming** to reduce pattern matching overhead
+- **Group related methods** to improve context understanding
+- **Implement clear interfaces** between modules
+
+## Enforcement
+
+### Code Review Checklist
+- [ ] File size under 2000 lines
+- [ ] Class size under 500 lines
+- [ ] Method size under 50 lines
+- [ ] Consistent naming conventions
+- [ ] Proper method grouping
+- [ ] Clear separation of concerns
+- [ ] Comprehensive error handling
+- [ ] Self-documenting code
+
+### Automated Checks
+- **Line count limits** in CI/CD pipeline
+- **Import organization** validation
+- **Naming convention** enforcement
+- **Documentation coverage** requirements
+description:
+globs:
+alwaysApply: false
+---
