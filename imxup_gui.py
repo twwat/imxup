@@ -5148,15 +5148,6 @@ class ImxUploadGUI(QMainWindow):
         #""")
         settings_layout.addWidget(self.save_settings_btn, 8, 0, 1, 2)
 
-        # Manage file locations button (between Save Settings and Manage Templates)
-        self.manage_file_locations_btn = QPushButton("Manage File Locations")
-        if not self.manage_file_locations_btn.text().startswith(" "):
-            self.manage_file_locations_btn.setText(" " + self.manage_file_locations_btn.text())
-        self.manage_file_locations_btn.clicked.connect(self.manage_file_locations)
-        self.manage_file_locations_btn.setMinimumHeight(30)
-        self.manage_file_locations_btn.setMaximumHeight(34)
-        settings_layout.addWidget(self.manage_file_locations_btn, 9, 0, 1, 2)
-        
         # Manage templates button
         self.manage_templates_btn = QPushButton("Manage BBCode Templates")
         if not self.manage_templates_btn.text().startswith(" "):
@@ -5178,7 +5169,7 @@ class ImxUploadGUI(QMainWindow):
         #        xbackground-color: #1e8449;
         #    }
         #""")
-        settings_layout.addWidget(self.manage_templates_btn, 10, 0, 1, 2)
+        settings_layout.addWidget(self.manage_templates_btn, 9, 0, 1, 2)
         
         # Manage credentials button
         self.manage_credentials_btn = QPushButton("Manage Credentials")
@@ -5201,7 +5192,7 @@ class ImxUploadGUI(QMainWindow):
         #        xbackground-color: #21618c;
         #    }
         #""")
-        settings_layout.addWidget(self.manage_credentials_btn, 11, 0, 1, 2)
+        settings_layout.addWidget(self.manage_credentials_btn, 10, 0, 1, 2)
         
         right_layout.addWidget(self.settings_group)
         
@@ -5519,8 +5510,6 @@ class ImxUploadGUI(QMainWindow):
             action_templates.triggered.connect(self.manage_templates)
             action_credentials = tools_menu.addAction("Manage Credentials")
             action_credentials.triggered.connect(self.manage_credentials)
-            action_locations = tools_menu.addAction("Manage File Locations")
-            action_locations.triggered.connect(self.manage_file_locations)
 
             # Authentication submenu
             auth_menu = tools_menu.addMenu("Authentication")
@@ -5636,140 +5625,6 @@ class ImxUploadGUI(QMainWindow):
         current_template = self.template_combo.currentText()
         self.refresh_template_combo(preferred=current_template)
 
-    def manage_file_locations(self):
-        """Open dialog to manage artifact storage locations and central path."""
-        try:
-            dialog = QDialog(self)
-            dialog.setWindowTitle("Manage File Locations")
-            dialog.setModal(True)
-            dialog.resize(600, 220)
-
-            vbox = QVBoxLayout(dialog)
-
-            # Informational section (theme-aware for readability)
-            info_text = QLabel()
-            info_text.setWordWrap(True)
-            try:
-                pal = dialog.palette()
-                bg = pal.window().color()
-                is_dark = (0.2126 * bg.redF() + 0.7152 * bg.greenF() + 0.0722 * bg.blueF()) < 0.5
-            except Exception:
-                is_dark = False
-            panel_bg = "#2e2e2e" if is_dark else "#f0f8ff"
-            panel_border = "#444444" if is_dark else "#cccccc"
-            text_color = "#dddddd" if is_dark else "#333333"
-            info_text.setStyleSheet(f"padding: 10px; background-color: {panel_bg}; border: 1px solid {panel_border}; border-radius: 5px; color: {text_color};")
-            vbox.addWidget(info_text)
-
-            # Options group
-            group = QGroupBox("Storage Options")
-            grid = QGridLayout(group)
-
-            # Checkboxes mirror hidden settings checkboxes
-            uploaded_check = QCheckBox("Save artifacts in .uploaded folder")
-            uploaded_check.setChecked(self.store_in_uploaded_check.isChecked())
-            grid.addWidget(uploaded_check, 0, 0, 1, 2)
-
-            central_check = QCheckBox("Save artifacts in central store")
-            central_check.setChecked(self.store_in_central_check.isChecked())
-            grid.addWidget(central_check, 1, 0, 1, 2)
-
-            # Central store path selector
-            from imxup import (
-                get_central_store_base_path,
-                get_default_central_store_base_path,
-            )
-            current_path = self.central_store_path_value or get_central_store_base_path()
-
-            path_label = QLabel("Central store path:")
-            path_edit = QLineEdit(current_path)
-            path_edit.setReadOnly(True)
-            browse_btn = QPushButton("Browse…")
-            open_btn = QPushButton("Open Central Store")
-
-            def on_browse():
-                directory = QFileDialog.getExistingDirectory(dialog, "Select Central Store Directory", current_path, QFileDialog.Option.ShowDirsOnly)
-                if directory:
-                    path_edit.setText(directory)
-
-            browse_btn.clicked.connect(on_browse)
-
-            grid.addWidget(path_label, 2, 0)
-            grid.addWidget(path_edit, 2, 1)
-            grid.addWidget(browse_btn, 2, 2)
-            grid.addWidget(open_btn, 2, 3)
-
-            def set_path_controls_enabled(enabled: bool):
-                path_label.setEnabled(enabled)
-                path_edit.setEnabled(enabled)
-                browse_btn.setEnabled(enabled)
-                open_btn.setEnabled(enabled)
-
-            set_path_controls_enabled(central_check.isChecked())
-            central_check.toggled.connect(set_path_controls_enabled)
-
-            # Dynamic info text
-            def update_info_label():
-                base = path_edit.text().strip() or get_central_store_base_path() or get_default_central_store_base_path()
-                galleries_path = os.path.join(base, "galleries")
-                templates_path = os.path.join(base, "templates")
-                info_text.setText(
-                    "Galleries and templates are stored in the central store:\n\n"
-                    f"Galleries folder: {galleries_path}\n"
-                    f"Templates folder: {templates_path}\n\n"
-                    f"Default base path (if unset): {get_default_central_store_base_path()}"
-                )
-
-            update_info_label()
-            # Update info when path changes via browse or programmatically
-            path_edit.textChanged.connect(lambda _=None: update_info_label())
-
-            # Open in OS file browser
-            def on_open_folder():
-                base = path_edit.text().strip() or get_central_store_base_path()
-                try:
-                    os.makedirs(base, exist_ok=True)
-                except Exception:
-                    pass
-                QDesktopServices.openUrl(QUrl.fromLocalFile(base))
-
-            open_btn.clicked.connect(on_open_folder)
-
-            vbox.addWidget(group)
-
-            # Buttons (match credentials dialog layout)
-            button_layout = QHBoxLayout()
-            button_layout.addStretch()
-            save_btn = QPushButton("Save")
-            if not save_btn.text().startswith(" "):
-                save_btn.setText(" " + save_btn.text())
-            close_btn = QPushButton("Close")
-            if not close_btn.text().startswith(" "):
-                close_btn.setText(" " + close_btn.text())
-            button_layout.addWidget(save_btn)
-            button_layout.addWidget(close_btn)
-            vbox.addLayout(button_layout)
-
-            def on_save():
-                # Push values back to hidden settings and mark settings dirty
-                self.store_in_uploaded_check.setChecked(uploaded_check.isChecked())
-                self.store_in_central_check.setChecked(central_check.isChecked())
-                self.central_store_path_value = path_edit.text().strip()
-                self.on_setting_changed()
-                dialog.accept()
-
-            def on_close():
-                dialog.reject()
-
-            save_btn.clicked.connect(on_save)
-            close_btn.clicked.connect(on_close)
-
-            dialog.exec()
-        except Exception as e:
-            try:
-                self.add_log_message(f"{timestamp()} Error opening File Locations dialog: {e}")
-            except Exception:
-                pass
 
     def _on_templates_directory_changed(self, _path):
         """Handle updates to the templates directory by refreshing the combo box."""
