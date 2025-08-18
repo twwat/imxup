@@ -42,6 +42,7 @@ class ComprehensiveSettingsDialog(QDialog):
         
         # Create tab widget
         self.tab_widget = QTabWidget()
+        self.tab_widget.currentChanged.connect(self.on_tab_changed)
         layout.addWidget(self.tab_widget)
         
         # Create tabs
@@ -67,7 +68,7 @@ class ComprehensiveSettingsDialog(QDialog):
         button_layout.addWidget(self.ok_btn)
         
         self.cancel_btn = QPushButton("Cancel")
-        self.cancel_btn.clicked.connect(self.reject)
+        self.cancel_btn.clicked.connect(self.on_cancel_clicked)
         button_layout.addWidget(self.cancel_btn)
         
         layout.addLayout(button_layout)
@@ -305,11 +306,20 @@ class ComprehensiveSettingsDialog(QDialog):
         """Browse for central store directory"""
         from imxup import get_default_central_store_base_path
         current_path = self.path_edit.text() or get_default_central_store_base_path()
-        directory = QFileDialog.getExistingDirectory(
-            self, "Select Central Store Directory", 
-            current_path, 
-            QFileDialog.Option.ShowDirsOnly
-        )
+        
+        # Use non-blocking file dialog
+        dialog = QFileDialog(self)
+        dialog.setWindowTitle("Select Central Store Directory")
+        dialog.setFileMode(QFileDialog.FileMode.Directory)
+        dialog.setOption(QFileDialog.Option.ShowDirsOnly, True)
+        dialog.setDirectory(current_path)
+        
+        # Connect to slot for non-blocking execution
+        dialog.directorySelected.connect(self._handle_directory_selected)
+        dialog.open()
+    
+    def _handle_directory_selected(self, directory):
+        """Handle selected directory"""
         if directory:
             self.path_edit.setText(directory)
             
@@ -369,7 +379,12 @@ class ComprehensiveSettingsDialog(QDialog):
                     
             return True
         except Exception as e:
-            QMessageBox.critical(self, "Error", f"Failed to save settings: {str(e)}")
+            # Create non-blocking error message
+            msg_box = QMessageBox(self)
+            msg_box.setIcon(QMessageBox.Icon.Critical)
+            msg_box.setWindowTitle("Error")
+            msg_box.setText(f"Failed to save settings: {str(e)}")
+            msg_box.open()
             return False
     
     def _save_scanning_settings(self):
@@ -388,13 +403,20 @@ class ComprehensiveSettingsDialog(QDialog):
             
     def reset_to_defaults(self):
         """Reset all settings to defaults"""
-        reply = QMessageBox.question(
-            self, "Reset Settings", 
-            "Are you sure you want to reset all settings to defaults?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
-        )
+        # Create a non-blocking message box
+        msg_box = QMessageBox(self)
+        msg_box.setWindowTitle("Reset Settings")
+        msg_box.setText("Are you sure you want to reset all settings to defaults?")
+        msg_box.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        msg_box.setDefaultButton(QMessageBox.StandardButton.No)
         
-        if reply == QMessageBox.StandardButton.Yes:
+        # Connect to slot for non-blocking execution
+        msg_box.finished.connect(lambda result: self._handle_reset_confirmation(result))
+        msg_box.open()
+    
+    def _handle_reset_confirmation(self, result):
+        """Handle the reset confirmation result"""
+        if result == QMessageBox.StandardButton.Yes:
             # Reset upload settings
             self.thumbnail_size_combo.setCurrentIndex(2)  # 250x250 (default)
             self.thumbnail_format_combo.setCurrentIndex(1)  # Proportional (default)
@@ -423,6 +445,51 @@ class ComprehensiveSettingsDialog(QDialog):
         else:
             # Stay open if save failed
             pass
+    
+    def on_tab_changed(self, new_index):
+        """Handle tab change - simplified approach"""
+        # For now, we only check on dialog close/cancel
+        pass
+    
+    def on_cancel_clicked(self):
+        """Handle cancel button click - check for unsaved changes first"""
+        self._check_unsaved_changes_before_close(lambda: self.reject())
+    
+    def _check_unsaved_changes_before_close(self, close_callback):
+        """Check for unsaved changes and handle closing"""
+        if hasattr(self, 'template_dialog') and self.template_dialog.unsaved_changes:
+            msg_box = QMessageBox(self)
+            msg_box.setIcon(QMessageBox.Icon.Question)
+            msg_box.setWindowTitle("Unsaved Changes")
+            msg_box.setText(f"You have unsaved changes to template '{self.template_dialog.current_template_name}'. Do you want to save them before closing?")
+            msg_box.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No | QMessageBox.StandardButton.Cancel)
+            msg_box.setDefaultButton(QMessageBox.StandardButton.Yes)
+            msg_box.finished.connect(lambda result: self._handle_unsaved_changes_result(result, close_callback))
+            msg_box.open()
+        else:
+            # No unsaved changes, proceed with close
+            close_callback()
+    
+    def _handle_unsaved_changes_result(self, result, close_callback):
+        """Handle the result of unsaved changes dialog"""
+        if result == QMessageBox.StandardButton.Yes:
+            # Save the template first, then close
+            self.template_dialog.save_template()
+            close_callback()
+        elif result == QMessageBox.StandardButton.No:
+            # Don't save, but close
+            close_callback()
+        # Cancel - do nothing (dialog stays open)
+    
+    def closeEvent(self, event):
+        """Handle dialog closing with unsaved changes check"""
+        # Check if Templates tab has unsaved changes
+        if hasattr(self, 'template_dialog') and self.template_dialog.unsaved_changes:
+            self._check_unsaved_changes_before_close(lambda: self.accept())
+            event.ignore()  # Ignore for now, will be handled by callback
+        else:
+            # No unsaved changes, proceed with normal close
+            event.accept()
 
 
 # Import the dialog classes that will be moved to imxup_dialogs.py
@@ -606,17 +673,6 @@ class CredentialSetupDialog(QDialog):
         # Load current credentials
         self.load_current_credentials()
         
-        # Buttons
-        button_layout = QHBoxLayout()
-        button_layout.addStretch()
-        
-        self.close_btn = QPushButton("Close")
-        if not self.close_btn.text().startswith(" "):
-            self.close_btn.setText(" " + self.close_btn.text())
-        self.close_btn.clicked.connect(self.validate_and_close)
-        button_layout.addWidget(self.close_btn)
-        
-        layout.addLayout(button_layout)
         
 
     
@@ -780,8 +836,13 @@ class CredentialSetupDialog(QDialog):
         
         layout.addLayout(button_layout)
         
-        if dialog.exec() == QDialog.DialogCode.Accepted:
-            username = username_edit.text().strip()
+        # Use non-blocking approach
+        dialog.finished.connect(lambda result: self._handle_username_dialog_result(result, username_edit.text().strip()))
+        dialog.open()
+    
+    def _handle_username_dialog_result(self, result, username):
+        """Handle username dialog result"""
+        if result == QDialog.DialogCode.Accepted:
             if username:
                 try:
                     config = configparser.ConfigParser()
@@ -800,12 +861,26 @@ class CredentialSetupDialog(QDialog):
                         config.write(f)
                     
                     self.load_current_credentials()
-                    QMessageBox.information(self, "Success", "Username saved successfully!")
+                    # Create non-blocking message box
+                    msg_box = QMessageBox(self)
+                    msg_box.setWindowTitle("Success")
+                    msg_box.setText("Username saved successfully!")
+                    msg_box.open()
                     
                 except Exception as e:
-                    QMessageBox.critical(self, "Error", f"Failed to save credentials: {str(e)}")
+                    # Create non-blocking error message box
+                    msg_box = QMessageBox(self)
+                    msg_box.setIcon(QMessageBox.Icon.Critical)
+                    msg_box.setWindowTitle("Error")
+                    msg_box.setText(f"Failed to save credentials: {str(e)}")
+                    msg_box.open()
             else:
-                QMessageBox.warning(self, "Missing Information", "Please enter a username.")
+                # Create non-blocking warning message box
+                msg_box = QMessageBox(self)
+                msg_box.setIcon(QMessageBox.Icon.Warning)
+                msg_box.setWindowTitle("Missing Information")
+                msg_box.setText("Please enter a username.")
+                msg_box.open()
 
     def change_password(self):
         """Open dialog to change password only"""
@@ -838,8 +913,13 @@ class CredentialSetupDialog(QDialog):
         
         layout.addLayout(button_layout)
         
-        if dialog.exec() == QDialog.DialogCode.Accepted:
-            password = password_edit.text()
+        # Use non-blocking approach
+        dialog.finished.connect(lambda result: self._handle_password_dialog_result(result, password_edit.text()))
+        dialog.open()
+    
+    def _handle_password_dialog_result(self, result, password):
+        """Handle password dialog result"""
+        if result == QDialog.DialogCode.Accepted:
             if password:
                 try:
                     config = configparser.ConfigParser()
@@ -858,12 +938,26 @@ class CredentialSetupDialog(QDialog):
                         config.write(f)
                     
                     self.load_current_credentials()
-                    QMessageBox.information(self, "Success", "Password saved successfully!")
+                    # Create non-blocking message box
+                    msg_box = QMessageBox(self)
+                    msg_box.setWindowTitle("Success")
+                    msg_box.setText("Password saved successfully!")
+                    msg_box.open()
                     
                 except Exception as e:
-                    QMessageBox.critical(self, "Error", f"Failed to save password: {str(e)}")
+                    # Create non-blocking error message box
+                    msg_box = QMessageBox(self)
+                    msg_box.setIcon(QMessageBox.Icon.Critical)
+                    msg_box.setWindowTitle("Error")
+                    msg_box.setText(f"Failed to save password: {str(e)}")
+                    msg_box.open()
             else:
-                QMessageBox.warning(self, "Missing Information", "Please enter a password.")
+                # Create non-blocking warning message box
+                msg_box = QMessageBox(self)
+                msg_box.setIcon(QMessageBox.Icon.Warning)
+                msg_box.setWindowTitle("Missing Information")
+                msg_box.setText("Please enter a password.")
+                msg_box.open()
     
     def change_api_key(self):
         """Open dialog to change API key"""
@@ -901,9 +995,13 @@ class CredentialSetupDialog(QDialog):
         
         layout.addLayout(button_layout)
         
-        if dialog.exec() == QDialog.DialogCode.Accepted:
-            api_key = api_key_edit.text().strip()
-            
+        # Use non-blocking approach
+        dialog.finished.connect(lambda result: self._handle_api_key_dialog_result(result, api_key_edit.text().strip()))
+        dialog.open()
+    
+    def _handle_api_key_dialog_result(self, result, api_key):
+        """Handle API key dialog result"""
+        if result == QDialog.DialogCode.Accepted:
             if api_key:
                 try:
                     config = configparser.ConfigParser()
@@ -922,12 +1020,26 @@ class CredentialSetupDialog(QDialog):
                         config.write(f)
                     
                     self.load_current_credentials()
-                    QMessageBox.information(self, "Success", "API key saved successfully!")
+                    # Create non-blocking message box
+                    msg_box = QMessageBox(self)
+                    msg_box.setWindowTitle("Success")
+                    msg_box.setText("API key saved successfully!")
+                    msg_box.open()
                     
                 except Exception as e:
-                    QMessageBox.critical(self, "Error", f"Failed to save API key: {str(e)}")
+                    # Create non-blocking error message box
+                    msg_box = QMessageBox(self)
+                    msg_box.setIcon(QMessageBox.Icon.Critical)
+                    msg_box.setWindowTitle("Error")
+                    msg_box.setText(f"Failed to save API key: {str(e)}")
+                    msg_box.open()
             else:
-                QMessageBox.warning(self, "Missing Information", "Please enter your API key.")
+                # Create non-blocking warning message box
+                msg_box = QMessageBox(self)
+                msg_box.setIcon(QMessageBox.Icon.Warning)
+                msg_box.setWindowTitle("Missing Information")
+                msg_box.setText("Please enter your API key.")
+                msg_box.open()
 
     def enable_cookies_setting(self):
         """Enable Firefox cookies usage for login"""
@@ -943,7 +1055,12 @@ class CredentialSetupDialog(QDialog):
                 config.write(f)
             self.load_current_credentials()
         except Exception as e:
-            QMessageBox.critical(self, "Error", f"Failed to enable cookies: {str(e)}")
+            # Create non-blocking error message
+            msg_box = QMessageBox(self)
+            msg_box.setIcon(QMessageBox.Icon.Critical)
+            msg_box.setWindowTitle("Error")
+            msg_box.setText(f"Failed to enable cookies: {str(e)}")
+            msg_box.open()
 
     def disable_cookies_setting(self):
         """Disable Firefox cookies usage for login"""
@@ -959,18 +1076,28 @@ class CredentialSetupDialog(QDialog):
                 config.write(f)
             self.load_current_credentials()
         except Exception as e:
-            QMessageBox.critical(self, "Error", f"Failed to disable cookies: {str(e)}")
+            # Create non-blocking error message
+            msg_box = QMessageBox(self)
+            msg_box.setIcon(QMessageBox.Icon.Critical)
+            msg_box.setWindowTitle("Error")
+            msg_box.setText(f"Failed to disable cookies: {str(e)}")
+            msg_box.open()
 
     def remove_username(self):
         """Remove stored username with confirmation"""
-        reply = QMessageBox.question(
-            self,
-            "Remove Username",
-            "Without username/password, all galleries will be titled 'untitled gallery'.\n\nRemove the stored username?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No
-        )
-        if reply != QMessageBox.StandardButton.Yes:
+        # Create non-blocking confirmation dialog
+        msg_box = QMessageBox(self)
+        msg_box.setIcon(QMessageBox.Icon.Question)
+        msg_box.setWindowTitle("Remove Username")
+        msg_box.setText("Without username/password, all galleries will be titled 'untitled gallery'.\n\nRemove the stored username?")
+        msg_box.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        msg_box.setDefaultButton(QMessageBox.StandardButton.No)
+        msg_box.finished.connect(lambda result: self._handle_remove_username_confirmation(result))
+        msg_box.open()
+    
+    def _handle_remove_username_confirmation(self, result):
+        """Handle username removal confirmation"""
+        if result != QMessageBox.StandardButton.Yes:
             return
         try:
             config = configparser.ConfigParser()
@@ -983,20 +1110,34 @@ class CredentialSetupDialog(QDialog):
             with open(config_file, 'w') as f:
                 config.write(f)
             self.load_current_credentials()
-            QMessageBox.information(self, "Removed", "Username removed.")
+            # Create non-blocking success message
+            msg_box = QMessageBox(self)
+            msg_box.setWindowTitle("Removed")
+            msg_box.setText("Username removed.")
+            msg_box.open()
         except Exception as e:
-            QMessageBox.critical(self, "Error", f"Failed to remove username: {str(e)}")
+            # Create non-blocking error message
+            msg_box = QMessageBox(self)
+            msg_box.setIcon(QMessageBox.Icon.Critical)
+            msg_box.setWindowTitle("Error")
+            msg_box.setText(f"Failed to remove username: {str(e)}")
+            msg_box.open()
 
     def remove_password(self):
         """Remove stored password with confirmation"""
-        reply = QMessageBox.question(
-            self,
-            "Remove Password",
-            "Without username/password, all galleries will be titled 'untitled gallery'.\n\nRemove the stored password?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No
-        )
-        if reply != QMessageBox.StandardButton.Yes:
+        # Create non-blocking confirmation dialog
+        msg_box = QMessageBox(self)
+        msg_box.setIcon(QMessageBox.Icon.Question)
+        msg_box.setWindowTitle("Remove Password")
+        msg_box.setText("Without username/password, all galleries will be titled 'untitled gallery'.\n\nRemove the stored password?")
+        msg_box.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        msg_box.setDefaultButton(QMessageBox.StandardButton.No)
+        msg_box.finished.connect(lambda result: self._handle_remove_password_confirmation(result))
+        msg_box.open()
+    
+    def _handle_remove_password_confirmation(self, result):
+        """Handle password removal confirmation"""
+        if result != QMessageBox.StandardButton.Yes:
             return
         try:
             config = configparser.ConfigParser()
@@ -1009,20 +1150,34 @@ class CredentialSetupDialog(QDialog):
             with open(config_file, 'w') as f:
                 config.write(f)
             self.load_current_credentials()
-            QMessageBox.information(self, "Removed", "Password removed.")
+            # Create non-blocking success message
+            msg_box = QMessageBox(self)
+            msg_box.setWindowTitle("Removed")
+            msg_box.setText("Password removed.")
+            msg_box.open()
         except Exception as e:
-            QMessageBox.critical(self, "Error", f"Failed to remove password: {str(e)}")
+            # Create non-blocking error message
+            msg_box = QMessageBox(self)
+            msg_box.setIcon(QMessageBox.Icon.Critical)
+            msg_box.setWindowTitle("Error")
+            msg_box.setText(f"Failed to remove password: {str(e)}")
+            msg_box.open()
 
     def remove_api_key(self):
         """Remove stored API key with confirmation"""
-        reply = QMessageBox.question(
-            self,
-            "Remove API Key",
-            "Without an API key, it is not possible to upload anything.\n\nRemove the stored API key?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No
-        )
-        if reply != QMessageBox.StandardButton.Yes:
+        # Create non-blocking confirmation dialog
+        msg_box = QMessageBox(self)
+        msg_box.setIcon(QMessageBox.Icon.Question)
+        msg_box.setWindowTitle("Remove API Key")
+        msg_box.setText("Without an API key, it is not possible to upload anything.\n\nRemove the stored API key?")
+        msg_box.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        msg_box.setDefaultButton(QMessageBox.StandardButton.No)
+        msg_box.finished.connect(lambda result: self._handle_remove_api_key_confirmation(result))
+        msg_box.open()
+    
+    def _handle_remove_api_key_confirmation(self, result):
+        """Handle API key removal confirmation"""
+        if result != QMessageBox.StandardButton.Yes:
             return
         try:
             config = configparser.ConfigParser()
@@ -1035,20 +1190,34 @@ class CredentialSetupDialog(QDialog):
             with open(config_file, 'w') as f:
                 config.write(f)
             self.load_current_credentials()
-            QMessageBox.information(self, "Removed", "API key removed.")
+            # Create non-blocking success message
+            msg_box = QMessageBox(self)
+            msg_box.setWindowTitle("Removed")
+            msg_box.setText("API key removed.")
+            msg_box.open()
         except Exception as e:
-            QMessageBox.critical(self, "Error", f"Failed to remove API key: {str(e)}")
+            # Create non-blocking error message
+            msg_box = QMessageBox(self)
+            msg_box.setIcon(QMessageBox.Icon.Critical)
+            msg_box.setWindowTitle("Error")
+            msg_box.setText(f"Failed to remove API key: {str(e)}")
+            msg_box.open()
 
     def remove_all_credentials(self):
         """Remove username, password, and API key with confirmation"""
-        reply = QMessageBox.question(
-            self,
-            "Remove All Credentials",
-            "This will remove your username, password, and API key.\n\n- Without username/password, all galleries will be titled 'untitled gallery'.\n- Without an API key, uploads are not possible.\n\nProceed?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No
-        )
-        if reply != QMessageBox.StandardButton.Yes:
+        # Create non-blocking confirmation dialog
+        msg_box = QMessageBox(self)
+        msg_box.setIcon(QMessageBox.Icon.Question)
+        msg_box.setWindowTitle("Remove All Credentials")
+        msg_box.setText("This will remove your username, password, and API key.\n\n- Without username/password, all galleries will be titled 'untitled gallery'.\n- Without an API key, uploads are not possible.\n\nProceed?")
+        msg_box.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        msg_box.setDefaultButton(QMessageBox.StandardButton.No)
+        msg_box.finished.connect(lambda result: self._handle_remove_all_credentials_confirmation(result))
+        msg_box.open()
+    
+    def _handle_remove_all_credentials_confirmation(self, result):
+        """Handle all credentials removal confirmation"""
+        if result != QMessageBox.StandardButton.Yes:
             return
         try:
             config = configparser.ConfigParser()
@@ -1063,9 +1232,18 @@ class CredentialSetupDialog(QDialog):
             with open(config_file, 'w') as f:
                 config.write(f)
             self.load_current_credentials()
-            QMessageBox.information(self, "Removed", "All credentials removed.")
+            # Create non-blocking success message
+            msg_box = QMessageBox(self)
+            msg_box.setWindowTitle("Removed")
+            msg_box.setText("All credentials removed.")
+            msg_box.open()
         except Exception as e:
-            QMessageBox.critical(self, "Error", f"Failed to remove all credentials: {str(e)}")
+            # Create non-blocking error message
+            msg_box = QMessageBox(self)
+            msg_box.setIcon(QMessageBox.Icon.Critical)
+            msg_box.setWindowTitle("Error")
+            msg_box.setText(f"Failed to remove all credentials: {str(e)}")
+            msg_box.open()
     
 
     
@@ -1119,6 +1297,13 @@ class TemplateManagerDialog(QDialog):
             self.new_btn.setText(" " + self.new_btn.text())
         self.new_btn.clicked.connect(self.create_new_template)
         actions_layout.addWidget(self.new_btn)
+        
+        self.save_btn = QPushButton("Save Template")
+        if not self.save_btn.text().startswith(" "):
+            self.save_btn.setText(" " + self.save_btn.text())
+        self.save_btn.clicked.connect(self.save_template)
+        self.save_btn.setEnabled(False)
+        actions_layout.addWidget(self.save_btn)
         
         self.rename_btn = QPushButton("Rename Template")
         if not self.rename_btn.text().startswith(" "):
@@ -1188,25 +1373,6 @@ class TemplateManagerDialog(QDialog):
         
         layout.addWidget(editor_group)
         
-        # Buttons
-        button_layout = QHBoxLayout()
-        
-        self.save_btn = QPushButton("Save Template")
-        if not self.save_btn.text().startswith(" "):
-            self.save_btn.setText(" " + self.save_btn.text())
-        self.save_btn.clicked.connect(self.save_template)
-        self.save_btn.setEnabled(False)
-        button_layout.addWidget(self.save_btn)
-        
-        button_layout.addStretch()
-        
-        self.close_btn = QPushButton("Close")
-        if not self.close_btn.text().startswith(" "):
-            self.close_btn.setText(" " + self.close_btn.text())
-        self.close_btn.clicked.connect(self.accept)
-        button_layout.addWidget(self.close_btn)
-        
-        layout.addLayout(button_layout)
         
         # Load templates
         self.load_templates()
@@ -1242,68 +1408,86 @@ class TemplateManagerDialog(QDialog):
             
             # Check for unsaved changes before switching
             if self.unsaved_changes and self.current_template_name:
-                reply = QMessageBox.question(
-                    self,
-                    "Unsaved Changes",
-                    f"You have unsaved changes to template '{self.current_template_name}'. Do you want to save them before switching?",
-                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No | QMessageBox.StandardButton.Cancel,
-                    QMessageBox.StandardButton.Yes
-                )
-                
-                if reply == QMessageBox.StandardButton.Yes:
-                    # Save to the current template (not the one we're switching to)
-                    content = self.template_editor.toPlainText()
-                    from imxup import get_template_path
-                    template_path = get_template_path()
-                    template_file = os.path.join(template_path, f".template {self.current_template_name}.txt")
-                    
-                    try:
-                        with open(template_file, 'w', encoding='utf-8') as f:
-                            f.write(content)
-                        self.save_btn.setEnabled(False)
-                        self.unsaved_changes = False
-                    except Exception as e:
-                        QMessageBox.warning(self, "Error", f"Failed to save template: {str(e)}")
-                        # Restore the previous selection if save failed
-                        for i in range(self.template_list.count()):
-                            if self.template_list.item(i).text() == self.current_template_name:
-                                self.template_list.setCurrentRow(i)
-                                return
-                        return
-                elif reply == QMessageBox.StandardButton.Cancel:
-                    # Restore the previous selection
-                    for i in range(self.template_list.count()):
-                        if self.template_list.item(i).text() == self.current_template_name:
-                            self.template_list.setCurrentRow(i)
-                            return
-                    return
+                # Create non-blocking unsaved changes confirmation dialog
+                msg_box = QMessageBox(self)
+                msg_box.setIcon(QMessageBox.Icon.Question)
+                msg_box.setWindowTitle("Unsaved Changes")
+                msg_box.setText(f"You have unsaved changes to template '{self.current_template_name}'. Do you want to save them before switching?")
+                msg_box.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No | QMessageBox.StandardButton.Cancel)
+                msg_box.setDefaultButton(QMessageBox.StandardButton.Yes)
+                msg_box.finished.connect(lambda result: self._handle_template_switch_unsaved_changes(result, template_name))
+                msg_box.open()
+                return
             
-            self.load_template_content(template_name)
-            self.current_template_name = template_name
-            self.unsaved_changes = False
-            
-            # Disable editing for default template
-            is_default = template_name == "default"
-            self.template_editor.setReadOnly(is_default)
-            self.rename_btn.setEnabled(not is_default)
-            self.delete_btn.setEnabled(not is_default)
-            self.save_btn.setEnabled(False)  # Will be enabled when content changes (if not default)
-            
-            if is_default:
-                self.template_editor.setStyleSheet("""
-                    QPlainTextEdit {
-                        background-color: #f8f9fa;
-                        color: #6c757d;
-                    }
-                """)
-            else:
-                self.template_editor.setStyleSheet("")
+            self._switch_to_template(template_name)
         else:
             self.template_editor.clear()
             self.current_template_name = None
             self.unsaved_changes = False
             self.rename_btn.setEnabled(False)
             self.delete_btn.setEnabled(False)
+    
+    def _handle_template_switch_unsaved_changes(self, result, new_template_name):
+        """Handle unsaved changes confirmation for template switching"""
+        if result == QMessageBox.StandardButton.Yes:
+            # Save to the current template (not the one we're switching to)
+            content = self.template_editor.toPlainText()
+            from imxup import get_template_path
+            template_path = get_template_path()
+            template_file = os.path.join(template_path, f".template {self.current_template_name}.txt")
+            
+            try:
+                with open(template_file, 'w', encoding='utf-8') as f:
+                    f.write(content)
+                self.save_btn.setEnabled(False)
+                self.unsaved_changes = False
+                # After saving, switch to new template
+                self._switch_to_template(new_template_name)
+            except Exception as e:
+                # Create non-blocking error message
+                msg_box = QMessageBox(self)
+                msg_box.setIcon(QMessageBox.Icon.Warning)
+                msg_box.setWindowTitle("Error")
+                msg_box.setText(f"Failed to save template: {str(e)}")
+                msg_box.open()
+                # Restore the previous selection if save failed
+                self._restore_previous_template_selection()
+        elif result == QMessageBox.StandardButton.No:
+            # Don't save, but switch to new template
+            self._switch_to_template(new_template_name)
+        else:  # Cancel
+            # Restore the previous selection
+            self._restore_previous_template_selection()
+    
+    def _restore_previous_template_selection(self):
+        """Restore the previous template selection"""
+        for i in range(self.template_list.count()):
+            if self.template_list.item(i).text() == self.current_template_name:
+                self.template_list.setCurrentRow(i)
+                return
+    
+    def _switch_to_template(self, template_name):
+        """Switch to the specified template"""
+        self.load_template_content(template_name)
+        self.current_template_name = template_name
+        self.unsaved_changes = False
+        
+        # Disable editing for default template
+        is_default = template_name == "default"
+        self.template_editor.setReadOnly(is_default)
+        self.rename_btn.setEnabled(not is_default)
+        self.delete_btn.setEnabled(not is_default)
+        self.save_btn.setEnabled(False)  # Will be enabled when content changes (if not default)
+        
+        if is_default:
+            self.template_editor.setStyleSheet("""
+                QPlainTextEdit {
+                    background-color: #f8f9fa;
+                    color: #6c757d;
+                }
+            """)
+        else:
+            self.template_editor.setStyleSheet("")
     
     def load_template_content(self, template_name):
         """Load template content into editor"""
@@ -1335,28 +1519,55 @@ class TemplateManagerDialog(QDialog):
         """Create a new template"""
         # Check for unsaved changes before creating new template
         if self.unsaved_changes and self.current_template_name:
-            reply = QMessageBox.question(
-                self,
-                "Unsaved Changes",
-                f"You have unsaved changes to template '{self.current_template_name}'. Do you want to save them before creating a new template?",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No | QMessageBox.StandardButton.Cancel,
-                QMessageBox.StandardButton.Yes
-            )
-            
-            if reply == QMessageBox.StandardButton.Yes:
-                self.save_template()
-            elif reply == QMessageBox.StandardButton.Cancel:
-                return
+            # Create non-blocking unsaved changes confirmation dialog
+            msg_box = QMessageBox(self)
+            msg_box.setIcon(QMessageBox.Icon.Question)
+            msg_box.setWindowTitle("Unsaved Changes")
+            msg_box.setText(f"You have unsaved changes to template '{self.current_template_name}'. Do you want to save them before creating a new template?")
+            msg_box.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No | QMessageBox.StandardButton.Cancel)
+            msg_box.setDefaultButton(QMessageBox.StandardButton.Yes)
+            msg_box.finished.connect(lambda result: self._handle_new_template_unsaved_changes(result))
+            msg_box.open()
+            return
         
-        name, ok = QInputDialog.getText(self, "New Template", "Template name:")
-        if ok and name.strip():
-            name = name.strip()
-            
+        # Proceed directly to new template creation
+        self._show_new_template_input()
+    
+    def _handle_new_template_unsaved_changes(self, result):
+        """Handle unsaved changes confirmation for new template creation"""
+        if result == QMessageBox.StandardButton.Yes:
+            self.save_template()
+            # After saving, proceed to new template creation
+            self._show_new_template_input()
+        elif result == QMessageBox.StandardButton.No:
+            # Don't save, but proceed to new template creation
+            self._show_new_template_input()
+        # Cancel - do nothing
+    
+    def _show_new_template_input(self):
+        """Show new template name input dialog"""
+        
+        # Create non-blocking input dialog
+        input_dialog = QInputDialog(self)
+        input_dialog.setWindowTitle("New Template")
+        input_dialog.setLabelText("Template name:")
+        input_dialog.setTextValue("")
+        input_dialog.finished.connect(lambda result: self._handle_new_template_result(result, input_dialog.textValue().strip()))
+        input_dialog.open()
+    
+    def _handle_new_template_result(self, result, name):
+        """Handle new template dialog result"""
+        if result == QInputDialog.DialogCode.Accepted and name:
             # Check if template already exists
             from imxup import load_templates
             templates = load_templates()
             if name in templates:
-                QMessageBox.warning(self, "Error", f"Template '{name}' already exists!")
+                # Create non-blocking warning message box
+                msg_box = QMessageBox(self)
+                msg_box.setIcon(QMessageBox.Icon.Warning)
+                msg_box.setWindowTitle("Error")
+                msg_box.setText(f"Template '{name}' already exists!")
+                msg_box.open()
                 return
             
             # Add to list and select it
@@ -1377,18 +1588,35 @@ class TemplateManagerDialog(QDialog):
         
         old_name = current_item.text()
         if old_name == "default":
-            QMessageBox.warning(self, "Error", "Cannot rename the default template!")
+            # Create non-blocking warning message
+            msg_box = QMessageBox(self)
+            msg_box.setIcon(QMessageBox.Icon.Warning)
+            msg_box.setWindowTitle("Error")
+            msg_box.setText("Cannot rename the default template!")
+            msg_box.open()
             return
         
-        new_name, ok = QInputDialog.getText(self, "Rename Template", "New name:", text=old_name)
-        if ok and new_name.strip():
-            new_name = new_name.strip()
-            
+        # Create non-blocking input dialog
+        input_dialog = QInputDialog(self)
+        input_dialog.setWindowTitle("Rename Template")
+        input_dialog.setLabelText("New name:")
+        input_dialog.setTextValue(old_name)
+        input_dialog.finished.connect(lambda result: self._handle_rename_template_result(result, input_dialog.textValue().strip(), old_name, current_item))
+        input_dialog.open()
+    
+    def _handle_rename_template_result(self, result, new_name, old_name, current_item):
+        """Handle rename template dialog result"""
+        if result == QInputDialog.DialogCode.Accepted and new_name:
             # Check if new name already exists
             from imxup import load_templates
             templates = load_templates()
             if new_name in templates:
-                QMessageBox.warning(self, "Error", f"Template '{new_name}' already exists!")
+                # Create non-blocking warning message box
+                msg_box = QMessageBox(self)
+                msg_box.setIcon(QMessageBox.Icon.Warning)
+                msg_box.setWindowTitle("Error")
+                msg_box.setText(f"Template '{new_name}' already exists!")
+                msg_box.open()
                 return
             
             # Rename the template file
@@ -1400,9 +1628,18 @@ class TemplateManagerDialog(QDialog):
             try:
                 os.rename(old_file, new_file)
                 current_item.setText(new_name)
-                QMessageBox.information(self, "Success", f"Template renamed to '{new_name}'")
+                # Create non-blocking success message box
+                msg_box = QMessageBox(self)
+                msg_box.setWindowTitle("Success")
+                msg_box.setText(f"Template renamed to '{new_name}'")
+                msg_box.open()
             except Exception as e:
-                QMessageBox.warning(self, "Error", f"Failed to rename template: {str(e)}")
+                # Create non-blocking error message box
+                msg_box = QMessageBox(self)
+                msg_box.setIcon(QMessageBox.Icon.Warning)
+                msg_box.setWindowTitle("Error")
+                msg_box.setText(f"Failed to rename template: {str(e)}")
+                msg_box.open()
     
     def delete_template(self):
         """Delete the current template"""
@@ -1412,33 +1649,54 @@ class TemplateManagerDialog(QDialog):
         
         template_name = current_item.text()
         if template_name == "default":
-            QMessageBox.warning(self, "Error", "Cannot delete the default template!")
+            # Create non-blocking warning message
+            msg_box = QMessageBox(self)
+            msg_box.setIcon(QMessageBox.Icon.Warning)
+            msg_box.setWindowTitle("Error")
+            msg_box.setText("Cannot delete the default template!")
+            msg_box.open()
             return
         
         # Check for unsaved changes before deleting
         if self.unsaved_changes and self.current_template_name == template_name:
-            reply = QMessageBox.question(
-                self,
-                "Unsaved Changes",
-                f"You have unsaved changes to template '{template_name}'. Do you want to save them before deleting?",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No | QMessageBox.StandardButton.Cancel,
-                QMessageBox.StandardButton.Yes
-            )
-            
-            if reply == QMessageBox.StandardButton.Yes:
-                self.save_template()
-            elif reply == QMessageBox.StandardButton.Cancel:
-                return
-        
-        reply = QMessageBox.question(
-            self,
-            "Delete Template",
-            f"Are you sure you want to delete template '{template_name}'?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No
-        )
-        
-        if reply == QMessageBox.StandardButton.Yes:
+            # Create non-blocking unsaved changes confirmation dialog
+            msg_box = QMessageBox(self)
+            msg_box.setIcon(QMessageBox.Icon.Question)
+            msg_box.setWindowTitle("Unsaved Changes")
+            msg_box.setText(f"You have unsaved changes to template '{template_name}'. Do you want to save them before deleting?")
+            msg_box.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No | QMessageBox.StandardButton.Cancel)
+            msg_box.setDefaultButton(QMessageBox.StandardButton.Yes)
+            msg_box.finished.connect(lambda result: self._handle_delete_template_unsaved_changes(result, template_name))
+            msg_box.open()
+        else:
+            # Proceed directly to delete confirmation
+            self._show_delete_template_confirmation(template_name)
+    
+    def _handle_delete_template_unsaved_changes(self, result, template_name):
+        """Handle unsaved changes confirmation for template deletion"""
+        if result == QMessageBox.StandardButton.Yes:
+            self.save_template()
+            # After saving, proceed to delete confirmation
+            self._show_delete_template_confirmation(template_name)
+        elif result == QMessageBox.StandardButton.No:
+            # Don't save, but proceed to delete confirmation
+            self._show_delete_template_confirmation(template_name)
+        # Cancel - do nothing
+    
+    def _show_delete_template_confirmation(self, template_name):
+        """Show delete template confirmation dialog"""
+        msg_box = QMessageBox(self)
+        msg_box.setIcon(QMessageBox.Icon.Question)
+        msg_box.setWindowTitle("Delete Template")
+        msg_box.setText(f"Are you sure you want to delete template '{template_name}'?")
+        msg_box.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        msg_box.setDefaultButton(QMessageBox.StandardButton.No)
+        msg_box.finished.connect(lambda result: self._handle_delete_template_confirmation(result, template_name))
+        msg_box.open()
+    
+    def _handle_delete_template_confirmation(self, result, template_name):
+        """Handle delete template confirmation"""
+        if result == QMessageBox.StandardButton.Yes:
             # Delete the template file
             from imxup import get_template_path
             template_path = get_template_path()
@@ -1451,9 +1709,18 @@ class TemplateManagerDialog(QDialog):
                 self.save_btn.setEnabled(False)
                 self.unsaved_changes = False
                 self.current_template_name = None
-                QMessageBox.information(self, "Success", f"Template '{template_name}' deleted")
+                # Create non-blocking success message
+                msg_box = QMessageBox(self)
+                msg_box.setWindowTitle("Success")
+                msg_box.setText(f"Template '{template_name}' deleted")
+                msg_box.open()
             except Exception as e:
-                QMessageBox.warning(self, "Error", f"Failed to delete template: {str(e)}")
+                # Create non-blocking error message
+                msg_box = QMessageBox(self)
+                msg_box.setIcon(QMessageBox.Icon.Warning)
+                msg_box.setWindowTitle("Error")
+                msg_box.setText(f"Failed to delete template: {str(e)}")
+                msg_box.open()
     
     def save_template(self):
         """Save the current template"""
@@ -1474,50 +1741,69 @@ class TemplateManagerDialog(QDialog):
                 f.write(content)
             self.save_btn.setEnabled(False)
             self.unsaved_changes = False
-            QMessageBox.information(self, "Success", f"Template '{template_name}' saved")
+            # Create non-blocking success message
+            msg_box = QMessageBox(self)
+            msg_box.setWindowTitle("Success")
+            msg_box.setText(f"Template '{template_name}' saved")
+            msg_box.open()
         except Exception as e:
-            QMessageBox.warning(self, "Error", f"Failed to save template: {str(e)}")
+            # Create non-blocking error message
+            msg_box = QMessageBox(self)
+            msg_box.setIcon(QMessageBox.Icon.Warning)
+            msg_box.setWindowTitle("Error")
+            msg_box.setText(f"Failed to save template: {str(e)}")
+            msg_box.open()
     
     def closeEvent(self, event):
         """Handle dialog closing with unsaved changes check"""
         if self.unsaved_changes and self.current_template_name:
-            reply = QMessageBox.question(
-                self,
-                "Unsaved Changes",
-                f"You have unsaved changes to template '{self.current_template_name}'. Do you want to save them before closing?",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No | QMessageBox.StandardButton.Cancel,
-                QMessageBox.StandardButton.Yes
-            )
-            
-            if reply == QMessageBox.StandardButton.Yes:
-                # Try to save the template
-                current_item = self.template_list.currentItem()
-                if current_item:
-                    template_name = current_item.text()
-                    content = self.template_editor.toPlainText()
-                    
-                    # Save the template file
-                    from imxup import get_template_path
-                    template_path = get_template_path()
-                    template_file = os.path.join(template_path, f".template {template_name}.txt")
-                    
-                    try:
-                        with open(template_file, 'w', encoding='utf-8') as f:
-                            f.write(content)
-                        self.save_btn.setEnabled(False)
-                        self.unsaved_changes = False
-                        event.accept()
-                    except Exception as e:
-                        QMessageBox.warning(self, "Error", f"Failed to save template: {str(e)}")
-                        event.ignore()
-                else:
-                    event.accept()
-            elif reply == QMessageBox.StandardButton.No:
-                event.accept()
-            else:  # Cancel
-                event.ignore()
+            # Create non-blocking unsaved changes confirmation dialog
+            msg_box = QMessageBox(self)
+            msg_box.setIcon(QMessageBox.Icon.Question)
+            msg_box.setWindowTitle("Unsaved Changes")
+            msg_box.setText(f"You have unsaved changes to template '{self.current_template_name}'. Do you want to save them before closing?")
+            msg_box.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No | QMessageBox.StandardButton.Cancel)
+            msg_box.setDefaultButton(QMessageBox.StandardButton.Yes)
+            msg_box.finished.connect(lambda result: self._handle_close_unsaved_changes(result, event))
+            msg_box.open()
+            # Ignore the event for now - the handler will decide whether to close
+            event.ignore()
         else:
             event.accept()
+    
+    def _handle_close_unsaved_changes(self, result, event):
+        """Handle unsaved changes confirmation for dialog closing"""
+        if result == QMessageBox.StandardButton.Yes:
+            # Try to save the template
+            current_item = self.template_list.currentItem()
+            if current_item:
+                template_name = current_item.text()
+                content = self.template_editor.toPlainText()
+                
+                # Save the template file
+                from imxup import get_template_path
+                template_path = get_template_path()
+                template_file = os.path.join(template_path, f".template {template_name}.txt")
+                
+                try:
+                    with open(template_file, 'w', encoding='utf-8') as f:
+                        f.write(content)
+                    self.save_btn.setEnabled(False)
+                    self.unsaved_changes = False
+                    self.accept()  # Close the dialog
+                except Exception as e:
+                    # Create non-blocking error message
+                    msg_box = QMessageBox(self)
+                    msg_box.setIcon(QMessageBox.Icon.Warning)
+                    msg_box.setWindowTitle("Error")
+                    msg_box.setText(f"Failed to save template: {str(e)}")
+                    msg_box.open()
+                    # Don't close the dialog if save failed
+            else:
+                self.accept()  # Close the dialog
+        elif result == QMessageBox.StandardButton.No:
+            self.accept()  # Close the dialog without saving
+        # Cancel - do nothing (dialog stays open)
 
 
 class LogViewerDialog(QDialog):
