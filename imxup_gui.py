@@ -1129,6 +1129,19 @@ class QueueManager:
         self._next_order = 0  # Track insertion order
         self._version = 0  # Bumped on any change for cheap UI polling
         
+        # Status counters for efficient button updates
+        self._status_counts = {
+            "ready": 0,
+            "paused": 0, 
+            "incomplete": 0,
+            "scanning": 0,
+            "uploading": 0,
+            "queued": 0,
+            "completed": 0,
+            "failed": 0,
+            "validating": 0
+        }
+        
         # Single sequential worker for processing galleries
         self._scan_worker = None
         self._scan_queue = Queue()
@@ -1347,6 +1360,9 @@ class QueueManager:
                     self.items[path] = item
                 else:
                     pass
+        
+        # Initialize status counters after loading all items
+        self._rebuild_status_counts()
     
     def clear_persistent_queue(self):
         """Clear persistent queue storage (for testing)"""
@@ -1375,6 +1391,8 @@ class QueueManager:
             self._next_order += 1
             
             self.items[path] = item
+            # Update status counters for new item
+            self._update_status_count("", "validating")
             self.save_persistent_queue()
             self._inc_version()
         
@@ -1712,7 +1730,7 @@ class QueueManager:
         """Start a specific item in the queue"""
         with QMutexLocker(self.mutex):
             if path in self.items and self.items[path].status in ["ready", "paused", "incomplete"]:
-                self.items[path].status = "queued"
+                self.set_item_status(path, "queued")
                 self.queue.put(self.items[path])
                 self._save_single_item(self.items[path])
                 self._inc_version()
@@ -1723,7 +1741,7 @@ class QueueManager:
         """Pause a specific item"""
         with QMutexLocker(self.mutex):
             if path in self.items and self.items[path].status == "uploading":
-                self.items[path].status = "paused"
+                self.set_item_status(path, "paused")
                 self.save_persistent_queue()
                 self._inc_version()
                 return True
@@ -1736,6 +1754,9 @@ class QueueManager:
                 # Only prevent deletion of currently uploading items
                 if self.items[path].status == "uploading":
                     return False
+                # Update counter for removed item
+                old_status = self.items[path].status
+                self._update_status_count(old_status, "")
                 del self.items[path]
                 self.renumber_insertion_orders()
                 self._inc_version()
@@ -1803,6 +1824,41 @@ class QueueManager:
         if self._scan_worker and self._scan_worker.is_alive():
             self._scan_worker.join(timeout=2.0)
     
+    def _rebuild_status_counts(self):
+        """Rebuild status counts from scratch (for initialization/recovery)"""
+        self._status_counts = {
+            "ready": 0,
+            "paused": 0, 
+            "incomplete": 0,
+            "scanning": 0,
+            "uploading": 0,
+            "queued": 0,
+            "completed": 0,
+            "failed": 0,
+            "validating": 0
+        }
+        for item in self.items.values():
+            if item.status in self._status_counts:
+                self._status_counts[item.status] += 1
+    
+    def _update_status_count(self, old_status: str, new_status: str):
+        """Update status counters when an item changes status"""
+        if old_status in self._status_counts:
+            self._status_counts[old_status] -= 1
+        if new_status in self._status_counts:
+            self._status_counts[new_status] += 1
+    
+    def get_status_counts(self) -> dict:
+        """Get current status counts for efficient button updates"""
+        return self._status_counts.copy()
+    
+    def set_item_status(self, path: str, new_status: str):
+        """Set item status with counter tracking (for internal use)"""
+        if path in self.items:
+            old_status = self.items[path].status
+            self.items[path].status = new_status
+            self._update_status_count(old_status, new_status)
+    
     def get_next_item(self) -> Optional[GalleryQueueItem]:
         """Get the next queued item"""
         try:
@@ -1820,7 +1876,10 @@ class QueueManager:
         """Update item status"""
         with QMutexLocker(self.mutex):
             if path in self.items:
+                old_status = self.items[path].status
                 self.items[path].status = status
+                # Update status counters
+                self._update_status_count(old_status, status)
                 # Persist and bump version so GUI refreshes promptly
                 try:
                     self.save_persistent_queue()
@@ -3018,8 +3077,16 @@ class CredentialSetupDialog(QDialog):
         
         layout.addLayout(button_layout)
         
-        if dialog.exec() == QDialog.DialogCode.Accepted:
-            username = username_edit.text().strip()
+        # Store reference to username_edit for callback and use non-blocking show()
+        def handle_username_result(result):
+            self._handle_username_dialog_result(result, username_edit.text().strip())
+        
+        dialog.show()
+        dialog.finished.connect(handle_username_result)
+    
+    def _handle_username_dialog_result(self, result, username):
+        """Handle username dialog result without blocking GUI"""
+        if result == QDialog.DialogCode.Accepted:
             if username:
                 try:
                     config = configparser.ConfigParser()
@@ -3084,8 +3151,16 @@ class CredentialSetupDialog(QDialog):
         
         layout.addLayout(button_layout)
         
-        if dialog.exec() == QDialog.DialogCode.Accepted:
-            password = password_edit.text()
+        # Store reference to password_edit for callback and use non-blocking show()
+        def handle_password_result(result):
+            self._handle_password_dialog_result(result, password_edit.text())
+        
+        dialog.show()
+        dialog.finished.connect(handle_password_result)
+    
+    def _handle_password_dialog_result(self, result, password):
+        """Handle password dialog result without blocking GUI"""
+        if result == QDialog.DialogCode.Accepted:
             if password:
                 try:
                     config = configparser.ConfigParser()
@@ -3147,9 +3222,16 @@ class CredentialSetupDialog(QDialog):
         
         layout.addLayout(button_layout)
         
-        if dialog.exec() == QDialog.DialogCode.Accepted:
-            api_key = api_key_edit.text().strip()
-            
+        # Store reference to api_key_edit for callback and use non-blocking show()
+        def handle_api_key_result(result):
+            self._handle_api_key_dialog_result(result, api_key_edit.text().strip())
+        
+        dialog.show()
+        dialog.finished.connect(handle_api_key_result)
+    
+    def _handle_api_key_dialog_result(self, result, api_key):
+        """Handle API key dialog result without blocking GUI"""
+        if result == QDialog.DialogCode.Accepted:
             if api_key:
                 try:
                     config = configparser.ConfigParser()
@@ -3209,14 +3291,17 @@ class CredentialSetupDialog(QDialog):
 
     def remove_username(self):
         """Remove stored username with confirmation"""
-        reply = QMessageBox.question(
-            self,
-            "Remove Username",
-            "Without username/password, all galleries will be titled 'untitled gallery'.\n\nRemove the stored username?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No
-        )
-        if reply != QMessageBox.StandardButton.Yes:
+        msgbox = QMessageBox(self)
+        msgbox.setWindowTitle("Remove Username")
+        msgbox.setText("Without username/password, all galleries will be titled 'untitled gallery'.\n\nRemove the stored username?")
+        msgbox.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        msgbox.setDefaultButton(QMessageBox.StandardButton.No)
+        msgbox.open()
+        msgbox.finished.connect(self._handle_remove_username_confirmation)
+    
+    def _handle_remove_username_confirmation(self, result):
+        """Handle username removal confirmation"""
+        if result != QMessageBox.StandardButton.Yes:
             return
         try:
             config = configparser.ConfigParser()
@@ -3229,6 +3314,7 @@ class CredentialSetupDialog(QDialog):
             with open(config_file, 'w') as f:
                 config.write(f)
             self.load_current_credentials()
+            # Keep information dialog simple and non-blocking
             QMessageBox.information(self, "Removed", "Username removed.")
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to remove username: {str(e)}")
@@ -5480,12 +5566,19 @@ class ImxUploadGUI(QMainWindow):
         """Prompt to set credentials only if API key is not set."""
         if not api_key_is_set():
             dialog = CredentialSetupDialog(self)
-            if dialog.exec() == QDialog.DialogCode.Accepted:
-                self.add_log_message(f"{timestamp()} [auth] Credentials saved securely")
-            else:
-                self.add_log_message(f"{timestamp()} [auth] Credential setup cancelled")
+            # Use non-blocking show() instead of blocking exec() to prevent GUI freezing
+            dialog.show()
+            dialog.finished.connect(lambda result: self._handle_credential_dialog_result(result))
+        
         else:
             self.add_log_message(f"{timestamp()} [auth] API key found; skipping credential setup dialog")
+    
+    def _handle_credential_dialog_result(self, result):
+        """Handle credential dialog result without blocking GUI"""
+        if result == QDialog.DialogCode.Accepted:
+            self.add_log_message(f"{timestamp()} [auth] Credentials saved securely")
+        else:
+            self.add_log_message(f"{timestamp()} [auth] Credential setup cancelled")
     
     def retry_login(self, credentials_only: bool = False):
         """Ask the worker to retry login soon (optionally credentials-only)."""
@@ -5709,7 +5802,13 @@ class ImxUploadGUI(QMainWindow):
         if 0 <= tab_index < dialog.tab_widget.count():
             dialog.tab_widget.setCurrentIndex(tab_index)
         
-        if dialog.exec() == QDialog.DialogCode.Accepted:
+        # Use non-blocking show() to prevent GUI freezing
+        dialog.show()
+        dialog.finished.connect(lambda result: self._handle_settings_dialog_result(result))
+    
+    def _handle_settings_dialog_result(self, result):
+        """Handle settings dialog result without blocking GUI"""
+        if result == QDialog.DialogCode.Accepted:
             self.add_log_message(f"{timestamp()} Comprehensive settings updated successfully")
         else:
             self.add_log_message(f"{timestamp()} Comprehensive settings cancelled")
@@ -5717,7 +5816,8 @@ class ImxUploadGUI(QMainWindow):
     def open_help_dialog(self):
         """Open the help/documentation dialog"""
         dialog = HelpDialog(self)
-        dialog.exec()
+        # Use non-blocking show() for help dialog
+        dialog.show()
 
     def set_theme_mode(self, mode: str):
         """Switch theme mode and persist. mode in {'system','light','dark'}."""
@@ -5976,15 +6076,17 @@ class ImxUploadGUI(QMainWindow):
     def _show_gallery_exists_dialog(self, path: str, gallery_name: str, template_name: str, existing_files: list):
         """Show gallery exists dialog on main thread"""
         message = f"Gallery '{gallery_name}' already exists with {len(existing_files)} files.\n\nContinue with upload anyway?"
-        reply = QMessageBox.question(
-            self,
-            "Gallery Already Exists",
-            message,
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No
-        )
-        
-        if reply == QMessageBox.StandardButton.Yes:
+        msgbox = QMessageBox(self)
+        msgbox.setWindowTitle("Gallery Already Exists")
+        msgbox.setText(message)
+        msgbox.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        msgbox.setDefaultButton(QMessageBox.StandardButton.No)
+        msgbox.open()
+        msgbox.finished.connect(lambda result: self._handle_gallery_exists_confirmation(result, path, gallery_name, template_name))
+    
+    def _handle_gallery_exists_confirmation(self, result, path: str, gallery_name: str, template_name: str):
+        """Handle gallery exists confirmation"""
+        if result == QMessageBox.StandardButton.Yes:
             self._force_add_gallery(path, gallery_name, template_name)
         else:
             self.add_log_message(f"{timestamp()} [queue] Skipped: {os.path.basename(path)} (user cancelled)")
@@ -6873,10 +6975,15 @@ class ImxUploadGUI(QMainWindow):
     def _update_button_counts(self):
         """Update button counts and states without rebuilding the table"""
         try:
-            items = self.queue_manager.get_all_items()
-            count_startable = sum(1 for item in items if item.status in ("ready", "paused", "incomplete", "scanning"))
-            count_pausable = sum(1 for item in items if item.status in ("uploading", "queued"))
-            count_completed = sum(1 for item in items if item.status == "completed")
+            # Use efficient status counters instead of iterating through all items
+            status_counts = self.queue_manager.get_status_counts()
+            count_startable = (status_counts.get("ready", 0) + 
+                             status_counts.get("paused", 0) + 
+                             status_counts.get("incomplete", 0) + 
+                             status_counts.get("scanning", 0))
+            count_pausable = (status_counts.get("uploading", 0) + 
+                            status_counts.get("queued", 0))
+            count_completed = status_counts.get("completed", 0)
 
             # Update button texts with counts (preserve leading space for visual alignment)
             self.start_all_btn.setText(f" Start All ({count_startable})")
@@ -7342,18 +7449,19 @@ class ImxUploadGUI(QMainWindow):
     
     def on_gallery_exists(self, gallery_name: str, existing_files: list):
         """Handle existing gallery detection"""
-        
         json_count = sum(1 for f in existing_files if f.lower().endswith('.json'))
         message = f"Gallery '{gallery_name}' already exists with {json_count} .json file{'' if json_count == 1 else 's'}.\n\nContinue with upload anyway?"
-        reply = QMessageBox.question(
-            self,
-            "Gallery Already Exists",
-            message,
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No
-        )
-        
-        if reply != QMessageBox.StandardButton.Yes:
+        msgbox = QMessageBox(self)
+        msgbox.setWindowTitle("Gallery Already Exists")
+        msgbox.setText(message)
+        msgbox.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        msgbox.setDefaultButton(QMessageBox.StandardButton.No)
+        msgbox.open()
+        msgbox.finished.connect(lambda result: self._handle_upload_gallery_exists_confirmation(result))
+    
+    def _handle_upload_gallery_exists_confirmation(self, result):
+        """Handle upload gallery exists confirmation"""
+        if result != QMessageBox.StandardButton.Yes:
             # Cancel the upload
             self.add_log_message(f"{timestamp()} Upload cancelled by user due to existing gallery")
             # TODO: Implement proper cancellation mechanism

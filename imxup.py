@@ -2008,7 +2008,8 @@ def main():
             print(f"{timestamp()} 2. Navigate to each gallery and rename it manually")
             print(f"{timestamp()} 3. Or export cookies from browser and place in cookies.txt file")
             print(f"{timestamp()} Gallery IDs to rename: {', '.join(unnamed_galleries.keys())}")
-        return
+            return 1  # Failed to rename galleries
+        return 0  # Successfully renamed galleries
     
     # Check if folder paths are provided (required for upload)
     if not args.folder_paths:
@@ -2028,7 +2029,7 @@ def main():
     
     if not expanded_paths:
         print("No valid folders found to upload.")
-        return
+        return 1  # No valid folders
     
     # Determine public gallery setting
     public_gallery = args.public_gallery
@@ -2133,12 +2134,14 @@ def main():
                     speed_str = f"{((results['transfer_speed'] or 0) / 1024.0):.1f} KiB/s"
                 print(f"  Speed: {speed_str}")
                 
+            return 0  # Success
         else:
             print("No galleries were successfully uploaded.")
+            return 1  # No galleries uploaded
             
     except Exception as e:
         print(f"Error: {str(e)}", file=sys.stderr)
-        sys.exit(1)
+        return 1  # Error occurred
 
 if __name__ == "__main__":
     try:
