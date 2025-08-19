@@ -13,7 +13,9 @@ from PyQt6.QtWidgets import (
     QDialog, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
     QTabWidget, QPushButton, QCheckBox, QComboBox, QSpinBox,
     QLabel, QGroupBox, QLineEdit, QMessageBox, QFileDialog,
-    QListWidget, QListWidgetItem, QPlainTextEdit, QInputDialog
+    QListWidget, QListWidgetItem, QPlainTextEdit, QInputDialog,
+    QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView,
+    QButtonGroup, QFrame, QSplitter
 )
 from PyQt6.QtCore import Qt, QSettings
 from PyQt6.QtGui import QIcon, QFont, QColor, QTextCharFormat
@@ -49,6 +51,7 @@ class ComprehensiveSettingsDialog(QDialog):
         self.setup_general_tab()
         self.setup_credentials_tab()
         self.setup_templates_tab()
+        self.setup_tabs_tab()
         self.setup_logs_tab()
         self.setup_scanning_tab()
         
@@ -234,6 +237,687 @@ class ComprehensiveSettingsDialog(QDialog):
         
         self.tab_widget.addTab(templates_widget, "Templates")
         
+    def setup_tabs_tab(self):
+        """Setup the Tabs management tab"""
+        tabs_widget = QWidget()
+        layout = QVBoxLayout(tabs_widget)
+        
+        # Initialize tab manager reference
+        self.tab_manager = None
+        if self.parent and hasattr(self.parent, 'tab_manager'):
+            self.tab_manager = self.parent.tab_manager
+        
+        # Create splitter for better layout
+        splitter = QSplitter(Qt.Orientation.Horizontal)
+        layout.addWidget(splitter)
+        
+        # Left side - Tab management
+        left_widget = QWidget()
+        left_layout = QVBoxLayout(left_widget)
+        
+        # Tab list group
+        tab_list_group = QGroupBox("Tab Management")
+        tab_list_layout = QVBoxLayout(tab_list_group)
+        
+        # Tab table
+        self.tabs_table = QTableWidget()
+        self.tabs_table.setColumnCount(4)
+        self.tabs_table.setHorizontalHeaderLabels(["Name", "Type", "Count", "Hidden"])
+        self.tabs_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        self.tabs_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        self.tabs_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+        self.tabs_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
+        self.tabs_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.tabs_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.tabs_table.itemSelectionChanged.connect(self.on_tab_selection_changed)
+        tab_list_layout.addWidget(self.tabs_table)
+        
+        # Tab action buttons
+        tab_buttons_layout = QHBoxLayout()
+        
+        self.create_tab_btn = QPushButton("Create Tab")
+        self.create_tab_btn.clicked.connect(self.create_new_tab)
+        tab_buttons_layout.addWidget(self.create_tab_btn)
+        
+        self.rename_tab_btn = QPushButton("Rename")
+        self.rename_tab_btn.clicked.connect(self.rename_selected_tab)
+        self.rename_tab_btn.setEnabled(False)
+        tab_buttons_layout.addWidget(self.rename_tab_btn)
+        
+        self.delete_tab_btn = QPushButton("Delete")
+        self.delete_tab_btn.clicked.connect(self.delete_selected_tab)
+        self.delete_tab_btn.setEnabled(False)
+        tab_buttons_layout.addWidget(self.delete_tab_btn)
+        
+        tab_buttons_layout.addStretch()
+        
+        self.move_tab_up_btn = QPushButton("Move Up")
+        self.move_tab_up_btn.clicked.connect(self.move_tab_up)
+        self.move_tab_up_btn.setEnabled(False)
+        tab_buttons_layout.addWidget(self.move_tab_up_btn)
+        
+        self.move_tab_down_btn = QPushButton("Move Down")
+        self.move_tab_down_btn.clicked.connect(self.move_tab_down)
+        self.move_tab_down_btn.setEnabled(False)
+        tab_buttons_layout.addWidget(self.move_tab_down_btn)
+        
+        tab_list_layout.addLayout(tab_buttons_layout)
+        left_layout.addWidget(tab_list_group)
+        
+        # Tab preferences group
+        tab_prefs_group = QGroupBox("Tab Preferences")
+        tab_prefs_layout = QGridLayout(tab_prefs_group)
+        
+        # Default tab for new galleries
+        tab_prefs_layout.addWidget(QLabel("Default tab for new galleries:"), 0, 0)
+        self.default_tab_combo = QComboBox()
+        self.default_tab_combo.currentTextChanged.connect(self.on_default_tab_changed)
+        tab_prefs_layout.addWidget(self.default_tab_combo, 0, 1)
+        
+        # Hide/Show selected tab
+        self.hide_tab_check = QCheckBox("Hide selected tab")
+        self.hide_tab_check.setEnabled(False)
+        self.hide_tab_check.toggled.connect(self.on_hide_tab_toggled)
+        tab_prefs_layout.addWidget(self.hide_tab_check, 1, 0, 1, 2)
+        
+        # Reset tab order button
+        self.reset_order_btn = QPushButton("Reset to Default Order")
+        self.reset_order_btn.clicked.connect(self.reset_tab_order)
+        tab_prefs_layout.addWidget(self.reset_order_btn, 2, 0, 1, 2)
+        
+        left_layout.addWidget(tab_prefs_group)
+        left_layout.addStretch()
+        
+        # Right side - Auto-archive settings
+        right_widget = QWidget()
+        right_layout = QVBoxLayout(right_widget)
+        
+        # Auto-archive group
+        auto_archive_group = QGroupBox("Auto-Archive Settings")
+        auto_archive_layout = QVBoxLayout(auto_archive_group)
+        
+        # Enable auto-archive
+        self.auto_archive_enabled_check = QCheckBox("Enable automatic archiving")
+        self.auto_archive_enabled_check.toggled.connect(self.on_auto_archive_enabled_changed)
+        auto_archive_layout.addWidget(self.auto_archive_enabled_check)
+        
+        # Auto-archive configuration
+        config_frame = QFrame()
+        config_layout = QGridLayout(config_frame)
+        
+        # Days threshold
+        config_layout.addWidget(QLabel("Archive completed galleries after:"), 0, 0)
+        self.auto_archive_days_spin = QSpinBox()
+        self.auto_archive_days_spin.setRange(1, 365)
+        self.auto_archive_days_spin.setValue(30)
+        self.auto_archive_days_spin.setSuffix(" days")
+        self.auto_archive_days_spin.valueChanged.connect(self.on_auto_archive_days_changed)
+        config_layout.addWidget(self.auto_archive_days_spin, 0, 1)
+        
+        # Status criteria
+        config_layout.addWidget(QLabel("Archive galleries with status:"), 1, 0, 1, 2)
+        
+        self.archive_completed_check = QCheckBox("Completed")
+        self.archive_completed_check.setChecked(True)
+        self.archive_completed_check.toggled.connect(self.on_auto_archive_criteria_changed)
+        config_layout.addWidget(self.archive_completed_check, 2, 0)
+        
+        self.archive_failed_check = QCheckBox("Failed")
+        self.archive_failed_check.setChecked(True)
+        self.archive_failed_check.toggled.connect(self.on_auto_archive_criteria_changed)
+        config_layout.addWidget(self.archive_failed_check, 2, 1)
+        
+        self.archive_cancelled_check = QCheckBox("Cancelled")
+        self.archive_cancelled_check.toggled.connect(self.on_auto_archive_criteria_changed)
+        config_layout.addWidget(self.archive_cancelled_check, 3, 0)
+        
+        auto_archive_layout.addWidget(config_frame)
+        
+        # Manual archive actions
+        manual_frame = QFrame()
+        manual_layout = QVBoxLayout(manual_frame)
+        
+        # Preview candidates
+        self.preview_archive_btn = QPushButton("Preview Archive Candidates")
+        self.preview_archive_btn.clicked.connect(self.preview_archive_candidates)
+        manual_layout.addWidget(self.preview_archive_btn)
+        
+        # Execute archive
+        self.execute_archive_btn = QPushButton("Archive Now")
+        self.execute_archive_btn.clicked.connect(self.execute_archive_now)
+        manual_layout.addWidget(self.execute_archive_btn)
+        
+        auto_archive_layout.addWidget(manual_frame)
+        
+        # Archive status
+        self.archive_status_label = QLabel("Auto-archive is disabled")
+        self.archive_status_label.setStyleSheet("color: #666; font-style: italic;")
+        auto_archive_layout.addWidget(self.archive_status_label)
+        
+        right_layout.addWidget(auto_archive_group)
+        right_layout.addStretch()
+        
+        # Add to splitter
+        splitter.addWidget(left_widget)
+        splitter.addWidget(right_widget)
+        splitter.setSizes([400, 300])  # Give more space to left side
+        
+        # Load current tabs and settings
+        self.load_tabs_settings()
+        
+        self.tab_widget.addTab(tabs_widget, "Tabs")
+    
+    def load_tabs_settings(self):
+        """Load current tabs and settings"""
+        # Clear existing table
+        self.tabs_table.setRowCount(0)
+        
+        if not self.tab_manager:
+            # Show message if no tab manager available
+            self.tabs_table.setRowCount(1)
+            item = QTableWidgetItem("Tab management not available")
+            item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsSelectable)
+            self.tabs_table.setItem(0, 0, item)
+            self._disable_tab_controls()
+            return
+        
+        try:
+            # Load all tabs (including hidden)
+            tabs = self.tab_manager.get_all_tabs(include_hidden=True)
+            
+            # Populate table
+            self.tabs_table.setRowCount(len(tabs))
+            for row, tab in enumerate(tabs):
+                # Name
+                name_item = QTableWidgetItem(tab.name)
+                name_item.setData(Qt.ItemDataRole.UserRole, tab)  # Store tab info
+                self.tabs_table.setItem(row, 0, name_item)
+                
+                # Type
+                type_item = QTableWidgetItem(tab.tab_type.capitalize())
+                if tab.tab_type == 'system':
+                    type_item.setBackground(QColor("#f0f8ff"))
+                self.tabs_table.setItem(row, 1, type_item)
+                
+                # Gallery count
+                count_item = QTableWidgetItem(str(tab.gallery_count))
+                count_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                self.tabs_table.setItem(row, 2, count_item)
+                
+                # Hidden status
+                hidden_item = QTableWidgetItem("Yes" if tab.is_hidden else "No")
+                hidden_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                if tab.is_hidden:
+                    hidden_item.setBackground(QColor("#ffe6e6"))
+                self.tabs_table.setItem(row, 3, hidden_item)
+            
+            # Update default tab combo
+            self.default_tab_combo.clear()
+            visible_tabs = [tab.name for tab in tabs if not tab.is_hidden]
+            self.default_tab_combo.addItems(visible_tabs)
+            
+            # Set current default tab
+            current_default = self.tab_manager.last_active_tab
+            index = self.default_tab_combo.findText(current_default)
+            if index >= 0:
+                self.default_tab_combo.setCurrentIndex(index)
+            
+            # Load auto-archive settings
+            enabled, days, statuses = self.tab_manager.get_auto_archive_config()
+            self.auto_archive_enabled_check.setChecked(enabled)
+            self.auto_archive_days_spin.setValue(days)
+            
+            # Update status checkboxes
+            self.archive_completed_check.setChecked("completed" in statuses)
+            self.archive_failed_check.setChecked("failed" in statuses)
+            self.archive_cancelled_check.setChecked("cancelled" in statuses)
+            
+            self._update_auto_archive_status()
+            
+        except Exception as e:
+            print(f"Error loading tabs settings: {e}")
+            self._disable_tab_controls()
+    
+    def _disable_tab_controls(self):
+        """Disable all tab management controls"""
+        controls = [
+            self.create_tab_btn, self.rename_tab_btn, self.delete_tab_btn,
+            self.move_tab_up_btn, self.move_tab_down_btn, self.hide_tab_check,
+            self.reset_order_btn, self.auto_archive_enabled_check,
+            self.preview_archive_btn, self.execute_archive_btn
+        ]
+        for control in controls:
+            control.setEnabled(False)
+    
+    def on_tab_selection_changed(self):
+        """Handle tab selection change"""
+        selected_items = self.tabs_table.selectedItems()
+        if not selected_items or not self.tab_manager:
+            self._update_tab_buttons(None)
+            return
+        
+        # Get selected tab info
+        row = selected_items[0].row()
+        name_item = self.tabs_table.item(row, 0)
+        tab_info = name_item.data(Qt.ItemDataRole.UserRole)
+        
+        self._update_tab_buttons(tab_info)
+    
+    def _update_tab_buttons(self, tab_info):
+        """Update tab action buttons based on selection"""
+        if not tab_info:
+            self.rename_tab_btn.setEnabled(False)
+            self.delete_tab_btn.setEnabled(False)
+            self.move_tab_up_btn.setEnabled(False)
+            self.move_tab_down_btn.setEnabled(False)
+            self.hide_tab_check.setEnabled(False)
+            return
+        
+        # Can only edit user tabs (not system tabs)
+        is_user_tab = tab_info.tab_type == 'user'
+        can_delete = is_user_tab and tab_info.name not in ['Main', 'Archive']
+        
+        self.rename_tab_btn.setEnabled(is_user_tab)
+        self.delete_tab_btn.setEnabled(can_delete)
+        
+        # Movement buttons - can move any tab
+        current_row = self.tabs_table.currentRow()
+        can_move_up = current_row > 0
+        can_move_down = current_row < (self.tabs_table.rowCount() - 1)
+        
+        self.move_tab_up_btn.setEnabled(can_move_up)
+        self.move_tab_down_btn.setEnabled(can_move_down)
+        
+        # Hide/show functionality
+        self.hide_tab_check.setEnabled(True)
+        self.hide_tab_check.blockSignals(True)
+        self.hide_tab_check.setChecked(tab_info.is_hidden)
+        self.hide_tab_check.blockSignals(False)
+    
+    def create_new_tab(self):
+        """Create a new user tab"""
+        if not self.tab_manager:
+            return
+        
+        # Get tab name from user
+        name, ok = QInputDialog.getText(self, "Create New Tab", "Tab name:")
+        if not ok or not name.strip():
+            return
+        
+        name = name.strip()
+        
+        try:
+            # Create tab using TabManager
+            tab_info = self.tab_manager.create_tab(name)
+            
+            # Refresh the display
+            self.load_tabs_settings()
+            
+            # Select the new tab
+            for row in range(self.tabs_table.rowCount()):
+                item = self.tabs_table.item(row, 0)
+                if item and item.text() == name:
+                    self.tabs_table.selectRow(row)
+                    break
+            
+            # Show success message
+            msg_box = QMessageBox(self)
+            msg_box.setWindowTitle("Success")
+            msg_box.setText(f"Tab '{name}' created successfully!")
+            msg_box.open()
+            
+        except ValueError as e:
+            # Show error message
+            msg_box = QMessageBox(self)
+            msg_box.setIcon(QMessageBox.Icon.Warning)
+            msg_box.setWindowTitle("Error")
+            msg_box.setText(str(e))
+            msg_box.open()
+    
+    def rename_selected_tab(self):
+        """Rename the selected tab"""
+        if not self.tab_manager:
+            return
+        
+        current_row = self.tabs_table.currentRow()
+        if current_row < 0:
+            return
+        
+        name_item = self.tabs_table.item(current_row, 0)
+        tab_info = name_item.data(Qt.ItemDataRole.UserRole)
+        
+        if not tab_info or tab_info.tab_type != 'user':
+            return
+        
+        # Get new name from user
+        new_name, ok = QInputDialog.getText(
+            self, "Rename Tab", "New name:", text=tab_info.name
+        )
+        if not ok or not new_name.strip() or new_name.strip() == tab_info.name:
+            return
+        
+        new_name = new_name.strip()
+        
+        try:
+            # Rename using TabManager
+            success = self.tab_manager.update_tab(tab_info.name, new_name=new_name)
+            
+            if success:
+                # Refresh the display
+                self.load_tabs_settings()
+                
+                # Show success message
+                msg_box = QMessageBox(self)
+                msg_box.setWindowTitle("Success")
+                msg_box.setText(f"Tab renamed to '{new_name}' successfully!")
+                msg_box.open()
+            
+        except ValueError as e:
+            # Show error message
+            msg_box = QMessageBox(self)
+            msg_box.setIcon(QMessageBox.Icon.Warning)
+            msg_box.setWindowTitle("Error")
+            msg_box.setText(str(e))
+            msg_box.open()
+    
+    def delete_selected_tab(self):
+        """Delete the selected tab"""
+        if not self.tab_manager:
+            return
+        
+        current_row = self.tabs_table.currentRow()
+        if current_row < 0:
+            return
+        
+        name_item = self.tabs_table.item(current_row, 0)
+        tab_info = name_item.data(Qt.ItemDataRole.UserRole)
+        
+        if not tab_info or tab_info.tab_type != 'user':
+            return
+        
+        # Don't allow deleting Main or Archive
+        if tab_info.name in ['Main', 'Archive']:
+            msg_box = QMessageBox(self)
+            msg_box.setIcon(QMessageBox.Icon.Warning)
+            msg_box.setWindowTitle("Cannot Delete")
+            msg_box.setText(f"Cannot delete the {tab_info.name} tab.")
+            msg_box.open()
+            return
+        
+        # Confirm deletion
+        msg_box = QMessageBox(self)
+        msg_box.setIcon(QMessageBox.Icon.Question)
+        msg_box.setWindowTitle("Confirm Delete")
+        msg_box.setText(f"Delete tab '{tab_info.name}'?\n\n"
+                       f"All galleries in this tab will be moved to the Main tab.")
+        msg_box.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        msg_box.setDefaultButton(QMessageBox.StandardButton.No)
+        
+        # Use non-blocking approach
+        msg_box.finished.connect(lambda result: self._handle_delete_confirmation(result, tab_info))
+        msg_box.open()
+    
+    def _handle_delete_confirmation(self, result, tab_info):
+        """Handle tab deletion confirmation"""
+        if result != QMessageBox.StandardButton.Yes:
+            return
+        
+        try:
+            # Delete using TabManager
+            success, gallery_count = self.tab_manager.delete_tab(tab_info.name, "Main")
+            
+            if success:
+                # Refresh the display
+                self.load_tabs_settings()
+                
+                # Show success message
+                msg_box = QMessageBox(self)
+                msg_box.setWindowTitle("Success")
+                msg_box.setText(f"Tab '{tab_info.name}' deleted successfully!\n"
+                               f"{gallery_count} galleries moved to Main tab.")
+                msg_box.open()
+            
+        except ValueError as e:
+            # Show error message
+            msg_box = QMessageBox(self)
+            msg_box.setIcon(QMessageBox.Icon.Warning)
+            msg_box.setWindowTitle("Error")
+            msg_box.setText(str(e))
+            msg_box.open()
+    
+    def move_tab_up(self):
+        """Move selected tab up in display order"""
+        self._move_tab(-1)
+    
+    def move_tab_down(self):
+        """Move selected tab down in display order"""
+        self._move_tab(1)
+    
+    def _move_tab(self, direction):
+        """Move tab up (-1) or down (1) in display order"""
+        if not self.tab_manager:
+            return
+        
+        current_row = self.tabs_table.currentRow()
+        if current_row < 0:
+            return
+        
+        new_row = current_row + direction
+        if new_row < 0 or new_row >= self.tabs_table.rowCount():
+            return
+        
+        # Get current custom ordering
+        custom_order = self.tab_manager.get_custom_tab_order()
+        
+        # Get tab names at current and target positions
+        current_tab_name = self.tabs_table.item(current_row, 0).text()
+        target_tab_name = self.tabs_table.item(new_row, 0).text()
+        
+        # Assign new order values
+        if not custom_order:
+            # Create initial ordering based on current table order
+            for row in range(self.tabs_table.rowCount()):
+                tab_name = self.tabs_table.item(row, 0).text()
+                custom_order[tab_name] = row * 10  # Leave gaps for insertion
+        
+        # Swap the order values
+        current_order = custom_order.get(current_tab_name, current_row * 10)
+        target_order = custom_order.get(target_tab_name, new_row * 10)
+        
+        custom_order[current_tab_name] = target_order
+        custom_order[target_tab_name] = current_order
+        
+        # Apply the new ordering
+        self.tab_manager.set_custom_tab_order(custom_order)
+        
+        # Refresh display and maintain selection
+        self.load_tabs_settings()
+        self.tabs_table.selectRow(new_row)
+    
+    def reset_tab_order(self):
+        """Reset tab order to database defaults"""
+        if not self.tab_manager:
+            return
+        
+        # Confirm reset
+        msg_box = QMessageBox(self)
+        msg_box.setIcon(QMessageBox.Icon.Question)
+        msg_box.setWindowTitle("Reset Tab Order")
+        msg_box.setText("Reset tab order to defaults?")
+        msg_box.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        msg_box.setDefaultButton(QMessageBox.StandardButton.No)
+        
+        # Use non-blocking approach
+        msg_box.finished.connect(self._handle_reset_order_confirmation)
+        msg_box.open()
+    
+    def _handle_reset_order_confirmation(self, result):
+        """Handle reset order confirmation"""
+        if result == QMessageBox.StandardButton.Yes:
+            self.tab_manager.reset_tab_order()
+            self.load_tabs_settings()
+    
+    def on_default_tab_changed(self, tab_name):
+        """Handle default tab selection change"""
+        if self.tab_manager and tab_name:
+            self.tab_manager.last_active_tab = tab_name
+    
+    def on_hide_tab_toggled(self, hidden):
+        """Handle hide/show tab toggle"""
+        if not self.tab_manager:
+            return
+        
+        current_row = self.tabs_table.currentRow()
+        if current_row < 0:
+            return
+        
+        name_item = self.tabs_table.item(current_row, 0)
+        tab_name = name_item.text()
+        
+        # Update tab visibility
+        self.tab_manager.set_tab_hidden(tab_name, hidden)
+        
+        # Refresh display
+        self.load_tabs_settings()
+    
+    def on_auto_archive_enabled_changed(self, enabled):
+        """Handle auto-archive enabled state change"""
+        if self.tab_manager:
+            self.tab_manager.auto_archive_enabled = enabled
+            self._update_auto_archive_status()
+    
+    def on_auto_archive_days_changed(self, days):
+        """Handle auto-archive days threshold change"""
+        if self.tab_manager:
+            self.tab_manager.auto_archive_days = days
+            self._update_auto_archive_status()
+    
+    def on_auto_archive_criteria_changed(self):
+        """Handle auto-archive criteria change"""
+        if not self.tab_manager:
+            return
+        
+        # Get current settings
+        enabled, days, _ = self.tab_manager.get_auto_archive_config()
+        
+        # Build new status set
+        statuses = set()
+        if self.archive_completed_check.isChecked():
+            statuses.add("completed")
+        if self.archive_failed_check.isChecked():
+            statuses.add("failed")
+        if self.archive_cancelled_check.isChecked():
+            statuses.add("cancelled")
+        
+        # Update configuration
+        self.tab_manager.set_auto_archive_config(enabled, days, statuses)
+        self._update_auto_archive_status()
+    
+    def _update_auto_archive_status(self):
+        """Update auto-archive status display"""
+        if not self.tab_manager:
+            self.archive_status_label.setText("Tab management not available")
+            return
+        
+        enabled, days, statuses = self.tab_manager.get_auto_archive_config()
+        
+        if enabled:
+            status_list = ", ".join(sorted(statuses)) if statuses else "none"
+            self.archive_status_label.setText(
+                f"Auto-archive enabled: {days} days, statuses: {status_list}"
+            )
+            self.archive_status_label.setStyleSheet("color: #27ae60; font-weight: bold;")
+            
+            # Enable manual actions
+            self.preview_archive_btn.setEnabled(True)
+            self.execute_archive_btn.setEnabled(True)
+        else:
+            self.archive_status_label.setText("Auto-archive is disabled")
+            self.archive_status_label.setStyleSheet("color: #666; font-style: italic;")
+            
+            # Disable manual actions
+            self.preview_archive_btn.setEnabled(False)
+            self.execute_archive_btn.setEnabled(False)
+    
+    def preview_archive_candidates(self):
+        """Preview galleries that would be auto-archived"""
+        if not self.tab_manager:
+            return
+        
+        try:
+            candidates = self.tab_manager.check_auto_archive_candidates()
+            
+            if not candidates:
+                msg_box = QMessageBox(self)
+                msg_box.setWindowTitle("Preview Results")
+                msg_box.setText("No galleries meet the auto-archive criteria.")
+                msg_box.open()
+                return
+            
+            # Show preview dialog
+            preview_text = f"Found {len(candidates)} galleries that would be archived:\n\n"
+            preview_text += "\n".join(f"• {path}" for path in candidates[:20])
+            if len(candidates) > 20:
+                preview_text += f"\n... and {len(candidates) - 20} more"
+            
+            msg_box = QMessageBox(self)
+            msg_box.setWindowTitle("Archive Preview")
+            msg_box.setText(preview_text)
+            msg_box.setDetailedText("\n".join(candidates))
+            msg_box.open()
+            
+        except Exception as e:
+            msg_box = QMessageBox(self)
+            msg_box.setIcon(QMessageBox.Icon.Warning)
+            msg_box.setWindowTitle("Error")
+            msg_box.setText(f"Failed to preview archive candidates: {e}")
+            msg_box.open()
+    
+    def execute_archive_now(self):
+        """Execute auto-archive operation immediately"""
+        if not self.tab_manager:
+            return
+        
+        # Confirm execution
+        msg_box = QMessageBox(self)
+        msg_box.setIcon(QMessageBox.Icon.Question)
+        msg_box.setWindowTitle("Execute Auto-Archive")
+        msg_box.setText("Execute auto-archive operation now?\n\n"
+                       "This will move qualifying galleries to the Archive tab.")
+        msg_box.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        msg_box.setDefaultButton(QMessageBox.StandardButton.No)
+        
+        # Use non-blocking approach
+        msg_box.finished.connect(self._handle_execute_archive_confirmation)
+        msg_box.open()
+    
+    def _handle_execute_archive_confirmation(self, result):
+        """Handle execute archive confirmation"""
+        if result != QMessageBox.StandardButton.Yes:
+            return
+        
+        try:
+            moved_count = self.tab_manager.execute_auto_archive()
+            
+            # Refresh tabs display
+            self.load_tabs_settings()
+            
+            # Show result message
+            msg_box = QMessageBox(self)
+            msg_box.setWindowTitle("Archive Complete")
+            if moved_count > 0:
+                msg_box.setText(f"Successfully archived {moved_count} galleries to Archive tab.")
+            else:
+                msg_box.setText("No galleries met the auto-archive criteria.")
+            msg_box.open()
+            
+        except Exception as e:
+            msg_box = QMessageBox(self)
+            msg_box.setIcon(QMessageBox.Icon.Warning)
+            msg_box.setWindowTitle("Error")
+            msg_box.setText(f"Failed to execute auto-archive: {e}")
+            msg_box.open()
+        
     def setup_logs_tab(self):
         """Setup the Logs tab with integrated log viewer"""
         logs_widget = QWidget()
@@ -330,6 +1014,8 @@ class ComprehensiveSettingsDialog(QDialog):
         # Settings are loaded in setup_ui for each tab
         # Load scanning settings from QSettings
         self._load_scanning_settings()
+        # Load tabs settings
+        self._load_tabs_settings()
     
     def _load_scanning_settings(self):
         """Load scanning settings from QSettings"""
@@ -346,6 +1032,14 @@ class ComprehensiveSettingsDialog(QDialog):
                     
         except Exception as e:
             print(f"Failed to load scanning settings: {e}")
+    
+    def _load_tabs_settings(self):
+        """Load tabs settings if available"""
+        try:
+            if hasattr(self, 'load_tabs_settings'):
+                self.load_tabs_settings()
+        except Exception as e:
+            print(f"Failed to load tabs settings: {e}")
         
     def save_settings(self):
         """Save all settings"""
@@ -376,6 +1070,9 @@ class ComprehensiveSettingsDialog(QDialog):
                 
                 # Save scanning settings
                 self._save_scanning_settings()
+                
+                # Save tabs settings
+                self._save_tabs_settings()
                     
             return True
         except Exception as e:
@@ -400,6 +1097,38 @@ class ComprehensiveSettingsDialog(QDialog):
                 
         except Exception as e:
             print(f"Failed to save scanning settings: {e}")
+    
+    def _save_tabs_settings(self):
+        """Save tabs settings - handled by TabManager automatically"""
+        # TabManager automatically persists settings through QSettings
+        # No additional saving needed here as all tab operations
+        # in the UI immediately update the TabManager which handles persistence
+        pass
+    
+    def _reset_tabs_settings(self):
+        """Reset tabs settings to defaults"""
+        try:
+            if hasattr(self, 'tab_manager') and self.tab_manager:
+                # Reset auto-archive settings
+                self.auto_archive_enabled_check.setChecked(False)
+                self.auto_archive_days_spin.setValue(30)
+                self.archive_completed_check.setChecked(True)
+                self.archive_failed_check.setChecked(True)
+                self.archive_cancelled_check.setChecked(False)
+                
+                # Reset tab order
+                self.tab_manager.reset_tab_order()
+                
+                # Reset auto-archive configuration
+                self.tab_manager.set_auto_archive_config(False, 30, {"completed", "failed"})
+                
+                # Set default tab to Main
+                self.tab_manager.last_active_tab = "Main"
+                
+                # Refresh display
+                self.load_tabs_settings()
+        except Exception as e:
+            print(f"Failed to reset tabs settings: {e}")
             
     def reset_to_defaults(self):
         """Reset all settings to defaults"""
@@ -437,6 +1166,9 @@ class ComprehensiveSettingsDialog(QDialog):
             # Reset scanning
             self.fast_scan_check.setChecked(True)
             self.pil_sampling_combo.setCurrentIndex(2)
+            
+            # Reset tabs settings
+            self._reset_tabs_settings()
             
     def save_and_close(self):
         """Save settings and close dialog"""
