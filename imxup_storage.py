@@ -1180,25 +1180,29 @@ class QueueStore:
             
         if not new_tab_name or not new_tab_name.strip():
             raise ValueError("new_tab_name cannot be empty")
+        
+        # Strip count from tab name (e.g., "Archive (0)" -> "Archive")
+        import re
+        clean_tab_name = re.sub(r'\s*\(\d+\)$', '', new_tab_name.strip())
             
         with _connect(self.db_path) as conn:
             _ensure_schema(conn)
             conn.execute("BEGIN")
             
             try:
-                # Get destination tab ID
-                cursor = conn.execute("SELECT id FROM tabs WHERE name = ? AND is_active = 1", (new_tab_name,))
+                # Get destination tab ID using clean tab name
+                cursor = conn.execute("SELECT id FROM tabs WHERE name = ? AND is_active = 1", (clean_tab_name,))
                 row = cursor.fetchone()
                 if not row:
                     conn.execute("ROLLBACK")
-                    raise ValueError(f"Destination tab '{new_tab_name}' does not exist")
+                    raise ValueError(f"Destination tab '{clean_tab_name}' does not exist")
                 
                 tab_id = row[0]
                 
-                # Build parameterized query for bulk update using tab_id
+                # Build parameterized query for bulk update using tab_id and clean name
                 placeholders = ','.join(['?'] * len(gallery_paths))
                 sql = f"UPDATE galleries SET tab_id = ?, tab_name = ? WHERE path IN ({placeholders})"
-                params = [tab_id, new_tab_name] + gallery_paths
+                params = [tab_id, clean_tab_name] + gallery_paths
                 
                 cursor = conn.execute(sql, params)
                 moved_count = cursor.rowcount if hasattr(cursor, 'rowcount') else 0
@@ -1207,6 +1211,12 @@ class QueueStore:
                 return moved_count
                 
             except Exception as e:
+                print(f"DEBUG: Exception type: {type(e)}")
+                print(f"DEBUG: Exception message: {e}")
+                print(f"DEBUG: Gallery paths: {gallery_paths}")
+                print(f"DEBUG: New tab name: '{new_tab_name}' -> clean: '{clean_tab_name}'")
+                import traceback
+                traceback.print_exc()
                 conn.execute("ROLLBACK")
                 if isinstance(e, ValueError):
                     raise  # Re-raise ValueError with original message

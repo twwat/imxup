@@ -45,6 +45,8 @@ from PyQt6.QtGui import QDragEnterEvent, QDropEvent, QIcon, QFont, QPixmap, QPai
 # Import the core uploader functionality
 from imxup import ImxToUploader, load_user_defaults, timestamp, sanitize_gallery_name, encrypt_password, decrypt_password, rename_all_unnamed_with_session, get_config_path, build_gallery_filenames, get_central_storage_path
 from imxup import create_windows_context_menu, remove_windows_context_menu
+
+
 from imxup_core import UploadEngine
 from imxup_storage import QueueStore
 from imxup_logging import get_logger
@@ -3771,8 +3773,18 @@ class GalleryTableWidget(QTableWidget):
                     paths.append(path)
         if not paths:
             return
+        # Filter for completed items only (like context menu does)
+        widget = self
+        while widget and not hasattr(widget, 'queue_manager'):
+            widget = widget.parent()
+        completed_paths = []
+        if widget and hasattr(widget, 'queue_manager'):
+            for path in paths:
+                item = widget.queue_manager.get_item(path)
+                if item and item.status == "completed":
+                    completed_paths.append(path)
         # Delegate to the multi-copy helper to aggregate
-        self.copy_bbcode_via_menu_multi(paths)
+        self.copy_bbcode_via_menu_multi(completed_paths)
     
     def show_context_menu(self, position):
         """Show context menu for table items"""
@@ -4000,33 +4012,53 @@ class GalleryTableWidget(QTableWidget):
 
     def copy_bbcode_via_menu_multi(self, paths):
         """Copy BBCode for multiple completed items (concatenated with separators)"""
+        print(f"DEBUG: copy_bbcode_via_menu_multi called with {len(paths)} paths")
         # Find the main GUI window
         widget = self
-        while widget and not hasattr(widget, 'copy_bbcode_to_clipboard'):
+        while widget and not hasattr(widget, 'queue_manager'):
             widget = widget.parent()
         if not widget:
+            print("DEBUG: No widget with queue_manager found")
             return
         # Aggregate BBCode contents; reuse copy function to centralize path lookup
         contents = []
         for path in paths:
+            print(f"DEBUG: Processing path: {path}")
             item = widget.queue_manager.get_item(path)
-            if not item or item.status != "completed":
+            if not item:
+                print(f"DEBUG: No item found for path: {path}")
+                continue
+            print(f"DEBUG: Item status: {item.status}, gallery_id: {getattr(item, 'gallery_id', 'MISSING')}")
+            if item.status != "completed":
+                print(f"DEBUG: Skipping non-completed item: {item.status}")
                 continue
             # Inline read similar to copy_bbcode_to_clipboard to avoid changing it
             folder_name = os.path.basename(path)
+            print(f"DEBUG: folder_name: {folder_name}")
             # Use cached functions or fallbacks
             if hasattr(widget, '_get_central_storage_path'):
-                central_path = widget._get_central_storage_path()
+                base_path = widget._get_central_storage_path()
+                central_path = os.path.join(base_path, "galleries")
+                print(f"DEBUG: Using widget._get_central_storage_path: {central_path}")
             else:
-                central_path = os.path.expanduser("~/.imxup")
+                central_path = os.path.expanduser("~/.imxup/galleries")
+                print(f"DEBUG: Using fallback central_path: {central_path}")
             if item.gallery_id and (item.name or folder_name):
+                print(f"DEBUG: Has gallery_id and name, item.name: {getattr(item, 'name', 'MISSING')}")
                 if hasattr(widget, '_build_gallery_filenames'):
                     _, _, bbcode_filename = widget._build_gallery_filenames(item.name or folder_name, item.gallery_id)
+                    print(f"DEBUG: Using widget._build_gallery_filenames: {bbcode_filename}")
                 else:
-                    bbcode_filename = f"{item.name or folder_name}_{item.gallery_id}_bbcode.txt"
+                    # Use sanitize_gallery_name like the real function does
+                    safe_name = sanitize_gallery_name(item.name or folder_name)
+                    bbcode_filename = f"{safe_name}_{item.gallery_id}_bbcode.txt"
+                    print(f"DEBUG: Using fallback filename: {bbcode_filename}")
                 central_bbcode = os.path.join(central_path, bbcode_filename)
             else:
                 central_bbcode = os.path.join(central_path, f"{folder_name}_bbcode.txt")
+                print(f"DEBUG: Using folder_name fallback: {central_bbcode}")
+            print(f"DEBUG: Looking for BBCode file: {central_bbcode}")
+            print(f"DEBUG: File exists: {os.path.exists(central_bbcode)}")
             # Move file I/O to background to avoid blocking GUI
             def _read_bbcode_async():
                 text = ""
