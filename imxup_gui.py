@@ -46,6 +46,7 @@ from PyQt6.QtGui import QDragEnterEvent, QDropEvent, QIcon, QFont, QPixmap, QPai
 # Import the core uploader functionality
 from imxup import ImxToUploader, load_user_defaults, timestamp, sanitize_gallery_name, encrypt_password, decrypt_password, rename_all_unnamed_with_session, get_config_path, build_gallery_filenames, get_central_storage_path
 from imxup import create_windows_context_menu, remove_windows_context_menu
+from imxup_splash import SplashScreen
 
 
 from imxup_core import UploadEngine
@@ -1486,7 +1487,6 @@ class QueueManager(QObject):
                 if status == "completed" or (os.path.exists(path) and os.path.isdir(path)):
                     if status == "completed":
                         loaded_tab_name = item_data.get('tab_name', 'Main')
-                        print(f"DEBUG: Loading completed item {path} with tab_name='{loaded_tab_name}'", flush=True)
                         item = GalleryQueueItem(
                             path=path,
                             name=item_data.get('name'),
@@ -1505,7 +1505,6 @@ class QueueManager(QObject):
                     else:
                         load_status = "ready" if status in ["queued", "uploading"] else status
                         loaded_tab_name = item_data.get('tab_name', 'Main')
-                        print(f"DEBUG: Loading non-completed item {path} with tab_name='{loaded_tab_name}'", flush=True)
                         item = GalleryQueueItem(
                             path=path,
                             name=item_data.get('name'),
@@ -1545,7 +1544,6 @@ class QueueManager(QObject):
                         pass
                     self._next_order = max(self._next_order, item.insertion_order + 1)
                     self.items[path] = item
-                    print(f"DEBUG: Added item to queue: {path} with final tab_name='{item.tab_name}'", flush=True)
                 else:
                     pass
         
@@ -3582,6 +3580,9 @@ class GalleryTableWidget(QTableWidget):
             "#", "gallery name", "uploaded", "progress", "status", "added", "finished", "action",
             "size", "transfer", "template", "title"
         ])
+        
+        # Set larger icon size for Status column icons (default is usually 16x16)
+        self.setIconSize(QSize(20, 20))
         
         # Set global font styles for table items to prevent size changes
         self.setStyleSheet("""
@@ -6039,8 +6040,8 @@ class SingleInstanceServer(QThread):
                 try:
                     client_socket, _ = server_socket.accept()
                     data = client_socket.recv(1024).decode('utf-8')
-                    if data:
-                        self.folder_received.emit(data)
+                    # Emit signal for both folder paths and empty messages (window focus)
+                    self.folder_received.emit(data)
                     client_socket.close()
                 except socket.timeout:
                     continue
@@ -6059,10 +6060,11 @@ class SingleInstanceServer(QThread):
 class ImxUploadGUI(QMainWindow):
     """Main GUI application"""
     
-    def __init__(self):
+    def __init__(self, splash=None):
         print(f"DEBUG: ImxUploadGUI.__init__ starting")
         super().__init__()
         print(f"DEBUG: QMainWindow.__init__ completed")
+        self.splash = splash
         # Set main window icon
         try:
             icon_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "imxup.ico")
@@ -6070,6 +6072,8 @@ class ImxUploadGUI(QMainWindow):
                 self.setWindowIcon(QIcon(icon_path))
         except Exception:
             pass
+        if self.splash:
+            self.splash.set_status("SQLite database")
         print(f"DEBUG: About to create QueueManager")
         self.queue_manager = QueueManager()
         print(f"DEBUG: QueueManager created")
@@ -6080,6 +6084,8 @@ class ImxUploadGUI(QMainWindow):
         print(f"DEBUG: Queue loaded signal connected")
         
         # Initialize tab manager
+        if self.splash:
+            self.splash.set_status("TabManager")
         print(f"DEBUG: About to create TabManager")
         self.tab_manager = TabManager(self.queue_manager.store)
         print(f"DEBUG: TabManager created")
@@ -6139,10 +6145,18 @@ class ImxUploadGUI(QMainWindow):
         self.server.folder_received.connect(self.add_folder_from_command_line)
         self.server.start()
         
+        if self.splash:
+            self.splash.set_status("GUI")
         self.setup_ui()
         self.setup_menu_bar()
         self.setup_system_tray()
         self.restore_settings()
+        
+        # Easter egg - quick gremlin flash
+        if self.splash:
+            self.splash.set_status("gremlins")
+            QApplication.processEvents()
+            time.sleep(0.05)  # Very brief
         
         # Initialize table update queue after table creation
         self._table_update_queue = TableUpdateQueue(self.gallery_table, self.path_to_row)
@@ -6567,37 +6581,52 @@ class ImxUploadGUI(QMainWindow):
         """
         # Validate row bounds to prevent setting icons on wrong rows
         if row < 0 or row >= self.gallery_table.rowCount():
+            print(f"DEBUG: _set_status_cell_icon: Invalid row {row}, table has {self.gallery_table.rowCount()} rows")
             return
-            
-        # Use background task for icon loading to prevent blocking
-        def load_and_set_icon():
-            try:
-                self._load_status_icons_if_needed()
-                col = 4
-                icon = None
-                tooltip = ""
-                
-                if status == "completed" and self._icon_check is not None:
-                    icon = self._icon_check
-                    tooltip = "Completed"
-                elif status == "failed" and self._icon_stop is not None:
-                    icon = self._icon_stop
-                    tooltip = "Failed"  # Simplified tooltip to avoid blocking
-                elif status == "uploading" and self._icon_up is not None:
-                    icon = self._icon_up
-                    tooltip = "Uploading"
-                else:
-                    icon = self._icon_pending if self._icon_pending is not None else None
-                    tooltip = status.title() if isinstance(status, str) else ""
-                
-                # Schedule icon update on main thread
-                QTimer.singleShot(0, lambda: self._apply_icon_to_cell(row, col, icon, tooltip, status))
-            except Exception:
-                pass
+# Removed debug output - Status column working correctly
         
-        # Run icon loading in background
-        task = BackgroundTask(load_and_set_icon)
-        self._thread_pool.start(task, priority=-1)
+        # Use the same simple icon loading approach as Action column buttons
+        try:
+            assets_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets")
+            
+            def _make_status_icon(names: list[str], fallback_std = None) -> QIcon:
+                for name in names:
+                    p = os.path.join(assets_dir, name)
+                    if os.path.exists(p):
+                        return QIcon(p)
+                if fallback_std:
+                    return self.style().standardIcon(fallback_std)
+                return QIcon()
+            
+            # Map status to icon files and fallbacks
+            icon = QIcon()
+            tooltip = ""
+            
+            if status == "completed":
+                icon = _make_status_icon(["check16.png", "check.png"], QStyle.StandardPixmap.SP_DialogApplyButton)
+                tooltip = "Completed"
+            elif status == "failed":
+                icon = _make_status_icon(["error.png"], QStyle.StandardPixmap.SP_DialogCancelButton)
+                tooltip = "Failed"
+            elif status == "uploading":
+                icon = _make_status_icon(["start.png"], QStyle.StandardPixmap.SP_MediaPlay)
+                tooltip = "Uploading"
+            elif status == "paused":
+                icon = _make_status_icon(["pause.png"], QStyle.StandardPixmap.SP_MediaPause)
+                tooltip = "Paused"
+            elif status == "ready":
+                icon = _make_status_icon(["ready.png", "pending.png"], QStyle.StandardPixmap.SP_DialogOkButton)
+                tooltip = "Ready"
+            else:
+                # Default for queued, incomplete, scanning, etc.
+                icon = _make_status_icon(["pending.png"], QStyle.StandardPixmap.SP_ComputerIcon)
+                tooltip = status.title() if isinstance(status, str) else "Pending"
+            
+            # Apply the icon directly to the table cell
+            self._apply_icon_to_cell(row, 4, icon, tooltip, status)
+            
+        except Exception:
+            pass
         
     def _apply_icon_to_cell(self, row: int, col: int, icon, tooltip: str, status: str):
         """Apply icon to table cell - runs on main thread"""
@@ -6606,33 +6635,25 @@ class ImxUploadGUI(QMainWindow):
             if row < 0 or row >= self.gallery_table.rowCount():
                 return
                 
-            # Clear existing widget
+            # Clear existing widget (in case there was one)
             self.gallery_table.removeCellWidget(row, col)
             
-            if icon is not None:
-                label = QLabel()
-                label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-                label.setToolTip(tooltip)
-                
-                # For failed galleries, make the icon clickable
-                if status == "failed":
-                    label.setCursor(Qt.CursorShape.PointingHandCursor)
-                    label.mousePressEvent = lambda event, row=row: self._show_failed_gallery_details(row)
-                
-                # Use fixed size for better performance
-                size = 16
-                label.setPixmap(icon.scaled(size, size, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
-                self.gallery_table.setCellWidget(row, col, label)
+            # Create a simple table item with icon - much simpler than custom widgets
+            item = QTableWidgetItem()
+            item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+            item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            item.setToolTip(tooltip)
+            
+            if icon is not None and not icon.isNull():
+                item.setIcon(icon)
             else:
-                # Fallback to text item when icon not available
-                status_text = status.title() if isinstance(status, str) else "Unknown"
-                item = QTableWidgetItem(status_text)
-                item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
-                item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-                item.setToolTip(tooltip or status_text)
-                self.gallery_table.setItem(row, col, item)
+                # Fallback to text when no icon available
+                item.setText(status.title() if isinstance(status, str) else "")
+            
+            self.gallery_table.setItem(row, col, item)
+            
         except Exception:
-            pass  # Fail silently
+            pass
 
     def _show_failed_gallery_details(self, row: int):
         """Show detailed error information for a failed gallery."""
@@ -6678,117 +6699,74 @@ class ImxUploadGUI(QMainWindow):
         """Set the Renamed column cell to an icon (check/pending) if available; fallback to text.
         is_renamed=True -> check, False -> pending, None -> blank
         """
+        import traceback
+        stack = traceback.extract_stack()
+        caller_chain = " -> ".join([frame.name for frame in stack[-4:-1]])
+        print(f"DEBUG: _set_renamed_cell_icon: {caller_chain}: row={row}, is_renamed={is_renamed}")
         try:
-            self._load_status_icons_if_needed()
             col = 11
-            # Clear any existing widget/item first for consistency
-            try:
-                self.gallery_table.removeCellWidget(row, col)
-            except Exception:
-                pass
-            # Determine icon and tooltip
-            if is_renamed is True and self._icon_check is not None:
-                icon = self._icon_check
+            
+            # Use the same simple icon loading approach as Status column
+            assets_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets")
+            
+            def _make_rename_icon(names: list[str], fallback_std = None) -> QIcon:
+                for name in names:
+                    p = os.path.join(assets_dir, name)
+                    if os.path.exists(p):
+                        return QIcon(p)
+                if fallback_std:
+                    return self.style().standardIcon(fallback_std)
+                return QIcon()
+            
+            # Create a simple table item with icon
+            item = QTableWidgetItem()
+            item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+            item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            
+            # Determine icon and tooltip based on rename status
+            if is_renamed is True:
+                icon = _make_rename_icon(["check16.png", "check.png"], QStyle.StandardPixmap.SP_DialogApplyButton)
                 tooltip = "Renamed"
-            elif is_renamed is False and self._icon_pending is not None:
-                icon = self._icon_pending
+                if icon is not None and not icon.isNull():
+                    item.setIcon(icon)
+                    item.setText("")
+                else:
+                    item.setText("OK")
+            elif is_renamed is False:
+                icon = _make_rename_icon(["pending.png"], QStyle.StandardPixmap.SP_ComputerIcon)
                 tooltip = "Pending rename"
+                if icon is not None and not icon.isNull():
+                    item.setIcon(icon)
+                    item.setText("")
+                else:
+                    item.setText("...")
             else:
-                icon = None
+                # None/blank - no icon or text
+                item.setIcon(QIcon())
+                item.setText("")
                 tooltip = ""
-            if icon is not None:
-                label = QLabel()
-                label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-                if tooltip:
-                    label.setToolTip(tooltip)
-                # Scale icon to fit current row height of this row if available; fallback to default
-                try:
-                    row_h = self.gallery_table.rowHeight(row)
-                    if not row_h or row_h <= 0:
-                        row_h = self.gallery_table.verticalHeader().defaultSectionSize()
-                    size = max(12, min(20, row_h - 6))
-                except Exception:
-                    size = 16
-                label.setPixmap(icon.scaled(size, size, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
-                self.gallery_table.setCellWidget(row, col, label)
-            else:
-                # Fallback to text symbols
-                txt = "✔" if is_renamed is True else ("⏳" if is_renamed is False else "")
-                item = QTableWidgetItem(txt)
+            
+            item.setToolTip(tooltip)
+            self.gallery_table.setItem(row, col, item)
+            
+        except Exception as e:
+            # Set a basic item as fallback
+            try:
+                item = QTableWidgetItem("")
                 item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
                 item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-                try:
-                    item.setFont(QFont("Arial", 11))
-                except Exception:
-                    pass
-                if tooltip:
-                    item.setToolTip(tooltip)
                 self.gallery_table.setItem(row, col, item)
-                if getattr(self, '_icon_up', None) is None:
-                    try:
-                        pm = QPixmap(24, 24)
-                        pm.fill(Qt.GlobalColor.transparent)
-                        painter = QPainter(pm)
-                        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-                        painter.setPen(Qt.PenStyle.NoPen)
-                        painter.setBrush(QColor(41, 128, 185))
-                        # Draw an up arrow
-                        path = QPainterPath()
-                        path.moveTo(12, 2)
-                        path.lineTo(22, 14)
-                        path.lineTo(16, 14)
-                        path.lineTo(16, 22)
-                        path.lineTo(8, 22)
-                        path.lineTo(8, 14)
-                        path.lineTo(2, 14)
-                        path.closeSubpath()
-                        painter.drawPath(path)
-                        painter.end()
-                        self._icon_up = pm
-                    except Exception:
-                        self._icon_up = None
-        except Exception:
-            pass
-
-    def _load_icon_generic(self, name_pairs: list[tuple[str, str]]):
-        """Utility to load a pixmap by trying multiple relative candidates.
-        name_pairs: list of (name, assets/name)
-        """
-        try:
-            base_dir = os.path.dirname(os.path.abspath(__file__))
-            try:
-                import sys as _sys
-                app_dir = os.path.dirname(os.path.abspath(_sys.argv[0]))
             except Exception:
-                app_dir = None
-            search = []
-            for nm, asset in name_pairs:
-                search.extend([
-                    os.path.join(base_dir, nm),
-                    os.path.join(os.getcwd(), nm),
-                    os.path.join(base_dir, asset),
-                    os.path.join(app_dir, nm) if app_dir else None,
-                    os.path.join(app_dir, asset) if app_dir else None,
-                ])
-            for p in search:
-                if not p:
-                    continue
-                if os.path.exists(p):
-                    pm = QPixmap(p)
-                    if not pm.isNull():
-                        return pm
-        except Exception:
-            pass
-        return None
+                pass
 
     def showEvent(self, event):
         try:
             super().showEvent(event)
         except Exception:
             pass
-        # Ensure a post-show pass updates icon cells when the table is fully realized
+        # Post-show pass no longer needed - targeted updates handle icon refreshes
         try:
-            QTimer.singleShot(0, self.update_queue_display)
+            pass  # Removed deprecated update_queue_display call that overwrites correct rename status
         except Exception:
             pass
     
@@ -8032,13 +8010,14 @@ class ImxUploadGUI(QMainWindow):
     
     def add_folder_from_command_line(self, folder_path: str):
         """Add folder from command line (single instance)"""
-        self.add_folders([folder_path])
+        if folder_path and os.path.isdir(folder_path):
+            self.add_folders([folder_path])
         
-        # Show window if hidden
+        # Show window if hidden or bring to front
         if not self.isVisible():
             self.show()
-            self.raise_()
-            self.activateWindow()
+        self.raise_()
+        self.activateWindow()
     
     def _add_gallery_to_table(self, item: GalleryQueueItem):
         """Add a new gallery item to the table without rebuilding"""
@@ -8214,6 +8193,7 @@ class ImxUploadGUI(QMainWindow):
         # Status icon
         self._set_status_cell_icon(row, item.status)
         
+        
         # Added time
         added_text = ""
         if item.added_time:
@@ -8307,23 +8287,8 @@ class ImxUploadGUI(QMainWindow):
         tmpl_item.setFont(font)
         self.gallery_table.setItem(row, 10, tmpl_item)
         
-        # Renamed status
-        try:
-            is_renamed = None
-            if item.gallery_id:
-                try:
-                    if hasattr(self, '_get_unnamed_galleries'):
-                        _unnamed_map = self._get_unnamed_galleries()
-                    else:
-                        from imxup import get_unnamed_galleries
-                        _unnamed_map = get_unnamed_galleries()
-                    if item.gallery_id in _unnamed_map:
-                        is_renamed = False
-                except Exception:
-                    pass
-            self._set_renamed_cell_icon(row, is_renamed)
-        except Exception:
-            pass
+        # Renamed status: handled by _populate_table_row() and on_gallery_renamed() signal
+        # No need to duplicate the logic here
         
         # Action buttons - CREATE MISSING ACTION BUTTONS FOR NEW ITEMS
         try:
@@ -8557,6 +8522,7 @@ class ImxUploadGUI(QMainWindow):
                     # Update status column (column 4)
                     self._set_status_cell_icon(row, item.status)
                     
+                    
                     # Update action column (column 7) for any status change
                     action_widget = self.gallery_table.cellWidget(row, 7)
                     if isinstance(action_widget, ActionButtonWidget):
@@ -8616,15 +8582,6 @@ class ImxUploadGUI(QMainWindow):
         self.gallery_table.setRowCount(len(items))
         
         
-        # Load unnamed galleries from database to properly show rename status
-        try:
-            if hasattr(self, '_get_unnamed_galleries'):
-                _unnamed_map = self._get_unnamed_galleries()
-            else:
-                from imxup import get_unnamed_galleries
-                _unnamed_map = get_unnamed_galleries()
-        except Exception:
-            _unnamed_map = {}
         
         # Populate the table with current items
         for row, item in enumerate(items):
@@ -8670,6 +8627,7 @@ class ImxUploadGUI(QMainWindow):
             
             # Status: icon-only, no background/text
             self._set_status_cell_icon(row, item.status)
+            
             
             # Added time
             added_text = ""
@@ -8788,19 +8746,8 @@ class ImxUploadGUI(QMainWindow):
                 pass
             self.gallery_table.setItem(row, 10, tmpl_item)
 
-            # Renamed status: prefer icons (check/pending) if available; fallback to text
-            try:
-                is_renamed = None
-                if item.gallery_id:
-                    # If gallery_id is recorded as unnamed, then it's pending rename
-                    if item.gallery_id in _unnamed_map:
-                        is_renamed = False  # Show pending icon
-                    # DO NOT show checkmark for galleries that aren't in unnamed list
-                    # Checkmark should ONLY appear when a gallery is explicitly renamed via on_gallery_renamed signal
-                self._set_renamed_cell_icon(row, is_renamed)
-            except Exception:
-                # Fallback: clear cell
-                self._set_renamed_cell_icon(row, None)
+            # Renamed status: handled by _populate_table_row() and on_gallery_renamed() signal
+            # No need to duplicate the logic here
 
             # Action buttons - always create fresh widget to avoid sorting issues
             action_widget = ActionButtonWidget()
@@ -9068,6 +9015,7 @@ class ImxUploadGUI(QMainWindow):
                 # Update status cell (icon-only)
                 current_status = item.status
                 self._set_status_cell_icon(row, current_status)
+                
                 
                 # Update action buttons
                 action_widget = self.gallery_table.cellWidget(row, 7)
@@ -10189,18 +10137,25 @@ def check_single_instance(folder_path=None):
         client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         client_socket.connect(('localhost', COMMUNICATION_PORT))
         
-        if folder_path:
-            client_socket.send(folder_path.encode('utf-8'))
+        # Send folder path or empty string to bring window to front
+        message = folder_path if folder_path else ""
+        client_socket.send(message.encode('utf-8'))
         
         client_socket.close()
         return True  # Another instance is running
     except ConnectionRefusedError:
         return False  # No other instance running
 
+
 def main():
     """Main function"""
     app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(True)  # Exit when window closes
+    
+    # Show splash screen immediately
+    splash = SplashScreen()
+    splash.show()
+    splash.update_status("Initializing...")
     
     # Handle command line arguments
     folders_to_add = []
@@ -10211,16 +10166,26 @@ def main():
                 folders_to_add.append(arg)
         # If another instance is running, forward the first folder (server is single-path)
         if folders_to_add and check_single_instance(folders_to_add[0]):
-            
+            splash.finish_and_hide()
+            return
+    else:
+        # Check for existing instance even when no folders provided
+        if check_single_instance():
+            print("GUI is already running, bringing existing window to front")
+            splash.finish_and_hide()
             return
     
-    # Create main window
-    window = ImxUploadGUI()
+    splash.set_status("PyQt6")
+    
+    # Create main window with splash updates
+    window = ImxUploadGUI(splash)
     
     # Add folder from command line if provided
     if folders_to_add:
         window.add_folders(folders_to_add)
     
+    # Hide splash and show main window
+    splash.finish_and_hide()
     window.show()
     
     try:
