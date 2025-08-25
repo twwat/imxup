@@ -952,7 +952,7 @@ class ComprehensiveSettingsDialog(QDialog):
         # Create and integrate the log viewer dialog
         try:
             # Get initial log text
-            from imxup_logging import get_logger
+            from src.utils.logging import get_logger
             initial_text = get_logger().read_current_log(tail_bytes=2 * 1024 * 1024) or ""
         except Exception:
             initial_text = ""
@@ -2954,7 +2954,7 @@ class LogViewerDialog(QDialog):
 
         # Prepare logger and settings (used by both tabs)
         try:
-            from imxup_logging import get_logger as _get_logger
+            from src.utils.logging import get_logger as _get_logger
             self._logger = _get_logger()
             settings = self._logger.get_settings()
         except Exception:

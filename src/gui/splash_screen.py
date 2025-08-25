@@ -77,18 +77,18 @@ class SplashScreen(QSplashScreen):
         painter.drawRect(0, 0, self.width() - 1, self.height() - 1)
         
         # Draw title at top
-        painter.setPen(QColor(82, 92, 235))
-        title_font = QFont("Arial", 24, QFont.Weight.Bold)
+        painter.setPen(QColor(203, 73, 25))
+        title_font = QFont("Arial", 26, QFont.Weight.Bold)
         painter.setFont(title_font)
-        title_text = "IMXupper"
+        title_text = "IMXup"
         title_rect = painter.fontMetrics().boundingRect(title_text)
         title_x = (self.width() - title_rect.width()) // 2
         painter.drawText(title_x, 40, title_text)
         
         # Draw version
-        version_font = QFont("Courier", 12, QFont.Weight.Bold)
+        version_font = QFont("Courier", 14, QFont.Weight.Bold)
         painter.setFont(version_font)
-        painter.setPen(QColor(82, 92, 235))
+        painter.setPen(QColor(203, 73, 25))
         version_rect = painter.fontMetrics().boundingRect(self.version)
         version_x = (self.width() - version_rect.width()) // 2
         painter.drawText(version_x, 65, self.version)
@@ -110,15 +110,14 @@ class SplashScreen(QSplashScreen):
             "",
             "Licensed under the Apache License, Version 2.0",
             "",
-            "Software distributed under the license is on an \"as is\"",
-            "basis without warranties or conditions of any kind.",
+            "Software is distributed on an \"as is\" basis",
+            "without warranties or conditions of any kind.",
             "",
-            "Not affiliated with, or endorsed by IMX.to in any way.",
-            "",
-            "The \"IMX.to\" name and logo are property of IMX.to.",
-            "Use of this software to interact with their service",
-            "is subject to their terms and privacy policy.",
-            ""           
+            "'IMX.to' name and logo are property of IMX.to.",
+            "Use of the software to interact with their service",
+            "is subject to their terms & privacy policy.",
+            ""
+            "We are not affiliated with IMX.to in any way."
         ]
         
         y_pos = 115
@@ -141,10 +140,10 @@ class SplashScreen(QSplashScreen):
         # Draw progress dots in fixed position (left-aligned within centered area)
         dots_font = QFont("Courier", 18, QFont.Weight.Bold)
         painter.setFont(dots_font)
-        painter.setPen(QColor(82, 92, 235))
+        painter.setPen(QColor(203, 73, 25))
         
         # Create a fixed-width area for dots (centered, but dots are left-aligned within it)
-        dots_area_width = 120
+        dots_area_width = 140
         dots_area_x = (self.width() - dots_area_width) // 2
         painter.drawText(dots_area_x, self.height() - 40, self.progress_dots)
         

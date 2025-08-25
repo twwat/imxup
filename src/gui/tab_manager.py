@@ -24,7 +24,7 @@ from typing import Dict, List, Optional, Tuple, Any, Set
 from dataclasses import dataclass
 from PyQt6.QtCore import QObject, QSettings, pyqtSignal
 
-from imxup_storage import QueueStore
+from src.storage.database import QueueStore
 
 
 @dataclass

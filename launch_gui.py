@@ -10,8 +10,8 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 try:
-    import imxup_gui
-    imxup_gui.main()
+    from src.gui import main_window
+    main_window.main()
 except ImportError as e:
     print("Error: PyQt6 is required for GUI mode.")
     print("Install with: pip install PyQt6")

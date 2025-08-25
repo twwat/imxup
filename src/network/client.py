@@ -14,8 +14,8 @@ from functools import cmp_to_key
 from PyQt6.QtCore import QThread, pyqtSignal
 
 from imxup import ImxToUploader, timestamp, sanitize_gallery_name
-from imxup_core import UploadEngine
-from imxup_constants import (
+from src.core.engine import UploadEngine
+from src.core.constants import (
     COMMUNICATION_PORT,
     QUEUE_STATE_UPLOADING
 )

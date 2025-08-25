@@ -446,7 +446,7 @@ def _save_credentials(username, password):
 def save_unnamed_gallery(gallery_id, intended_name):
     """Save unnamed gallery for later renaming (now uses database for speed)"""
     try:
-        from imxup_storage import QueueStore
+        from src.storage.database import QueueStore
         store = QueueStore()
         store.add_unnamed_gallery(gallery_id, intended_name)
         print(f"Saved unnamed gallery {gallery_id} for later renaming to '{intended_name}'")
@@ -550,7 +550,7 @@ def check_if_gallery_exists(folder_name):
 def get_unnamed_galleries():
     """Get list of unnamed galleries from database (much faster than config file)"""
     try:
-        from imxup_storage import QueueStore
+        from src.storage.database import QueueStore
         store = QueueStore()
         return store.get_unnamed_galleries()
     except Exception:
@@ -638,7 +638,7 @@ def rename_all_unnamed_with_session(uploader: 'ImxToUploader') -> int:
 def remove_unnamed_gallery(gallery_id):
     """Remove gallery from unnamed list after successful renaming (now uses database)"""
     try:
-        from imxup_storage import QueueStore
+        from src.storage.database import QueueStore
         store = QueueStore()
         removed = store.remove_unnamed_gallery(gallery_id)
         if removed:
@@ -660,7 +660,7 @@ def remove_unnamed_gallery(gallery_id):
                 
                 print(f"{timestamp()} Removed {gallery_id} from unnamed galleries list")
 
-from imxup_cookies import get_firefox_cookies, load_cookies_from_file
+from src.network.cookies import get_firefox_cookies, load_cookies_from_file
 
 def get_template_path():
     """Get the template directory path (~/.imxup/templates)."""
@@ -1936,7 +1936,7 @@ def main():
     if args.gui:
         try:
             # Try to import GUI module
-            import imxup_gui
+            from src.gui import main_window as imxup_gui
             
             # Check if folder paths were provided for GUI
             if args.folder_paths:
@@ -2071,7 +2071,7 @@ def main():
             print(f"{timestamp()} Login failed - falling back to API-only uploads")
 
         # Use shared UploadEngine for consistent behavior
-        from imxup_core import UploadEngine
+        from src.core.engine import UploadEngine
         engine = UploadEngine(uploader)
 
         # Process multiple galleries

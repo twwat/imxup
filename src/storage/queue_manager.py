@@ -14,9 +14,9 @@ from contextlib import contextmanager
 
 from PyQt6.QtCore import QObject, pyqtSignal, QMutex, QMutexLocker, QSettings, QTimer
 
-from imxup_storage import QueueStore
+from src.storage.database import QueueStore
 from imxup import sanitize_gallery_name, load_user_defaults
-from imxup_constants import (
+from src.core.constants import (
     QUEUE_STATE_READY, QUEUE_STATE_QUEUED, QUEUE_STATE_UPLOADING,
     QUEUE_STATE_COMPLETED, QUEUE_STATE_FAILED, QUEUE_STATE_PAUSED,
     QUEUE_STATE_INCOMPLETE, IMAGE_EXTENSIONS

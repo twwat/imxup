@@ -13,8 +13,8 @@ from PyQt6.QtCore import QThread, pyqtSignal, QMutex, QMutexLocker
 
 from imxup import ImxToUploader, save_gallery_artifacts, generate_bbcode_from_template
 from imxup import rename_all_unnamed_with_session, get_central_storage_path
-from imxup_core import UploadEngine
-from imxup_constants import (
+from src.core.engine import UploadEngine
+from src.core.constants import (
     QUEUE_STATE_UPLOADING, QUEUE_STATE_COMPLETED, QUEUE_STATE_FAILED,
     QUEUE_STATE_PAUSED, QUEUE_STATE_READY
 )
@@ -55,7 +55,7 @@ class UploadWorker(QThread):
     def run(self):
         """Main worker thread loop"""
         # Create uploader instance in the thread
-        from imxup_network import GUIImxToUploader
+        from src.network.client import GUIImxToUploader
         self.uploader = GUIImxToUploader(self)
         
         # Initialize session
