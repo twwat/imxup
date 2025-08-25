@@ -1717,55 +1717,72 @@ class TabbedGalleryWidget(QWidget):
     
     def _update_tab_tooltips(self):
         """Update tooltips and tab text with gallery counts for all tabs"""
-        print(f"DEBUG: _update_tab_tooltips called", flush=True)
-        for i in range(self.tab_bar.count()):
-            current_text = self.tab_bar.tabText(i)
-            # Extract base tab name (remove count if present)
-            base_name = current_text.split(' (')[0] if ' (' in current_text else current_text
+        # Removed traceback debug output
+        
+        # Prevent recursive calls completely - return immediately if called again
+        if hasattr(self, '_updating_tooltips') and self._updating_tooltips:
+            print(f"DEBUG: _update_tab_tooltips already running, skipping recursion", flush=True)
+            return
+        
+        # Block ALL calls during initialization to prevent infinite loops
+        if hasattr(self, '_initializing') and self._initializing:
+            print(f"DEBUG: Still initializing, skipping _update_tab_tooltips", flush=True)
+            return
+        
+        self._updating_tooltips = True
+        try:
+            for i in range(self.tab_bar.count()):
+                current_text = self.tab_bar.tabText(i)
+                # Extract base tab name (remove count if present)
+                base_name = current_text.split(' (')[0] if ' (' in current_text else current_text
             
-            if base_name == "All Tabs":
-                total_galleries = self.gallery_table.rowCount() if hasattr(self, 'gallery_table') else 0
-                # Update tab text with count
-                self.tab_bar.setTabText(i, f"All Tabs ({total_galleries})")
-                self.tab_bar.setTabToolTip(i, 
-                    f"All Tabs shows all galleries ({total_galleries} total)\n"
-                    "This tab cannot be modified"
-                )
-            else:
-                gallery_count = 0
-                active_count = 0
-                if self.tab_manager and base_name != "All Tabs":
-                    galleries = self.tab_manager.load_tab_galleries(base_name)
-                    gallery_count = len(galleries)
-                    print(f"DEBUG: Tab '{base_name}' load_tab_galleries returned {gallery_count} galleries", flush=True)
-                    # Count active uploads (simplified status check)
-                    active_count = sum(1 for g in galleries if g.get('status') in ['uploading', 'pending'])
-                
-                # Update tab text with count
-                old_text = self.tab_bar.tabText(i)
-                new_text = f"{base_name} ({gallery_count})"
-                self.tab_bar.setTabText(i, new_text)
-                print(f"DEBUG: Updated tab {i} text: '{old_text}' -> '{new_text}'", flush=True)
-                
-                status_text = ""
-                if active_count > 0:
-                    status_text = f" ({active_count} active)"
-                
-                if base_name == "Main":
+                if base_name == "All Tabs":
+                    total_galleries = self.gallery_table.rowCount() if hasattr(self, 'gallery_table') else 0
+                    # Update tab text with count
+                    self.tab_bar.setTabText(i, f"All Tabs ({total_galleries})")
                     self.tab_bar.setTabToolTip(i, 
-                        f"Main tab ({gallery_count} galleries{status_text})\n"
-                        "Right-click for options"
+                        f"All Tabs shows all galleries ({total_galleries} total)\n"
+                        "This tab cannot be modified"
                     )
                 else:
-                    self.tab_bar.setTabToolTip(i, 
-                        f"{base_name} ({gallery_count} galleries{status_text})\n"
-                        "Double-click to rename (F2)\n"
-                        "Right-click for options\n"
-                        "Drag to reorder"
-                    )
+                    gallery_count = 0
+                    active_count = 0
+                    if self.tab_manager and base_name != "All Tabs":
+                        galleries = self.tab_manager.load_tab_galleries(base_name)
+                        gallery_count = len(galleries)
+                        print(f"DEBUG: Tab '{base_name}' load_tab_galleries returned {gallery_count} galleries", flush=True)
+                        # Count active uploads (simplified status check)
+                        active_count = sum(1 for g in galleries if g.get('status') in ['uploading', 'pending'])
+                    
+                    # Update tab text with count
+                    old_text = self.tab_bar.tabText(i)
+                    new_text = f"{base_name} ({gallery_count})"
+                    if old_text != new_text:  # Only update if changed
+                        print(f"DEBUG: About to update tab {i} text: '{old_text}' -> '{new_text}'", flush=True)
+                        self.tab_bar.setTabText(i, new_text)
+                        print(f"DEBUG: Updated tab {i} text", flush=True)
                 
-                # Update tab visual state based on content
-                self._update_tab_visual_state(i, base_name, gallery_count, active_count)
+                    status_text = ""
+                    if active_count > 0:
+                        status_text = f" ({active_count} active)"
+                
+                    if base_name == "Main":
+                        self.tab_bar.setTabToolTip(i, 
+                            f"Main tab ({gallery_count} galleries{status_text})\n"
+                            "Right-click for options"
+                        )
+                    else:
+                        self.tab_bar.setTabToolTip(i, 
+                            f"{base_name} ({gallery_count} galleries{status_text})\n"
+                            "Double-click to rename (F2)\n"
+                            "Right-click for options\n"
+                            "Drag to reorder"
+                        )
+                
+                    # Update tab visual state based on content
+                    self._update_tab_visual_state(i, base_name, gallery_count, active_count)
+        finally:
+            self._updating_tooltips = False
     
     def _update_tab_visual_state(self, tab_index, tab_name, gallery_count, active_count):
         """Update visual state of a tab based on its content"""
@@ -4393,6 +4410,7 @@ class ImxUploadGUI(QMainWindow):
     
     def __init__(self, splash=None):
         print(f"DEBUG: ImxUploadGUI.__init__ starting")
+        self._initializing = True  # Block recursive calls during init
         super().__init__()
         print(f"DEBUG: QMainWindow.__init__ completed")
         self.splash = splash
@@ -4421,17 +4439,19 @@ class ImxUploadGUI(QMainWindow):
         self.tab_manager = TabManager(self.queue_manager.store)
         print(f"DEBUG: TabManager created")
         
-        # Initialize auto-archive engine
-        self.auto_archive_engine = AutoArchiveEngine(self.tab_manager)
-        self.queue_manager.status_changed.connect(self.auto_archive_engine.on_gallery_status_changed)
-        self.auto_archive_engine.galleries_archived.connect(self.on_galleries_auto_archived)
-        self.auto_archive_engine.error_occurred.connect(self.on_auto_archive_error)
-        self.auto_archive_engine.start()
+        # Auto-archive engine disabled for now
+        self.auto_archive_engine = None
+        print(f"DEBUG: AutoArchive disabled")
+        
+        # Connect queue status changes to update table display
+        self.queue_manager.status_changed.connect(self.on_queue_item_status_changed)
         
         self.worker = None
         
         # Initialize completion worker for background processing
+        print(f"DEBUG: Creating CompletionWorker")
         self.completion_worker = CompletionWorker(self)
+        print(f"DEBUG: CompletionWorker created")
         self.completion_worker.completion_processed.connect(self.on_completion_processed)
         self.completion_worker.log_message.connect(self.add_log_message)
         self.completion_worker.start()
@@ -4583,6 +4603,10 @@ class ImxUploadGUI(QMainWindow):
         
         # Ensure table has focus for keyboard shortcuts
         self.gallery_table.setFocus()
+        
+        # Clear initialization flag to allow normal tooltip updates
+        self._initializing = False
+        print("DEBUG: ImxUploadGUI.__init__ COMPLETED")
 
     def refresh_filter(self):
         """Refresh current tab filter on the embedded tabbed gallery widget."""
@@ -6141,6 +6165,23 @@ class ImxUploadGUI(QMainWindow):
         """Receive current aggregate bandwidth from worker (KB/s)."""
         self._current_transfer_kbps = kbps
 
+    def on_queue_item_status_changed(self, path: str, old_status: str, new_status: str):
+        """Handle individual queue item status changes"""
+        print(f"DEBUG: GUI received status change signal: {path} from {old_status} to {new_status}")
+        
+        # Debug the item data before updating table
+        item = self.queue_manager.get_item(path)
+        if item:
+            print(f"DEBUG: Item data - total_images: {getattr(item, 'total_images', 'NOT SET')}")
+            print(f"DEBUG: Item data - progress: {getattr(item, 'progress', 'NOT SET')}")
+            print(f"DEBUG: Item data - status: {getattr(item, 'status', 'NOT SET')}")
+            print(f"DEBUG: Item data - added_time: {getattr(item, 'added_time', 'NOT SET')}")
+        
+        # Update table display for this specific item
+        print(f"DEBUG: About to call _update_specific_gallery_display")
+        self._update_specific_gallery_display(path)
+        print(f"DEBUG: _update_specific_gallery_display completed")
+    
     def on_queue_stats(self, stats: dict):
         """Render aggregate queue stats beneath the overall progress bar.
         Example: "1 uploading (100 images / 111 MB) • 12 queued (912 images / 1.9 GB) • 4 ready (192 images / 212 MB) • 63 completed (2245 images / 1.5 GB)"
@@ -6193,15 +6234,18 @@ class ImxUploadGUI(QMainWindow):
     
     def add_folders(self, folder_paths: List[str]):
         """Add folders to the upload queue efficiently"""
+        print(f"DEBUG: add_folders called with {len(folder_paths)} paths")
         if len(folder_paths) == 1:
             # Single folder - use the old method for backward compatibility
             self._add_single_folder(folder_paths[0])
         else:
-            # Multiple folders - use the new efficient method
-            self._add_multiple_folders(folder_paths)
+            # Multiple folders - add each one individually for now
+            for folder_path in folder_paths:
+                self._add_single_folder(folder_path)
     
     def _add_single_folder(self, path: str):
         """Add a single folder using the old method."""
+        print(f"DEBUG: _add_single_folder called with path={path}")
         template_name = self.template_combo.currentText()
         result = self.queue_manager.add_item(path, template_name=template_name)
         
@@ -6458,11 +6502,15 @@ class ImxUploadGUI(QMainWindow):
         
         # Check if row is currently visible for performance optimization
         row = self.path_to_row.get(path)
+        print(f"DEBUG: _update_specific_gallery_display - row={row}, path_to_row has path: {path in self.path_to_row}")
         if row is not None and 0 <= row < self.gallery_table.rowCount():
+            print(f"DEBUG: Row {row} is valid, checking update queue")
             # Use table update queue for visible rows (includes hidden row filtering)
             if hasattr(self, '_table_update_queue'):
+                print(f"DEBUG: Using _table_update_queue to update row {row}")
                 self._table_update_queue.queue_update(path, item, 'full')
             else:
+                print(f"DEBUG: No _table_update_queue, using direct update for row {row}")
                 # Fallback to direct update
                 QTimer.singleShot(0, lambda: self._populate_table_row(row, item))
         else:
@@ -6509,6 +6557,7 @@ class ImxUploadGUI(QMainWindow):
         # Upload progress - start blank until images are counted
         total_images = getattr(item, 'total_images', 0) or 0
         uploaded_images = getattr(item, 'uploaded_images', 0) or 0
+        print(f"DEBUG: _populate_table_row for {item.path}: total_images={total_images}, uploaded_images={uploaded_images}")
         if total_images > 0:
             uploaded_text = f"{uploaded_images}/{total_images}"
             uploaded_item = QTableWidgetItem(uploaded_text)
@@ -6519,6 +6568,8 @@ class ImxUploadGUI(QMainWindow):
             font.setPointSize(8)
             uploaded_item.setFont(font)
             self.gallery_table.setItem(row, 2, uploaded_item)
+        else:
+            print(f"DEBUG: No uploaded column set because total_images={total_images} <= 0")
         
         # Progress bar
         progress_widget = self.gallery_table.cellWidget(row, 3)
@@ -6540,6 +6591,7 @@ class ImxUploadGUI(QMainWindow):
             except (ValueError, OSError, OverflowError):
                 added_text = ""
         added_item = QTableWidgetItem(added_text)
+        print(f"DEBUG: Setting added column for {item.path}: text='{added_text}', font will be 8pt")
         added_item.setFlags(added_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
         added_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
         font = added_item.font()
@@ -8034,8 +8086,9 @@ class ImxUploadGUI(QMainWindow):
                     self._remove_gallery_from_table(path)
                 
                 self.add_log_message(f"{timestamp()} [queue] Cleared {removed_count} completed uploads")
-                # Persist in the background
-                self.queue_manager.save_persistent_queue()
+                # Defer database save to prevent GUI freeze
+                from PyQt6.QtCore import QTimer
+                QTimer.singleShot(100, self.queue_manager.save_persistent_queue)
             else:
                 self.add_log_message(f"{timestamp()} [queue] No completed uploads to clear")
         finally:
@@ -8168,8 +8221,9 @@ class ImxUploadGUI(QMainWindow):
             # Force GUI update
             QApplication.processEvents()
             
-            # Save persistent storage (for remaining items)
-            self.queue_manager.save_persistent_queue()
+            # Defer database save to prevent GUI freeze
+            from PyQt6.QtCore import QTimer
+            QTimer.singleShot(100, self.queue_manager.save_persistent_queue)
             self.add_log_message(f"{timestamp()} ✓ Deleted {removed_count} items from queue")
         else:
             self.add_log_message(f"{timestamp()} ⚠ No items were deleted (some may be currently uploading)")
@@ -8438,8 +8492,9 @@ class ImxUploadGUI(QMainWindow):
         """Handle window close"""
         self.save_settings()
         
-        # Save queue state
-        self.queue_manager.save_persistent_queue()
+        # Save queue state (deferred to prevent blocking shutdown)
+        from PyQt6.QtCore import QTimer
+        QTimer.singleShot(10, self.queue_manager.save_persistent_queue)
         
         # DEBUG: Check item tab_name values before shutdown
         if self.queue_manager:

@@ -281,13 +281,13 @@ class TableUpdateQueue:
             main_gui = None
             parent = table.parent()
             while parent:
-                if hasattr(parent, '_populate_table_row_detailed'):
+                if hasattr(parent, '_populate_table_row'):
                     main_gui = parent
                     break
                 parent = parent.parent()
             
             if main_gui:
-                main_gui._populate_table_row_detailed(task.row, task.item)
+                main_gui._populate_table_row(task.row, task.item)
                 
         except Exception:
             pass
