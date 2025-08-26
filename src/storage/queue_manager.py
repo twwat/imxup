@@ -18,8 +18,9 @@ from src.storage.database import QueueStore
 from imxup import sanitize_gallery_name, load_user_defaults
 from src.core.constants import (
     QUEUE_STATE_READY, QUEUE_STATE_QUEUED, QUEUE_STATE_UPLOADING,
-    QUEUE_STATE_COMPLETED, QUEUE_STATE_FAILED, QUEUE_STATE_PAUSED,
-    QUEUE_STATE_INCOMPLETE, IMAGE_EXTENSIONS
+    QUEUE_STATE_COMPLETED, QUEUE_STATE_FAILED, QUEUE_STATE_SCAN_FAILED,
+    QUEUE_STATE_UPLOAD_FAILED, QUEUE_STATE_PAUSED, QUEUE_STATE_INCOMPLETE,
+    IMAGE_EXTENSIONS
 )
 
 
@@ -166,7 +167,7 @@ class QueueManager(QObject):
             # Find images
             files = self._get_image_files(path)
             if not files:
-                self._mark_item_failed(path, "No images found")
+                self.mark_scan_failed(path, "No images found")
                 return
             
             # Check for existing gallery
@@ -175,14 +176,8 @@ class QueueManager(QObject):
                     return
                 item = self.items[path]
                 
-                # Check if gallery already exists
-                from imxup import check_if_gallery_exists
-                existing = check_if_gallery_exists(item.name)
-                if existing:
-                    item.status = QUEUE_STATE_FAILED
-                    item.error_message = f"Gallery '{item.name}' already exists"
-                    item.scan_complete = True
-                    return
+                # Duplicate checking now handled at GUI level with user dialogs
+                # No longer silently failing duplicates here
                 
                 item.total_images = len(files)
                 print(f"DEBUG: Set total_images={len(files)} for {path}")
@@ -229,7 +224,7 @@ class QueueManager(QObject):
             self._inc_version()
             
         except Exception as e:
-            self._mark_item_failed(path, f"Scan error: {e}")
+            self.mark_scan_failed(path, f"Scan error: {e}")
     
     def _get_image_files(self, path: str) -> List[str]:
         """Get list of image files in directory"""
@@ -330,7 +325,7 @@ class QueueManager(QObject):
         return dims
     
     def _mark_item_failed(self, path: str, error: str, failed_files: list = None):
-        """Mark an item as failed"""
+        """Mark an item as failed (generic)"""
         with QMutexLocker(self.mutex):
             if path in self.items:
                 item = self.items[path]
@@ -342,6 +337,242 @@ class QueueManager(QObject):
         
         QTimer.singleShot(100, lambda: self.save_persistent_queue([path]))
         self._inc_version()
+    
+    def mark_scan_failed(self, path: str, error: str):
+        """Mark an item as scan failed (folder issues, no images, permissions)"""
+        with QMutexLocker(self.mutex):
+            if path in self.items:
+                item = self.items[path]
+                item.status = QUEUE_STATE_SCAN_FAILED
+                item.error_message = error
+                item.scan_complete = True
+                
+                # Log scan failure
+                from imxup import timestamp
+                print(f"{timestamp()} [SCAN_FAILED] {item.name or os.path.basename(path)}: {error}")
+        
+        QTimer.singleShot(100, lambda: self.save_persistent_queue([path]))
+        self._inc_version()
+    
+    def mark_upload_failed(self, path: str, error: str, failed_files: list = None):
+        """Mark an item as upload failed (network issues, API problems, server errors)"""
+        with QMutexLocker(self.mutex):
+            if path in self.items:
+                item = self.items[path]
+                item.status = QUEUE_STATE_UPLOAD_FAILED
+                item.error_message = error
+                item.scan_complete = True
+                if failed_files:
+                    item.failed_files = failed_files
+                
+                # Log upload failure with details
+                from imxup import timestamp
+                log_msg = f"{timestamp()} [UPLOAD_FAILED] {item.name or os.path.basename(path)}: {error}"
+                if failed_files:
+                    log_msg += f" ({len(failed_files)} files failed)"
+                print(log_msg)
+        
+        QTimer.singleShot(100, lambda: self.save_persistent_queue([path]))
+        self._inc_version()
+    
+    def retry_failed_upload(self, path: str):
+        """Retry a failed upload, preserving successful uploads for partial failures"""
+        with QMutexLocker(self.mutex):
+            if path in self.items:
+                item = self.items[path]
+                if item.status in [QUEUE_STATE_UPLOAD_FAILED, QUEUE_STATE_FAILED]:
+                    old_status = item.status
+                    
+                    # Check if this was a partial failure with some successful uploads
+                    has_successful_uploads = (
+                        hasattr(item, 'gallery_id') and item.gallery_id and
+                        hasattr(item, 'uploaded_images') and item.uploaded_images > 0
+                    )
+                    
+                    if has_successful_uploads:
+                        # Partial failure - mark as incomplete to preserve successful uploads
+                        item.status = QUEUE_STATE_INCOMPLETE
+                        # Keep gallery_id and gallery_url
+                        # Keep uploaded_images count
+                        # Only clear error message and failed_files for retry
+                        item.error_message = ""
+                        failed_count = len(item.failed_files) if hasattr(item, 'failed_files') and item.failed_files else 0
+                        remaining_images = (item.total_images or 0) - (item.uploaded_images or 0)
+                        
+                        from imxup import timestamp
+                        print(f"{timestamp()} [RETRY_PARTIAL] {item.name or os.path.basename(path)}: "
+                              f"Retrying {remaining_images} images ({item.uploaded_images} already uploaded)")
+                        
+                        # Clear failed files list so they can be retried
+                        item.failed_files = []
+                    else:
+                        # Complete failure - reset everything
+                        item.status = QUEUE_STATE_READY
+                        item.error_message = ""
+                        item.failed_files = []
+                        # Reset upload progress
+                        item.uploaded_images = 0
+                        item.progress = 0
+                        
+                        from imxup import timestamp
+                        print(f"{timestamp()} [RETRY_FULL] {item.name or os.path.basename(path)}: Full retry")
+                    
+                    # Emit status change signal
+                    if hasattr(self, 'status_changed'):
+                        QTimer.singleShot(0, lambda: self.status_changed.emit(path, old_status, item.status))
+        
+        QTimer.singleShot(100, lambda: self.save_persistent_queue([path]))
+        self._inc_version()
+    
+    def rescan_gallery_additive(self, path: str):
+        """Smart rescan - only detect new images, preserve existing uploads"""
+        with QMutexLocker(self.mutex):
+            if path in self.items:
+                item = self.items[path]
+                old_status = item.status
+                
+                try:
+                    # Get current images in folder
+                    current_files = set(self._get_image_files(path))
+                    current_count = len(current_files)
+                    previous_count = item.total_images or 0
+                    
+                    if current_count > previous_count:
+                        # New images detected
+                        new_images = current_count - previous_count
+                        item.total_images = current_count
+                        
+                        # Update status appropriately
+                        if item.status == QUEUE_STATE_COMPLETED:
+                            item.status = QUEUE_STATE_INCOMPLETE
+                        elif item.status in [QUEUE_STATE_SCAN_FAILED, QUEUE_STATE_UPLOAD_FAILED, QUEUE_STATE_FAILED]:
+                            item.status = QUEUE_STATE_INCOMPLETE if (item.uploaded_images or 0) > 0 else QUEUE_STATE_READY
+                        
+                        # Update progress
+                        if item.total_images > 0:
+                            item.progress = int((item.uploaded_images or 0) / item.total_images * 100)
+                        
+                        item.scan_complete = True
+                        item.error_message = ""
+                        
+                        from imxup import timestamp
+                        uploaded = item.uploaded_images or 0
+                        print(f"{timestamp()} [RESCAN_ADDITIVE] {item.name or os.path.basename(path)}: "
+                              f"Found {new_images} new images ({uploaded} uploaded, {current_count - uploaded} remaining)")
+                        
+                    elif current_count < previous_count:
+                        # Images were removed
+                        removed = previous_count - current_count
+                        item.total_images = current_count
+                        
+                        # Adjust uploaded count if necessary
+                        if (item.uploaded_images or 0) > current_count:
+                            item.uploaded_images = current_count
+                        
+                        # Recalculate progress
+                        if item.total_images > 0:
+                            item.progress = int((item.uploaded_images or 0) / item.total_images * 100)
+                        
+                        from imxup import timestamp
+                        print(f"{timestamp()} [RESCAN_REDUCED] {item.name or os.path.basename(path)}: "
+                              f"{removed} images removed, {current_count} total")
+                    else:
+                        # Same count - just clear error if any
+                        if item.status in [QUEUE_STATE_SCAN_FAILED, QUEUE_STATE_FAILED]:
+                            item.status = QUEUE_STATE_INCOMPLETE if (item.uploaded_images or 0) > 0 else QUEUE_STATE_READY
+                        item.error_message = ""
+                        
+                        from imxup import timestamp
+                        print(f"{timestamp()} [RESCAN_REFRESH] {item.name or os.path.basename(path)}: "
+                              f"No changes detected, cleared errors")
+                    
+                    # Emit status change if changed
+                    if hasattr(self, 'status_changed') and item.status != old_status:
+                        QTimer.singleShot(0, lambda: self.status_changed.emit(path, old_status, item.status))
+                    
+                except Exception as e:
+                    self.mark_scan_failed(path, f"Additive rescan error: {e}")
+        
+        QTimer.singleShot(50, lambda: self.save_persistent_queue([path]))
+        self._inc_version()
+    
+    def reset_gallery_complete(self, path: str):
+        """Complete gallery reset - clear everything and rescan from scratch"""
+        with QMutexLocker(self.mutex):
+            if path in self.items:
+                item = self.items[path]
+                old_status = item.status
+                
+                # Nuclear reset - clear everything
+                item.status = "scanning"
+                item.gallery_id = ""
+                item.gallery_url = ""
+                item.uploaded_images = 0
+                item.total_images = 0
+                item.progress = 0
+                item.error_message = ""
+                item.failed_files = []
+                item.scan_complete = False
+                item.start_time = None
+                item.end_time = None
+                
+                from imxup import timestamp
+                print(f"{timestamp()} [RESET_COMPLETE] {item.name or os.path.basename(path)}: "
+                      f"Complete reset, starting fresh scan")
+                
+                # Emit status change signal
+                if hasattr(self, 'status_changed'):
+                    QTimer.singleShot(0, lambda: self.status_changed.emit(path, old_status, "scanning"))
+                
+                # Trigger full rescan
+                QTimer.singleShot(100, lambda: self._initiate_scan(path))
+        
+        self._inc_version()
+    
+    def rescan_failed_folder(self, path: str):
+        """Legacy method - redirect to additive rescan for scan failures"""
+        # For backwards compatibility, redirect scan failures to additive rescan
+        with QMutexLocker(self.mutex):
+            if path in self.items:
+                item = self.items[path]
+                if item.status in [QUEUE_STATE_SCAN_FAILED, QUEUE_STATE_FAILED]:
+                    # For pure scan failures with no uploads, do complete reset
+                    if not (hasattr(item, 'uploaded_images') and item.uploaded_images):
+                        self.reset_gallery_complete(path)
+                        return
+        
+        # Otherwise do additive rescan
+        self.rescan_gallery_additive(path)
+    
+    def _initiate_scan(self, path: str):
+        """Initiate background scan for a path using existing scan infrastructure"""
+        # Use existing scan queue system if available
+        if hasattr(self, 'request_folder_scan') and callable(self.request_folder_scan):
+            self.request_folder_scan(path)
+        else:
+            # Fallback: add to scan queue directly
+            QTimer.singleShot(0, lambda: self._add_to_scan_queue(path))
+    
+    def _add_to_scan_queue(self, path: str):
+        """Add path to existing scan queue without duplicating logic"""
+        try:
+            # Use the existing scanning infrastructure
+            if hasattr(self, 'scan_queue') and hasattr(self, 'scan_queue'):
+                self.scan_queue.put(path)
+            else:
+                # If no scan queue system, just mark as ready and let existing validation catch issues
+                with QMutexLocker(self.mutex):
+                    if path in self.items:
+                        item = self.items[path]
+                        item.status = QUEUE_STATE_READY
+                        item.scan_complete = True
+                        from imxup import timestamp
+                        print(f"{timestamp()} [RESCAN] {item.name or os.path.basename(path)}: Marked ready for validation")
+                
+                QTimer.singleShot(50, lambda: self.save_persistent_queue([path]))
+                self._inc_version()
+        except Exception as e:
+            self.mark_scan_failed(path, f"Rescan queue error: {e}")
     
     def _get_scanning_config(self) -> dict:
         """Get scanning configuration"""
@@ -377,6 +608,42 @@ class QueueManager(QObject):
             self._batch_mode = old_batch
             self._batched_changes.clear()
     
+    def _save_single_item(self, item):
+        """Save a single item without iterating through all items"""
+        try:
+            item_data = {
+                'path': item.path,
+                'name': item.name,
+                'status': item.status,
+                'gallery_url': item.gallery_url,
+                'gallery_id': item.gallery_id,
+                'progress': item.progress,
+                'uploaded_images': item.uploaded_images,
+                'total_images': item.total_images,
+                'template_name': item.template_name,
+                'insertion_order': item.insertion_order,
+                'added_time': item.added_time,
+                'finished_time': item.finished_time,
+                'tab_name': getattr(item, 'tab_name', ''),  # Include tab assignment
+                'total_size': int(getattr(item, 'total_size', 0) or 0),
+                'avg_width': float(getattr(item, 'avg_width', 0.0) or 0.0),
+                'avg_height': float(getattr(item, 'avg_height', 0.0) or 0.0),
+                'max_width': float(getattr(item, 'max_width', 0.0) or 0.0),
+                'max_height': float(getattr(item, 'max_height', 0.0) or 0.0),
+                'min_width': float(getattr(item, 'min_width', 0.0) or 0.0),
+                'min_height': float(getattr(item, 'min_height', 0.0) or 0.0),
+                'scan_complete': bool(getattr(item, 'scan_complete', False)),
+                'uploaded_bytes': int(getattr(item, 'uploaded_bytes', 0) or 0),
+                'final_kibps': float(getattr(item, 'final_kibps', 0.0) or 0.0),
+                'failed_files': getattr(item, 'failed_files', []),
+                'error_message': getattr(item, 'error_message', ''),
+            }
+            
+            self.store.bulk_upsert_async([item_data])
+            print(f"DEBUG: _save_single_item saved: {item.path}")
+        except Exception as e:
+            print(f"ERROR: _save_single_item failed for {item.path}: {e}")
+
     def save_persistent_queue(self, specific_paths: List[str] = None):
         """Save queue state to database"""
         print(f"DEBUG: save_persistent_queue called with {len(specific_paths) if specific_paths else 'all'} items")

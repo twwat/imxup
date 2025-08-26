@@ -7,7 +7,6 @@ Contains the main ImxToUploader class and related utilities
 import os
 import requests
 import json
-from dotenv import load_dotenv
 import sys
 from pathlib import Path
 from datetime import datetime
@@ -24,8 +23,6 @@ import glob
 import base64
 from cryptography.fernet import Fernet
 
-# Load environment variables
-load_dotenv()
 
 # Application version
 __version__ = "0.2.4"

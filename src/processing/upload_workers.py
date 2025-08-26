@@ -259,7 +259,7 @@ class UploadWorker(QThread):
             error_msg = str(e)
             self.log_message.emit(f"{timestamp()} Error uploading {item.name}: {error_msg}")
             item.error_message = error_msg
-            self.queue_manager.update_item_status(item.path, "failed")
+            self.queue_manager.mark_upload_failed(item.path, error_msg)
             self.gallery_failed.emit(item.path, error_msg)
     
     def _process_upload_results(self, item: GalleryQueueItem, results: Optional[Dict[str, Any]]):
@@ -271,7 +271,7 @@ class UploadWorker(QThread):
                 item.status = "incomplete"
                 self.log_message.emit(f"{timestamp()} Marked incomplete: {item.name}")
             else:
-                self.queue_manager.update_item_status(item.path, "failed")
+                self.queue_manager.mark_upload_failed(item.path, "Upload failed")
                 self.gallery_failed.emit(item.path, "Upload failed")
             
             self._emit_queue_stats(force=True)
@@ -296,8 +296,9 @@ class UploadWorker(QThread):
         # Determine final status
         failed_count = results.get('failed_count', 0)
         if failed_count and results.get('successful_count', 0) > 0:
-            # Partial failure
-            self.queue_manager.update_item_status(item.path, "failed")
+            # Partial failure - some images uploaded successfully but others failed
+            failed_files = results.get('failed_details', [])
+            self.queue_manager.mark_upload_failed(item.path, f"Partial upload failure: {failed_count} images failed", failed_files)
         else:
             # Complete success
             self.queue_manager.update_item_status(item.path, "completed")

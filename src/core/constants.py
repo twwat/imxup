@@ -77,6 +77,8 @@ QUEUE_STATE_QUEUED = "queued"
 QUEUE_STATE_UPLOADING = "uploading"
 QUEUE_STATE_COMPLETED = "completed"
 QUEUE_STATE_FAILED = "failed"
+QUEUE_STATE_SCAN_FAILED = "scan_failed"
+QUEUE_STATE_UPLOAD_FAILED = "upload_failed"
 QUEUE_STATE_PAUSED = "paused"
 QUEUE_STATE_INCOMPLETE = "incomplete"
 

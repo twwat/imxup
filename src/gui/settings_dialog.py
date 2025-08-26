@@ -10,7 +10,7 @@ import configparser
 from typing import List, Dict, Any, Optional
 
 from PyQt6.QtWidgets import (
-    QDialog, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
+    QDialog, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QFormLayout,
     QTabWidget, QPushButton, QCheckBox, QComboBox, QSpinBox,
     QLabel, QGroupBox, QLineEdit, QMessageBox, QFileDialog,
     QListWidget, QListWidgetItem, QPlainTextEdit, QInputDialog,
@@ -190,11 +190,11 @@ class ComprehensiveSettingsDialog(QDialog):
         set_path_controls_enabled(self.store_in_central_check.isChecked())
         self.store_in_central_check.toggled.connect(set_path_controls_enabled)
         
-        # Theme group
-        theme_group = QGroupBox("Theme")
-        theme_layout = QHBoxLayout(theme_group)
+        # Theme & Display group
+        theme_group = QGroupBox("Theme & Display")
+        theme_layout = QFormLayout(theme_group)
         
-        theme_label = QLabel("Theme mode:")
+        # Theme setting
         self.theme_combo = QComboBox()
         self.theme_combo.addItems(["system", "light", "dark"])
         
@@ -205,9 +205,22 @@ class ComprehensiveSettingsDialog(QDialog):
             if index >= 0:
                 self.theme_combo.setCurrentIndex(index)
         
-        theme_layout.addWidget(theme_label)
-        theme_layout.addWidget(self.theme_combo)
-        theme_layout.addStretch()
+        theme_layout.addRow("Theme mode:", self.theme_combo)
+        
+        # Font size setting
+        self.font_size_spin = QSpinBox()
+        self.font_size_spin.setRange(6, 24)  # Reasonable range for UI fonts
+        self.font_size_spin.setSuffix(" pt")
+        self.font_size_spin.setToolTip("Base font size for the interface (affects table, labels, buttons)")
+        
+        # Load current font size from QSettings (default to 9pt)
+        if self.parent and hasattr(self.parent, 'settings'):
+            current_font_size = int(self.parent.settings.value('ui/font_size', 9))
+            self.font_size_spin.setValue(current_font_size)
+        else:
+            self.font_size_spin.setValue(9)
+        
+        theme_layout.addRow("Font size:", self.font_size_spin)
         
         # Add all groups to layout
         layout.addWidget(upload_group)
@@ -228,6 +241,7 @@ class ComprehensiveSettingsDialog(QDialog):
         self.store_in_central_check.toggled.connect(lambda: self.mark_tab_dirty(0))
         self.path_edit.textChanged.connect(lambda: self.mark_tab_dirty(0))
         self.theme_combo.currentIndexChanged.connect(lambda: self.mark_tab_dirty(0))
+        self.font_size_spin.valueChanged.connect(lambda: self.mark_tab_dirty(0))
         
         self.tab_widget.addTab(general_widget, "General")
         
@@ -1099,6 +1113,15 @@ class ComprehensiveSettingsDialog(QDialog):
                     self.parent.settings.setValue('ui/theme', self.theme_combo.currentText())
                     self.parent.apply_theme(self.theme_combo.currentText())
                 
+                # Save font size
+                if hasattr(self.parent, 'settings'):
+                    font_size = self.font_size_spin.value()
+                    print(f"Saving font size to settings: {font_size}")
+                    self.parent.settings.setValue('ui/font_size', font_size)
+                    if hasattr(self.parent, 'apply_font_size'):
+                        print(f"Applying font size: {font_size}")
+                        self.parent.apply_font_size(font_size)
+                
                 # Save scanning settings
                 self._save_scanning_settings()
                 
@@ -1193,6 +1216,9 @@ class ComprehensiveSettingsDialog(QDialog):
             
             # Reset theme
             self.theme_combo.setCurrentText("system")
+            
+            # Reset font size
+            self.font_size_spin.setValue(9)
             
             # Reset scanning
             self.fast_scan_check.setChecked(True)
@@ -1517,6 +1543,11 @@ class ComprehensiveSettingsDialog(QDialog):
             index = self.theme_combo.findText(current_theme)
             if index >= 0:
                 self.theme_combo.setCurrentIndex(index)
+        
+        # Reload font size
+        if self.parent and hasattr(self.parent, 'settings'):
+            current_font_size = int(self.parent.settings.value('ui/font_size', 9))
+            self.font_size_spin.setValue(current_font_size)
     
     def _reload_scanning_tab(self):
         """Reload Scanning tab form values from saved settings"""
@@ -1556,6 +1587,19 @@ class ComprehensiveSettingsDialog(QDialog):
                 self.parent.thumbnail_format_combo.setCurrentIndex(self.thumbnail_format_combo.currentIndex())
                 self.parent.max_retries_spin.setValue(self.max_retries_spin.value())
                 self.parent.batch_size_spin.setValue(self.batch_size_spin.value())
+                
+                # Save theme and font size to QSettings
+                if hasattr(self.parent, 'settings'):
+                    font_size = self.font_size_spin.value()
+                    print(f"_save_general_tab: Saving font size to settings: {font_size}")
+                    self.parent.settings.setValue('ui/theme', self.theme_combo.currentText())
+                    self.parent.settings.setValue('ui/font_size', font_size)
+                    
+                    # Apply theme and font size immediately
+                    self.parent.apply_theme(self.theme_combo.currentText())
+                    if hasattr(self.parent, 'apply_font_size'):
+                        print(f"_save_general_tab: Applying font size: {font_size}")
+                        self.parent.apply_font_size(font_size)
             
             return True
         except Exception as e:

@@ -888,11 +888,13 @@ class ImxToUploader:
                 if auth_type == 'username_password':
                     username = config['CREDENTIALS'].get('username')
                     encrypted_password = config['CREDENTIALS'].get('password', '')
+                    encrypted_api_key = config['CREDENTIALS'].get('api_key', '')
                     
                     if username and encrypted_password:
                         password = decrypt_password(encrypted_password)
+                        api_key = decrypt_password(encrypted_api_key) if encrypted_api_key else None
                         if password:
-                            return username, password, None
+                            return username, password, api_key
                 
                 elif auth_type == 'api_key':
                     encrypted_api_key = config['CREDENTIALS'].get('api_key', '')

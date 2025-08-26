@@ -99,7 +99,7 @@ def get_assets_dir():
 # Central icon configuration - easily configurable icon mapping
 ICON_CONFIG = {
     # Status icons
-    'completed': ['check16.png', 'check.png'],
+    'completed': ['check.png', 'check16.png'],
     'failed': ['error.png'],
     'uploading': ['start.png'],
     'paused': ['pause.png'],
@@ -107,16 +107,16 @@ ICON_CONFIG = {
     'pending': ['pending.png'],
     
     # Action button icons
-    'start': ['start.png', 'play.png'],
-    'stop': ['stop.png'],
-    'view': ['view.png'],
-    'view_error': ['view_error.png', 'error.png'],
-    'cancel': ['pause.png'],
+    'start': ['play.png', 'start.png'], #ready
+    'stop': ['stop.png'],               #uploading
+    'view': ['view.png'],               #completed
+    'view_error': ['view_error.png', 'error.png'], #failed1/2
+    'cancel': ['pause.png'],            #queued
     
     # Other icons
     'templates': ['templates.svg'],
     'credentials': ['credentials.svg'],
-    'main_window': ['uip 16267832.png'],  # Use existing PNG as window icon
+    'main_window': ['imxup.png', 'imxup.ico', 'imx.ico'],  # Application icons
 }
 
 def get_icon(icon_type: str, fallback_std: Optional[QStyle.StandardPixmap] = None, style_instance=None) -> QIcon:
@@ -2551,6 +2551,83 @@ class GalleryTableWidget(QTableWidget):
                 cancel_action = menu.addAction("Cancel Upload")
                 cancel_action.triggered.connect(lambda: self.cancel_selected_via_menu(queued_paths))
 
+            # Retry/Rescan actions for failed items
+            scan_failed_paths = []
+            upload_failed_paths = []
+            generic_failed_paths = []
+            
+            if widget and hasattr(widget, 'queue_manager'):
+                for path in selected_paths:
+                    item = widget.queue_manager.get_item(path)
+                    if item:
+                        if item.status == "scan_failed":
+                            scan_failed_paths.append(path)
+                        elif item.status == "upload_failed":
+                            upload_failed_paths.append(path)
+                        elif item.status == "failed":
+                            generic_failed_paths.append(path)
+            
+            # Rescan/Reset actions - available for various states
+            rescannable_paths = []
+            rescan_all_paths = []
+            resetable_paths = []
+            
+            if widget and hasattr(widget, 'queue_manager'):
+                for path in selected_paths:
+                    item = widget.queue_manager.get_item(path)
+                    if item:
+                        # These statuses can benefit from additive rescan
+                        # Include "scanning" status for reset galleries that are stuck
+                        if item.status in ["scan_failed", "completed", "incomplete", "upload_failed", "failed", "scanning", "ready"]:
+                            rescannable_paths.append(path)
+                        
+                        # Rescan all items - only for galleries that aren't 100% complete
+                        # Check if gallery is 100% complete
+                        total_images = getattr(item, 'total_images', 0) or 0
+                        uploaded_images = getattr(item, 'uploaded_images', 0) or 0
+                        is_100_percent_complete = (item.status == "completed" and 
+                                                 total_images > 0 and 
+                                                 uploaded_images >= total_images)
+                        
+                        # Allow rescan all for stuck scanning galleries (0 images counted)
+                        is_stuck_scanning = (item.status == "scanning" and total_images == 0)
+                        
+                        if not is_100_percent_complete and (item.status in ["scan_failed", "completed", "incomplete", "upload_failed", "failed", "ready"] or is_stuck_scanning):
+                            rescan_all_paths.append(path)
+                        
+                        # Any item can be completely reset
+                        resetable_paths.append(path)
+            
+            # Smart rescan option (additive)
+            if rescannable_paths:
+                rescan_action = menu.addAction("🔍 Rescan for New Images")
+                rescan_action.setToolTip("Scan for new images added to folder (preserves existing uploads)")
+                rescan_action.triggered.connect(lambda: self.rescan_additive_via_menu(rescannable_paths))
+            
+            # Rescan all items in gallery option - only for non-100% complete galleries
+            if rescan_all_paths:
+                rescan_all_action = menu.addAction("🔄 Rescan All Items")
+                rescan_all_action.setToolTip("Rescan all items in gallery (preserves successful uploads)")
+                rescan_all_action.triggered.connect(lambda: self.rescan_all_items_via_menu(rescan_all_paths))
+            
+            # Complete reset option  
+            if resetable_paths:
+                reset_action = menu.addAction("🗑️ Reset Gallery")
+                reset_action.setToolTip("Completely reset gallery and rescan from scratch")
+                reset_action.triggered.connect(lambda: self.reset_gallery_via_menu(resetable_paths))
+            
+            # Retry action for upload failures  
+            if upload_failed_paths:
+                retry_action = menu.addAction("🔄 Retry Upload")
+                retry_action.setToolTip("Retry failed upload")
+                retry_action.triggered.connect(lambda: self.retry_selected_via_menu(upload_failed_paths))
+            
+            # Generic retry for old-style failures
+            if generic_failed_paths:
+                retry_generic_action = menu.addAction("🔄 Retry")
+                retry_generic_action.setToolTip("Retry failed operation")
+                retry_generic_action.triggered.connect(lambda: self.retry_selected_via_menu(generic_failed_paths))
+
             # Copy BBCode (for completed items)
             completed_paths = []
             if widget and hasattr(widget, 'queue_manager'):
@@ -2864,17 +2941,21 @@ class GalleryTableWidget(QTableWidget):
         if not widget:
             return
         started = 0
+        started_paths = []
         # Use batch context to group all database saves into a single transaction
         with widget.queue_manager.batch_updates():
             for path in paths_in_order:
                 if widget.queue_manager.start_item(path):
                     started += 1
+                    started_paths.append(path)
         if started:
             if hasattr(widget, 'add_log_message'):
                 timestamp_func = getattr(widget, '_timestamp', lambda: time.strftime("%H:%M:%S"))
                 widget.add_log_message(f"{timestamp_func()} Started {started} selected item(s)")
-            if hasattr(widget, 'update_queue_display'):
-                widget.update_queue_display()
+            # Update only the affected rows instead of full table refresh
+            if hasattr(widget, '_update_specific_gallery_display'):
+                for path in started_paths:
+                    widget._update_specific_gallery_display(path)
     
     def open_folders_via_menu(self, paths):
         """Open the given gallery folders in the OS file manager"""
@@ -2890,6 +2971,117 @@ class GalleryTableWidget(QTableWidget):
         if widget and hasattr(widget, 'cancel_single_item'):
             for path in queued_paths:
                 widget.cancel_single_item(path)
+    
+    def retry_selected_via_menu(self, failed_paths):
+        """Retry failed uploads for selected items"""
+        widget = self
+        while widget and not hasattr(widget, 'queue_manager'):
+            widget = widget.parent()
+        
+        if widget and hasattr(widget, 'queue_manager'):
+            for path in failed_paths:
+                try:
+                    widget.queue_manager.retry_failed_upload(path)
+                    if hasattr(widget, 'add_log_message'):
+                        item = widget.queue_manager.get_item(path)
+                        gallery_name = item.name if item else os.path.basename(path)
+                        widget.add_log_message(f"Retrying upload for {gallery_name}")
+                except Exception as e:
+                    if hasattr(widget, 'add_log_message'):
+                        widget.add_log_message(f"Error retrying {path}: {e}")
+    
+    def rescan_additive_via_menu(self, paths):
+        """Smart rescan - only detect new images, preserve existing uploads"""
+        widget = self
+        while widget and not hasattr(widget, 'queue_manager'):
+            widget = widget.parent()
+        
+        if widget and hasattr(widget, 'queue_manager'):
+            for path in paths:
+                try:
+                    # Use the worker queue instead of blocking direct scan
+                    widget.queue_manager._scan_queue.put(path)
+                    if hasattr(widget, 'add_log_message'):
+                        item = widget.queue_manager.get_item(path)
+                        gallery_name = item.name if item else os.path.basename(path)
+                        widget.add_log_message(f"Queued {gallery_name} for rescan")
+                except Exception as e:
+                    if hasattr(widget, 'add_log_message'):
+                        widget.add_log_message(f"Error queuing scan for {path}: {e}")
+
+    def rescan_all_items_via_menu(self, paths):
+        """Rescan all items in gallery - refresh failed/incomplete items while preserving successful uploads"""
+        widget = self
+        while widget and not hasattr(widget, 'queue_manager'):
+            widget = widget.parent()
+        
+        if widget and hasattr(widget, 'queue_manager'):
+            for path in paths:
+                try:
+                    # Use the worker queue instead of blocking methods
+                    widget.queue_manager._scan_queue.put(path)
+                    if hasattr(widget, 'add_log_message'):
+                        item = widget.queue_manager.get_item(path)
+                        gallery_name = item.name if item else os.path.basename(path)
+                        widget.add_log_message(f"Queued {gallery_name} for complete rescan")
+                except Exception as e:
+                    if hasattr(widget, 'add_log_message'):
+                        widget.add_log_message(f"Error queuing rescan for {path}: {e}")
+    
+    def reset_gallery_via_menu(self, paths):
+        """Complete gallery reset with confirmation dialog"""
+        from PyQt6.QtWidgets import QMessageBox
+        
+        # Show confirmation dialog
+        count = len(paths)
+        gallery_word = "gallery" if count == 1 else "galleries"
+        
+        msg = QMessageBox()
+        msg.setIcon(QMessageBox.Icon.Warning)
+        msg.setWindowTitle("Reset Gallery")
+        msg.setText(f"Reset {count} {gallery_word}?")
+        msg.setInformativeText(
+            "This will permanently clear all upload progress and rescan from scratch.\n"
+            "Any existing gallery links will be lost.\n\n"
+            "Use this when you've replaced/renamed files or want to re-upload everything."
+        )
+        msg.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel)
+        msg.setDefaultButton(QMessageBox.StandardButton.Cancel)
+        
+        if msg.exec() == QMessageBox.StandardButton.Yes:
+            widget = self
+            while widget and not hasattr(widget, 'queue_manager'):
+                widget = widget.parent()
+            
+            if widget and hasattr(widget, 'queue_manager'):
+                for path in paths:
+                    try:
+                        widget.queue_manager.reset_gallery_complete(path)
+                        if hasattr(widget, 'add_log_message'):
+                            item = widget.queue_manager.get_item(path)
+                            gallery_name = item.name if item else os.path.basename(path)
+                            widget.add_log_message(f"Reset {gallery_name} - starting fresh scan")
+                    except Exception as e:
+                        if hasattr(widget, 'add_log_message'):
+                            widget.add_log_message(f"Error resetting {path}: {e}")
+                
+                # Force refresh of the display to show scanning status
+                if hasattr(widget, 'refresh_filter'):
+                    QTimer.singleShot(200, widget.refresh_filter)
+                
+                # Trigger scanning using the worker queue for each reset path
+                for path in paths:
+                    try:
+                        # Add to scan queue to trigger actual scanning
+                        widget.queue_manager._scan_queue.put(path)
+                        print(f"Added {path} to scan queue after reset")
+                    except Exception as e:
+                        if hasattr(widget, 'add_log_message'):
+                            widget.add_log_message(f"Error queuing scan for {path}: {e}")
+    
+    def rescan_selected_via_menu(self, scan_failed_paths):
+        """Legacy method - redirect to additive rescan"""
+        self.rescan_additive_via_menu(scan_failed_paths)
 
     def copy_bbcode_via_menu_multi(self, paths):
         """Copy BBCode for multiple completed items (concatenated with separators)"""
@@ -3050,10 +3242,13 @@ class ActionButtonWidget(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(2, 2, 2, 2)  # minimal padding
-        layout.setSpacing(2)  # smaller spacing between buttons
-        layout.setAlignment(Qt.AlignmentFlag.AlignLeft)  # left-align buttons
+        layout.setContentsMargins(4, 1, 4, 1)  # Better horizontal padding, minimal vertical
+        layout.setSpacing(3)  # Slightly better spacing between buttons
+        layout.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)  # left-align and center vertically
         
+        
+        # Set consistent minimum height for the widget to match table row height
+        self.setMinimumHeight(24)
         
         self.start_btn = QPushButton("Start")
         self.start_btn.setFixedSize(20, 20)  # smaller icon-only buttons
@@ -3192,7 +3387,7 @@ class ActionButtonWidget(QWidget):
             visible_buttons = [b for b in (self.start_btn, self.stop_btn, self.view_btn, self.cancel_btn) if b.isVisible()]
             if not visible_buttons:
                 return
-            spacing = self._layout.spacing() or 0
+            spacing = self._layout.spacing() or 3
             content_width = sum(btn.width() for btn in visible_buttons) + spacing * (len(visible_buttons) - 1)
             if content_width <= self.width():
                 self._layout.setAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter)
@@ -5197,6 +5392,12 @@ class ImxUploadGUI(QMainWindow):
             elif status == "failed":
                 icon = get_icon('failed', QStyle.StandardPixmap.SP_DialogCancelButton, self.style())
                 tooltip = "Failed"
+            elif status == "scan_failed":
+                icon = get_icon('scan_failed', QStyle.StandardPixmap.SP_DirIcon, self.style())
+                tooltip = "Scan Failed - Click to rescan"
+            elif status == "upload_failed":
+                icon = get_icon('upload_failed', QStyle.StandardPixmap.SP_MessageBoxCritical, self.style())
+                tooltip = "Upload Failed - Click to retry"
             elif status == "uploading":
                 icon = get_icon('uploading', QStyle.StandardPixmap.SP_MediaPlay, self.style())
                 tooltip = "Uploading"
@@ -6313,11 +6514,123 @@ class ImxUploadGUI(QMainWindow):
             self._current_theme_mode = mode
             # Trigger a light refresh on key widgets
             try:
-                self.update_queue_display()
+                # Just apply font sizes instead of full refresh when changing theme
+                if hasattr(self, 'gallery_table') and self.gallery_table:
+                    font_size = self._get_current_font_size()
+                    self.apply_font_size(font_size)
             except Exception:
                 pass
         except Exception:
             pass
+    
+    def apply_font_size(self, font_size: int):
+        """Apply the specified font size throughout the application"""
+        try:
+            # Update application-wide font sizes
+            self._current_font_size = font_size
+            
+            # Update table font sizes without overriding the original stylesheet
+            if hasattr(self, 'gallery_table') and hasattr(self.gallery_table, 'gallery_table'):
+                table = self.gallery_table.gallery_table
+                
+                table_font_size = max(font_size - 1, 6)  # Table 1pt smaller, minimum 6pt
+                name_font_size = font_size  # Name column same as base
+                
+                # Just update existing table items without changing stylesheet
+                for row in range(table.rowCount()):
+                    for col in range(table.columnCount()):
+                        item = table.item(row, col)
+                        if item:
+                            font = item.font()
+                            if col == 1:  # Name column gets base font size
+                                font.setPointSize(name_font_size)
+                            else:  # Other columns get smaller font
+                                font.setPointSize(table_font_size)
+                            item.setFont(font)
+                
+                # Update header fonts
+                header = table.horizontalHeader()
+                for col in range(table.columnCount()):
+                    header_item = table.horizontalHeaderItem(col)
+                    if header_item:
+                        font = header_item.font()
+                        font.setPointSize(header_font_size)
+                        header_item.setFont(font)
+            
+            # Update log text font
+            if hasattr(self, 'log_text'):
+                log_font = QFont("Consolas")
+                log_font_size = max(font_size - 1, 6)  # Log text 1pt smaller
+                log_font.setPointSize(log_font_size)
+                try:
+                    log_font.setLetterSpacing(QFont.SpacingType.PercentageSpacing, 98.0)
+                except Exception:
+                    pass
+                self.log_text.setFont(log_font)
+            
+            # Update stats and other labels
+            if hasattr(self, 'stats_label'):
+                stats_font = self.stats_label.font()
+                stats_font.setPointSize(font_size)
+                self.stats_label.setFont(stats_font)
+            
+            # Update button fonts (controls area)
+            button_font_size = font_size
+            for widget in self.findChildren(QPushButton):
+                try:
+                    font = widget.font()
+                    font.setPointSize(button_font_size)
+                    widget.setFont(font)
+                except Exception:
+                    pass
+            
+            # Update combo box fonts
+            for widget in self.findChildren(QComboBox):
+                try:
+                    font = widget.font()
+                    font.setPointSize(font_size)
+                    widget.setFont(font)
+                except Exception:
+                    pass
+            
+            # Update label fonts
+            for widget in self.findChildren(QLabel):
+                try:
+                    font = widget.font()
+                    font.setPointSize(font_size)
+                    widget.setFont(font)
+                except Exception:
+                    pass
+            
+            # Save the current font size
+            if hasattr(self, 'settings'):
+                self.settings.setValue('ui/font_size', font_size)
+            
+            # Force refresh
+            self.update()
+            
+            print(f"Applied font size: {font_size}pt")
+            
+        except Exception as e:
+            print(f"Error applying font size: {e}")
+    
+    def _get_current_font_size(self) -> int:
+        """Get the current font size setting"""
+        if hasattr(self, '_current_font_size'):
+            return self._current_font_size
+        
+        # Load from settings
+        if hasattr(self, 'settings'):
+            return int(self.settings.value('ui/font_size', 9))
+        
+        return 9  # Default
+
+    def _get_table_font_sizes(self) -> tuple:
+        """Get appropriate font sizes for table elements based on current setting"""
+        base_font_size = self._get_current_font_size()
+        table_font_size = max(base_font_size - 1, 6)  # Table 1pt smaller, minimum 6pt
+        name_font_size = base_font_size  # Name column same as base
+        return table_font_size, name_font_size
 
     def setup_system_tray(self):
         """Setup system tray icon"""
@@ -6448,19 +6761,61 @@ class ImxUploadGUI(QMainWindow):
             self.add_folders([folder_path])
     
     def add_folders(self, folder_paths: List[str]):
-        """Add folders to the upload queue efficiently"""
+        """Add folders to the upload queue with duplicate detection"""
         print(f"DEBUG: add_folders called with {len(folder_paths)} paths")
+        
         if len(folder_paths) == 1:
             # Single folder - use the old method for backward compatibility
             self._add_single_folder(folder_paths[0])
         else:
-            # Multiple folders - add each one individually for now
-            for folder_path in folder_paths:
-                self._add_single_folder(folder_path)
+            # Multiple folders - use new duplicate detection system
+            self._add_multiple_folders_with_duplicate_detection(folder_paths)
     
     def _add_single_folder(self, path: str):
-        """Add a single folder using the old method."""
+        """Add a single folder with duplicate detection."""
         print(f"DEBUG: _add_single_folder called with path={path}")
+        
+        # Use duplicate detection for single folders too
+        folder_name = os.path.basename(path)
+        
+        # Check if already in queue
+        existing_item = self.queue_manager.get_item(path)
+        if existing_item:
+            from PyQt6.QtWidgets import QMessageBox
+            
+            msg = QMessageBox()
+            msg.setIcon(QMessageBox.Icon.Question)
+            msg.setWindowTitle("Already in Queue")
+            msg.setText(f"'{folder_name}' is already in the queue.")
+            msg.setInformativeText(f"Current status: {existing_item.status}\n\nDo you want to replace it?")
+            msg.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+            msg.setDefaultButton(QMessageBox.StandardButton.No)
+            
+            if msg.exec() == QMessageBox.StandardButton.Yes:
+                # Replace existing
+                self.queue_manager.remove_item(path)
+                self.add_log_message(f"Replaced {folder_name} in queue")
+            else:
+                return  # User chose not to replace
+        
+        # Check if previously uploaded
+        existing_files = self._check_if_gallery_exists(folder_name)
+        if existing_files:
+            from PyQt6.QtWidgets import QMessageBox
+            
+            files_text = ', '.join(existing_files) if existing_files else "gallery files"
+            msg = QMessageBox()
+            msg.setIcon(QMessageBox.Icon.Warning)
+            msg.setWindowTitle("Previously Uploaded")
+            msg.setText(f"'{folder_name}' appears to have been uploaded before.")
+            msg.setInformativeText(f"Found: {files_text}\n\nAre you sure you want to upload it again?")
+            msg.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+            msg.setDefaultButton(QMessageBox.StandardButton.No)
+            
+            if msg.exec() != QMessageBox.StandardButton.Yes:
+                return  # User chose not to upload
+        
+        # Proceed with adding
         template_name = self.template_combo.currentText()
         result = self.queue_manager.add_item(path, template_name=template_name)
         
@@ -6484,15 +6839,8 @@ class ImxUploadGUI(QMainWindow):
                 self._add_gallery_to_table(item)
                 # Force immediate table refresh to ensure visibility
                 QTimer.singleShot(50, self._update_scanned_rows)
-        elif result == "duplicate":
-            # Handle duplicate gallery - move network call to background
-            gallery_name = sanitize_gallery_name(os.path.basename(path))
-            
-            # Show immediate message and defer network check
-            self.add_log_message(f"{timestamp()} [queue] Checking for existing gallery '{gallery_name}'...")
-            QTimer.singleShot(1, lambda: self._check_gallery_exists_background(path, gallery_name, template_name))
         else:
-            self.add_log_message(f"{timestamp()} [queue] Failed to add: {os.path.basename(path)} (no images or already in queue)")
+            self.add_log_message(f"{timestamp()} [queue] Failed to add: {os.path.basename(path)} (no images found)")
     
     def _check_gallery_exists_background(self, path: str, gallery_name: str, template_name: str):
         """Check if gallery exists in background and show dialog on main thread"""
@@ -6604,6 +6952,76 @@ class ImxUploadGUI(QMainWindow):
         finally:
             progress.close()
     
+    def _add_multiple_folders_with_duplicate_detection(self, folder_paths: List[str]):
+        """Add multiple folders with duplicate detection dialogs"""
+        from src.gui.dialogs.duplicate_detection_dialogs import show_duplicate_detection_dialogs
+        
+        try:
+            # Show duplicate detection dialogs and get processed lists
+            folders_to_add_normally, folders_to_replace_in_queue = show_duplicate_detection_dialogs(
+                folders_to_add=folder_paths,
+                check_gallery_exists_func=self._check_if_gallery_exists,
+                queue_manager=self.queue_manager,
+                parent=self
+            )
+            
+            # Process folders that passed duplicate checks
+            if folders_to_add_normally:
+                print(f"DEBUG: Adding {len(folders_to_add_normally)} folders normally")
+                template_name = self.template_combo.currentText()
+                
+                for folder_path in folders_to_add_normally:
+                    try:
+                        result = self.queue_manager.add_item(folder_path, template_name=template_name)
+                        if result:
+                            # Set to current active tab
+                            current_tab = getattr(self.gallery_table, 'current_tab', "Main")
+                            if current_tab != "Main":
+                                try:
+                                    self.tab_manager.assign_gallery_to_tab(folder_path, current_tab)
+                                except Exception as e:
+                                    print(f"DEBUG: Failed to assign {folder_path} to tab {current_tab}: {e}")
+                    except Exception as e:
+                        print(f"DEBUG: Error adding folder {folder_path}: {e}")
+                        self.add_log_message(f"Error adding {os.path.basename(folder_path)}: {e}")
+            
+            # Process folders that should replace existing queue items
+            if folders_to_replace_in_queue:
+                print(f"DEBUG: Replacing {len(folders_to_replace_in_queue)} folders in queue")
+                template_name = self.template_combo.currentText()
+                
+                for folder_path in folders_to_replace_in_queue:
+                    try:
+                        # Remove existing item
+                        self.queue_manager.remove_item(folder_path)
+                        
+                        # Add new item
+                        result = self.queue_manager.add_item(folder_path, template_name=template_name)
+                        if result:
+                            # Set to current active tab
+                            current_tab = getattr(self.gallery_table, 'current_tab', "Main")
+                            if current_tab != "Main":
+                                try:
+                                    self.tab_manager.assign_gallery_to_tab(folder_path, current_tab)
+                                except Exception as e:
+                                    print(f"DEBUG: Failed to assign {folder_path} to tab {current_tab}: {e}")
+                        
+                        self.add_log_message(f"Replaced {os.path.basename(folder_path)} in queue")
+                    except Exception as e:
+                        print(f"DEBUG: Error replacing folder {folder_path}: {e}")
+                        self.add_log_message(f"Error replacing {os.path.basename(folder_path)}: {e}")
+            
+            # Update display
+            total_processed = len(folders_to_add_normally) + len(folders_to_replace_in_queue)
+            if total_processed > 0:
+                self.add_log_message(f"Added {total_processed} galleries to queue")
+                # Trigger table refresh
+                QTimer.singleShot(50, self._update_scanned_rows)
+            
+        except Exception as e:
+            print(f"DEBUG: Error in duplicate detection: {e}")
+            self.add_log_message(f"Error processing folders: {e}")
+    
     def add_folder_from_command_line(self, folder_path: str):
         """Add folder from command line (single instance)"""
         if folder_path and os.path.isdir(folder_path):
@@ -6709,6 +7127,9 @@ class ImxUploadGUI(QMainWindow):
         item = self.queue_manager.get_item(path)
         if not item:
             return
+        
+        # Get current font sizes
+        table_font_size, name_font_size = self._get_table_font_sizes()
             
         # If this is a new item, add it to the table
         if path not in self.path_to_row:
@@ -6753,8 +7174,9 @@ class ImxUploadGUI(QMainWindow):
         order_item = NumericTableWidgetItem(item.insertion_order)
         order_item.setFlags(order_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
         order_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+        table_font_size, name_font_size = self._get_table_font_sizes()
         font = order_item.font()
-        font.setPointSize(8)
+        font.setPointSize(table_font_size)
         order_item.setFont(font)
         self.gallery_table.setItem(row, 0, order_item)
         
@@ -6765,7 +7187,7 @@ class ImxUploadGUI(QMainWindow):
         name_item.setData(Qt.ItemDataRole.UserRole, item.path)
         # Gallery name column gets font size 9 (1pt larger than others)
         font = name_item.font()
-        font.setPointSize(9)
+        font.setPointSize(name_font_size)
         name_item.setFont(font)
         self.gallery_table.setItem(row, 1, name_item)
         
@@ -6780,7 +7202,7 @@ class ImxUploadGUI(QMainWindow):
             uploaded_item.setTextAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter)
             # PyQt is retarded, manually set font
             font = uploaded_item.font()
-            font.setPointSize(8)
+            font.setPointSize(table_font_size)
             uploaded_item.setFont(font)
             self.gallery_table.setItem(row, 2, uploaded_item)
         else:
@@ -6806,7 +7228,7 @@ class ImxUploadGUI(QMainWindow):
         if added_tooltip:
             added_item.setToolTip(added_tooltip)
         font = added_item.font()
-        font.setPointSize(8)
+        font.setPointSize(table_font_size)
         added_item.setFont(font)
         self.gallery_table.setItem(row, 5, added_item)
         
@@ -6818,7 +7240,7 @@ class ImxUploadGUI(QMainWindow):
         if finished_tooltip:
             finished_item.setToolTip(finished_tooltip)
         font = finished_item.font()
-        font.setPointSize(8)
+        font.setPointSize(table_font_size)
         finished_item.setFont(font)
         self.gallery_table.setItem(row, 6, finished_item)
         
@@ -6832,7 +7254,7 @@ class ImxUploadGUI(QMainWindow):
         size_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         # PyQt is retarded, manually set font
         font = size_item.font()
-        font.setPointSize(8)
+        font.setPointSize(table_font_size)
         size_item.setFont(font)
         self.gallery_table.setItem(row, 8, size_item)
         
@@ -6854,7 +7276,7 @@ class ImxUploadGUI(QMainWindow):
         xfer_item.setFlags(xfer_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
         xfer_item.setTextAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter)
         font = xfer_item.font()
-        font.setPointSize(8)
+        font.setPointSize(table_font_size)
         if item.status == "uploading" and transfer_text:
             font.setBold(True)
             xfer_item.setForeground(QColor(173, 216, 255, 255) if _is_dark_mode else QColor(20, 90, 150, 255))
@@ -6879,7 +7301,7 @@ class ImxUploadGUI(QMainWindow):
         except Exception:
             tmpl_item.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         font = tmpl_item.font()
-        font.setPointSize(8)
+        font.setPointSize(table_font_size)
         tmpl_item.setFont(font)
         self.gallery_table.setItem(row, 10, tmpl_item)
         
@@ -6932,10 +7354,16 @@ class ImxUploadGUI(QMainWindow):
                 return
                 
             try:
+                # Get current font sizes
+                table_font_size, name_font_size = self._get_table_font_sizes()
                 # Order number (column 0) - quick operation
                 order_item = NumericTableWidgetItem(formatted_data['order'])
                 order_item.setFlags(order_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
                 order_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                # Apply font size
+                font = order_item.font()
+                font.setPointSize(table_font_size)
+                order_item.setFont(font)
                 self.gallery_table.setItem(row, 0, order_item)
                 
                 # Added time (column 5)
@@ -6944,6 +7372,10 @@ class ImxUploadGUI(QMainWindow):
                 added_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
                 if formatted_data['added_tooltip']:
                     added_item.setToolTip(formatted_data['added_tooltip'])
+                # Apply font size
+                font = added_item.font()
+                font.setPointSize(table_font_size)
+                added_item.setFont(font)
                 self.gallery_table.setItem(row, 5, added_item)
                 
                 # Finished time (column 6)
@@ -6954,7 +7386,7 @@ class ImxUploadGUI(QMainWindow):
                     finished_item.setToolTip(formatted_data['finished_tooltip'])
                 try:
                     font = finished_item.font()
-                    font.setPointSize(8)
+                    font.setPointSize(table_font_size)
                     finished_item.setFont(font)
                 except Exception:
                     pass
@@ -7182,7 +7614,8 @@ class ImxUploadGUI(QMainWindow):
             order_item = NumericTableWidgetItem(item.insertion_order)
             order_item.setFlags(order_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
             order_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-            order_item.setFont(QFont("Arial", 9))
+            table_font_size, name_font_size = self._get_table_font_sizes()
+            order_item.setFont(QFont("Arial", table_font_size))
             self.gallery_table.setItem(row, 0, order_item)
             
             # Gallery name
@@ -7192,7 +7625,7 @@ class ImxUploadGUI(QMainWindow):
             # Gallery name column gets font size 9 (1px larger than others)
             try:
                 font = name_item.font()
-                font.setPointSize(9)
+                font.setPointSize(name_font_size)
                 name_item.setFont(font)
             except Exception:
                 pass
@@ -7205,7 +7638,7 @@ class ImxUploadGUI(QMainWindow):
             # Pseudo-center with compact font size (no monospacing)
             try:
                 font = uploaded_item.font()
-                font.setPointSize(8)
+                font.setPointSize(table_font_size)
                 uploaded_item.setFont(font)
             except Exception:
                 pass
@@ -7226,7 +7659,7 @@ class ImxUploadGUI(QMainWindow):
             added_item = QTableWidgetItem(added_text)
             added_item.setFlags(added_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
             added_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-            added_item.setFont(QFont("Arial", 8))  # Smaller font
+            added_item.setFont(QFont("Arial", table_font_size))  # Smaller font
             if added_tooltip:
                 added_item.setToolTip(added_tooltip)
             self.gallery_table.setItem(row, 5, added_item)
@@ -7240,7 +7673,7 @@ class ImxUploadGUI(QMainWindow):
                 finished_item.setToolTip(finished_tooltip)
             try:
                 font = finished_item.font()
-                font.setPointSize(8)
+                font.setPointSize(table_font_size)
                 finished_item.setFont(font)
             except Exception:
                 pass
@@ -7263,7 +7696,7 @@ class ImxUploadGUI(QMainWindow):
                 size_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)  # Consistent with other method
                 try:
                     font = size_item.font()
-                    font.setPointSize(8)
+                    font.setPointSize(table_font_size)
                     size_item.setFont(font)
                 except Exception:
                     pass
@@ -7291,7 +7724,7 @@ class ImxUploadGUI(QMainWindow):
             xfer_item.setFlags(xfer_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
             try:
                 font = xfer_item.font()
-                font.setPointSize(8)
+                font.setPointSize(table_font_size)
                 xfer_item.setFont(font)
             except Exception:
                 pass
@@ -7299,7 +7732,7 @@ class ImxUploadGUI(QMainWindow):
             try:
                 # Active transfers bold and full opacity; completed/failed semi-opaque and not bold
                 font = xfer_item.font()
-                font.setPointSize(8)
+                font.setPointSize(table_font_size)
                 if item.status == "uploading" and transfer_text:
                     font.setBold(True)
                     xfer_item.setFont(font)
@@ -7330,7 +7763,7 @@ class ImxUploadGUI(QMainWindow):
                 tmpl_item.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
             try:
                 font = tmpl_item.font()
-                font.setPointSize(8)
+                font.setPointSize(table_font_size)
                 tmpl_item.setFont(font)
             except Exception:
                 pass
@@ -7654,12 +8087,13 @@ class ImxUploadGUI(QMainWindow):
                 
             # Update essential columns directly since table update queue may not work
             # Upload progress column (column 2)
+            table_font_size, name_font_size = self._get_table_font_sizes()
             uploaded_text = f"{completed}/{total}" if total > 0 else "0/?"
             uploaded_item = QTableWidgetItem(uploaded_text)
             uploaded_item.setFlags(uploaded_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
             uploaded_item.setTextAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter)
             font = uploaded_item.font()
-            font.setPointSize(8)
+            font.setPointSize(table_font_size)
             uploaded_item.setFont(font)
             self.gallery_table.setItem(matched_row, 2, uploaded_item)
             
@@ -7688,7 +8122,7 @@ class ImxUploadGUI(QMainWindow):
                 xfer_item.setFlags(xfer_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
                 xfer_item.setTextAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter)
                 font = xfer_item.font()
-                font.setPointSize(8)
+                font.setPointSize(table_font_size)
                 font.setBold(True)
                 xfer_item.setFont(font)
                 # Use live transfer color
@@ -7726,7 +8160,7 @@ class ImxUploadGUI(QMainWindow):
                     finished_item.setToolTip(finished_tooltip)
                 try:
                     font = finished_item.font()
-                    font.setPointSize(8)
+                    font.setPointSize(table_font_size)
                     finished_item.setFont(font)
                 except Exception:
                     pass
@@ -7753,7 +8187,7 @@ class ImxUploadGUI(QMainWindow):
                 xfer_item.setTextAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter)
                 try:
                     font = xfer_item.font()
-                    font.setPointSize(8)
+                    font.setPointSize(table_font_size)
                     font.setBold(False)
                     xfer_item.setFont(font)
                     if final_text:
@@ -8115,18 +8549,48 @@ class ImxUploadGUI(QMainWindow):
                 # Force immediate button count update
                 self._update_button_counts()
     
+    def start_upload_for_item(self, path: str):
+        """Start upload for a specific item"""
+        try:
+            item = self.queue_manager.get_item(path)
+            if not item:
+                return False
+            
+            if item.status in ("ready", "paused", "incomplete", "upload_failed"):
+                success = self.queue_manager.start_item(path)
+                if success:
+                    self._update_specific_gallery_display(path)  # Update only this item
+                    print(f"Started upload for: {path}")
+                    return True
+                else:
+                    print(f"Failed to start upload for: {path}")
+                    return False
+            else:
+                print(f"Cannot start upload for item with status: {item.status}")
+                return False
+        except Exception as e:
+            print(f"Error starting upload for {path}: {e}")
+            return False
+
     def handle_view_button(self, path: str):
-        """Handle view button click - show BBCode for completed, file manager for failed"""
+        """Handle view button click - show BBCode for completed, start upload for ready, retry/file manager for failed"""
         item = self.queue_manager.get_item(path)
         if not item:
             return
         
         if item.status == "completed":
             self.view_bbcode_files(path)
-        elif item.status == "failed":
+        elif item.status == "ready":
+            # For ready items, start the upload
+            self.start_upload_for_item(path)
+        elif item.status == "upload_failed":
+            # For upload failures, retry the upload
+            self.start_upload_for_item(path)
+        elif item.status == "scan_failed" or item.status == "failed":
+            # For scan failures or generic failures, show file manager
             self.manage_gallery_files(path)
         else:
-            # For other statuses, show file manager as well
+            # For other statuses (uploading, paused, etc.), show file manager
             self.manage_gallery_files(path)
     
     
@@ -8468,6 +8932,15 @@ class ImxUploadGUI(QMainWindow):
             theme = str(self.settings.value('ui/theme', 'system'))
             self.apply_theme(theme)
         except Exception:
+            pass
+        
+        # Apply saved font size
+        try:
+            font_size = int(self.settings.value('ui/font_size', 9))
+            print(f"Loading font size from settings: {font_size}")
+            self.apply_font_size(font_size)
+        except Exception as e:
+            print(f"Error loading font size: {e}")
             pass
     
     def save_settings(self):
