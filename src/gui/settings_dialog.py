@@ -17,12 +17,45 @@ from PyQt6.QtWidgets import (
     QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView,
     QButtonGroup, QFrame, QSplitter
 )
-from PyQt6.QtCore import Qt, QSettings
-from PyQt6.QtGui import QIcon, QFont, QColor, QTextCharFormat
+from PyQt6.QtCore import Qt, QSettings, pyqtSignal
+from PyQt6.QtGui import QIcon, QFont, QColor, QTextCharFormat, QPixmap, QPainter, QPen, QDragEnterEvent, QDropEvent
 from PyQt6.QtGui import QSyntaxHighlighter
 
 # Import local modules
 from imxup import load_user_defaults, get_config_path, encrypt_password, decrypt_password
+
+
+class IconDropFrame(QFrame):
+    """Drop-enabled frame for icon files"""
+    
+    icon_dropped = pyqtSignal(str)  # Emits file path when icon is dropped
+    
+    def __init__(self, variant_type):
+        super().__init__()
+        self.variant_type = variant_type
+        self.setAcceptDrops(True)
+        
+    def dragEnterEvent(self, event: QDragEnterEvent):
+        """Handle drag enter event"""
+        if event.mimeData().hasUrls():
+            urls = event.mimeData().urls()
+            if len(urls) == 1:
+                file_path = urls[0].toLocalFile()
+                if file_path.lower().endswith(('.png', '.ico', '.svg', '.jpg', '.jpeg')):
+                    event.acceptProposedAction()
+                    return
+        event.ignore()
+        
+    def dropEvent(self, event: QDropEvent):
+        """Handle drop event"""
+        urls = event.mimeData().urls()
+        if len(urls) == 1:
+            file_path = urls[0].toLocalFile()
+            if file_path.lower().endswith(('.png', '.ico', '.svg', '.jpg', '.jpeg')):
+                self.icon_dropped.emit(file_path)
+                event.acceptProposedAction()
+                return
+        event.ignore()
 
 
 class ComprehensiveSettingsDialog(QDialog):
@@ -60,6 +93,7 @@ class ComprehensiveSettingsDialog(QDialog):
         self.setup_credentials_tab()
         self.setup_templates_tab()
         self.setup_tabs_tab()
+        self.setup_icons_tab()
         self.setup_logs_tab()
         self.setup_scanning_tab()
         
@@ -1030,6 +1064,182 @@ class ComprehensiveSettingsDialog(QDialog):
         self.pil_sampling_combo.currentIndexChanged.connect(lambda: self.mark_tab_dirty(5))
         
         self.tab_widget.addTab(scanning_widget, "Image Scanning")
+    
+    def setup_icons_tab(self):
+        """Setup the Icon Manager tab with improved side-by-side light/dark preview"""
+        icons_widget = QWidget()
+        layout = QVBoxLayout(icons_widget)
+        
+        # Header info
+        info_label = QLabel("Customize application icons. Single icons auto-adapt to themes, pairs give full control.")
+        info_label.setWordWrap(True)
+        info_label.setStyleSheet("color: #666; font-size: 10px; padding: 5px;")
+        layout.addWidget(info_label)
+        
+        # Create splitter for icon categories and preview
+        splitter = QSplitter(Qt.Orientation.Horizontal)
+        layout.addWidget(splitter)
+        
+        # Left side - Icon categories tree
+        left_widget = QWidget()
+        left_layout = QVBoxLayout(left_widget)
+        
+        category_group = QGroupBox("Icon Categories")
+        category_layout = QVBoxLayout(category_group)
+        
+        self.icon_tree = QListWidget()
+        self.icon_tree.itemSelectionChanged.connect(self.on_icon_selection_changed)
+        category_layout.addWidget(self.icon_tree)
+        
+        left_layout.addWidget(category_group)
+        splitter.addWidget(left_widget)
+        
+        # Right side - Icon details and customization
+        right_widget = QWidget()
+        right_layout = QVBoxLayout(right_widget)
+        
+        # Icon Details group
+        details_group = QGroupBox("Icon Details")
+        details_layout = QVBoxLayout(details_group)
+        
+        self.icon_name_label = QLabel("Select an icon to customize")
+        self.icon_name_label.setStyleSheet("font-weight: bold; font-size: 12px;")
+        details_layout.addWidget(self.icon_name_label)
+        
+        self.icon_description_label = QLabel("")
+        self.icon_description_label.setWordWrap(True)
+        self.icon_description_label.setStyleSheet("color: #666; font-size: 11px; padding: 2px;")
+        details_layout.addWidget(self.icon_description_label)
+        
+        right_layout.addWidget(details_group)
+        
+        
+        # Light/Dark Icon Preview - REDESIGNED
+        preview_group = QGroupBox("Icon Preview")
+        preview_layout = QVBoxLayout(preview_group)
+        
+        # Create side-by-side preview boxes
+        preview_boxes_layout = QHBoxLayout()
+        
+        # Light theme box
+        light_box = QGroupBox("Light Theme")
+        light_box_layout = QVBoxLayout(light_box)
+        
+        self.light_icon_frame = IconDropFrame('light')
+        self.light_icon_frame.setFixedSize(100, 100)
+        self.light_icon_frame.setStyleSheet("border: 2px dashed #ddd; background: #ffffff; border-radius: 8px;")
+        self.light_icon_frame.icon_dropped.connect(lambda path: self.handle_icon_drop_variant(path, 'light'))
+        light_frame_layout = QVBoxLayout(self.light_icon_frame)
+        light_frame_layout.setContentsMargins(0, 0, 0, 0)
+        
+        self.light_icon_label = QLabel()
+        self.light_icon_label.setFixedSize(96, 96)
+        self.light_icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.light_icon_label.setStyleSheet("border: none; background: transparent;")
+        self.light_icon_label.setScaledContents(True)  # Ensure proper scaling
+        light_frame_layout.addWidget(self.light_icon_label)
+        
+        light_box_layout.addWidget(self.light_icon_frame, 0, Qt.AlignmentFlag.AlignCenter)
+        
+        self.light_status_label = QLabel("No icon")
+        self.light_status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.light_status_label.setStyleSheet("font-size: 10px; color: #666; padding: 3px;")
+        light_box_layout.addWidget(self.light_status_label)
+        
+        light_controls = QHBoxLayout()
+        self.light_browse_btn = QPushButton("Browse")
+        self.light_browse_btn.clicked.connect(lambda: self.browse_for_icon_variant('light'))
+        self.light_browse_btn.setEnabled(False)
+        light_controls.addWidget(self.light_browse_btn)
+        
+        self.light_reset_btn = QPushButton("Reset")
+        self.light_reset_btn.clicked.connect(lambda: self.reset_icon_variant('light'))
+        self.light_reset_btn.setEnabled(False)
+        light_controls.addWidget(self.light_reset_btn)
+        
+        light_box_layout.addLayout(light_controls)
+        preview_boxes_layout.addWidget(light_box)
+        
+        # Dark theme box - FIXED SIZE TO MATCH LIGHT
+        dark_box = QGroupBox("Dark Theme")
+        dark_box_layout = QVBoxLayout(dark_box)
+        
+        self.dark_icon_frame = IconDropFrame('dark')
+        self.dark_icon_frame.setFixedSize(100, 100)  # Same size as light
+        self.dark_icon_frame.setStyleSheet("border: 2px dashed #555; background: #2b2b2b; border-radius: 8px;")
+        self.dark_icon_frame.icon_dropped.connect(lambda path: self.handle_icon_drop_variant(path, 'dark'))
+        dark_frame_layout = QVBoxLayout(self.dark_icon_frame)
+        dark_frame_layout.setContentsMargins(0, 0, 0, 0)
+        
+        self.dark_icon_label = QLabel()
+        self.dark_icon_label.setFixedSize(96, 96)  # Same size as light
+        self.dark_icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.dark_icon_label.setStyleSheet("border: none; background: transparent;")
+        self.dark_icon_label.setScaledContents(True)  # Ensure proper scaling
+        dark_frame_layout.addWidget(self.dark_icon_label)
+        
+        dark_box_layout.addWidget(self.dark_icon_frame, 0, Qt.AlignmentFlag.AlignCenter)
+        
+        self.dark_status_label = QLabel("No icon")
+        self.dark_status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.dark_status_label.setStyleSheet("font-size: 10px; color: #666; padding: 3px;")
+        dark_box_layout.addWidget(self.dark_status_label)
+        
+        dark_controls = QHBoxLayout()
+        self.dark_browse_btn = QPushButton("Browse")
+        self.dark_browse_btn.clicked.connect(lambda: self.browse_for_icon_variant('dark'))
+        self.dark_browse_btn.setEnabled(False)
+        dark_controls.addWidget(self.dark_browse_btn)
+        
+        self.dark_reset_btn = QPushButton("Reset")
+        self.dark_reset_btn.clicked.connect(lambda: self.reset_icon_variant('dark'))
+        self.dark_reset_btn.setEnabled(False)
+        dark_controls.addWidget(self.dark_reset_btn)
+        
+        dark_box_layout.addLayout(dark_controls)
+        preview_boxes_layout.addWidget(dark_box)
+        
+        preview_layout.addLayout(preview_boxes_layout)
+        
+        # Configuration indicator
+        self.config_type_label = QLabel("Configuration: Unknown")
+        self.config_type_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.config_type_label.setStyleSheet("font-weight: bold; font-size: 11px; color: #333; padding: 5px;")
+        preview_layout.addWidget(self.config_type_label)
+        
+        right_layout.addWidget(preview_group)
+        
+        # Global Actions group (simplified)
+        global_actions_group = QGroupBox("Global Actions")
+        global_actions_layout = QVBoxLayout(global_actions_group)
+        
+        global_button_layout = QHBoxLayout()
+        
+        reset_all_btn = QPushButton("Reset All Icons")
+        reset_all_btn.clicked.connect(self.reset_all_icons)
+        global_button_layout.addWidget(reset_all_btn)
+        
+        validate_btn = QPushButton("Validate Icons")
+        validate_btn.clicked.connect(self.validate_all_icons)
+        global_button_layout.addWidget(validate_btn)
+        
+        global_actions_layout.addLayout(global_button_layout)
+        right_layout.addWidget(global_actions_group)
+        
+        right_layout.addStretch()
+        splitter.addWidget(right_widget)
+        
+        # Set splitter proportions
+        splitter.setSizes([300, 500])
+        
+        # Initialize icon list
+        self.populate_icon_list()
+        
+        # Connect change signals - no need to mark dirty since icon replacement handles this
+        # self.light_icon_frame.icon_dropped.connect(lambda: self.mark_tab_dirty(6))
+        # self.dark_icon_frame.icon_dropped.connect(lambda: self.mark_tab_dirty(6))
+        
+        self.tab_widget.addTab(icons_widget, "Icon Manager")
         
     def browse_central_store(self):
         """Browse for central store directory"""
@@ -1346,14 +1556,18 @@ class ComprehensiveSettingsDialog(QDialog):
         try:
             if current_index == 0:  # General tab
                 return self._save_general_tab()
-            elif current_index == 1:  # Upload tab  
-                return self._save_upload_tab()
+            elif current_index == 1:  # Credentials tab  
+                return self._save_credentials_tab()
             elif current_index == 2:  # Templates tab
                 return self._save_templates_tab()
-            elif current_index == 3:  # Scanning tab
-                return self._save_scanning_tab()
-            elif current_index == 4:  # Tabs tab
+            elif current_index == 3:  # Tabs tab
                 return self._save_tabs_tab()
+            elif current_index == 4:  # Logs tab
+                return self._save_logs_tab()
+            elif current_index == 5:  # Scanning tab
+                return self._save_scanning_tab()
+            elif current_index == 6:  # Icons tab
+                return self._save_icons_tab()
             else:
                 return True
         except Exception as e:
@@ -1668,6 +1882,787 @@ class ComprehensiveSettingsDialog(QDialog):
         except Exception as e:
             print(f"Error saving tab settings: {e}")
             return False
+    
+    def _save_icons_tab(self):
+        """Save Icons tab settings and refresh main window icons"""
+        try:
+            # Import here to avoid circular imports
+            from .icon_manager import get_icon_manager
+            
+            # Get the icon manager instance
+            icon_manager = get_icon_manager()
+            if icon_manager:
+                # Refresh the icon cache to ensure changes are loaded
+                icon_manager.refresh_cache()
+                
+                # Signal the main window to refresh all status icons
+                if hasattr(self, 'parent') and self.parent and hasattr(self.parent, 'refresh_all_status_icons'):
+                    self.parent.refresh_all_status_icons()
+                elif hasattr(self, 'parent') and self.parent and hasattr(self.parent, '_update_all_status_icons'):
+                    self.parent._update_all_status_icons()
+                
+                print("Icon changes applied successfully")
+                return True
+            else:
+                print("Warning: IconManager not available")
+                return True
+                
+        except Exception as e:
+            print(f"Error saving icons tab: {e}")
+            from PyQt6.QtWidgets import QMessageBox
+            QMessageBox.critical(self, "Error", f"Failed to apply icon changes: {str(e)}")
+            return False
+    
+    def _save_logs_tab(self):
+        """Save Logs tab settings (placeholder for now)"""
+        try:
+            # The logs tab is mostly for viewing, not configuration
+            # Add any logs-specific settings here if needed in the future
+            return True
+        except Exception as e:
+            print(f"Error saving logs tab: {e}")
+            return False
+
+    def populate_icon_list(self):
+        """Populate the icon list with all available icons"""
+        from .icon_manager import IconManager
+        
+        # Get icon categories from the icon manager
+        icon_categories = {
+            "Status Icons": [
+                ("status_completed", "Completed", "Gallery upload completed successfully"),
+                ("status_failed", "Failed", "Gallery upload failed"),
+                ("status_uploading", "Uploading", "Currently uploading gallery"),
+                ("status_paused", "Paused", "Upload paused by user"),
+                ("status_queued", "Queued", "Waiting in upload queue"),
+                ("status_ready", "Ready", "Ready to start upload"),
+                ("status_pending", "Pending", "Preparing for upload"),
+                ("status_incomplete", "Incomplete", "Upload partially completed"),
+                ("status_scan_failed", "Scan Failed", "Failed to scan gallery images"),
+                ("status_scanning", "Scanning", "Currently scanning gallery"),
+            ],
+            "Action Icons": [
+                ("action_start", "Start", "Start gallery upload"),
+                ("action_stop", "Stop", "Stop current upload"),
+                ("action_view", "View", "View gallery online"),
+                ("action_view_error", "View Error", "View error details"),
+                ("action_cancel", "Cancel", "Cancel upload"),
+                ("action_resume", "Resume", "Resume paused upload"),
+            ],
+            "UI Icons": [
+                ("templates", "Templates", "Template management icon"),
+                ("credentials", "Credentials", "Login credentials icon"),
+                ("main_window", "Main Window", "Application window icon"),
+                ("app_icon", "Application", "Main application icon"),
+            ]
+        }
+        
+        self.icon_tree.clear()
+        self.icon_data = {}  # Store full icon information
+        
+        for category, icons in icon_categories.items():
+            # Add category header
+            category_item = QListWidgetItem(f"=== {category} ===")
+            category_item.setFlags(Qt.ItemFlag.NoItemFlags)  # Not selectable
+            category_item.setBackground(QColor(240, 240, 240))
+            font = category_item.font()
+            font.setBold(True)
+            category_item.setFont(font)
+            self.icon_tree.addItem(category_item)
+            
+            # Add icons in category
+            for icon_key, display_name, description in icons:
+                item = QListWidgetItem(f"  {display_name}")
+                item.setData(Qt.ItemDataRole.UserRole, icon_key)
+                self.icon_tree.addItem(item)
+                
+                # Store full data
+                self.icon_data[icon_key] = {
+                    'display_name': display_name,
+                    'description': description,
+                    'category': category
+                }
+    
+    def on_icon_selection_changed(self):
+        """Handle icon selection change - now updates both light and dark previews"""
+        current_item = self.icon_tree.currentItem()
+        if not current_item or not current_item.data(Qt.ItemDataRole.UserRole):
+            # Category header or no selection - clear everything
+            self.icon_name_label.setText("Select an icon to customize")
+            self.icon_description_label.setText("")
+            self.config_type_label.setText("Configuration: Unknown")
+            
+            # Clear light preview
+            self.light_icon_label.clear()
+            self.light_status_label.setText("No icon")
+            self.light_browse_btn.setEnabled(False)
+            self.light_reset_btn.setEnabled(False)
+            
+            # Clear dark preview
+            self.dark_icon_label.clear()
+            self.dark_status_label.setText("No icon")
+            self.dark_browse_btn.setEnabled(False)
+            self.dark_reset_btn.setEnabled(False)
+            return
+        
+        icon_key = current_item.data(Qt.ItemDataRole.UserRole)
+        icon_info = self.icon_data.get(icon_key, {})
+        
+        # Update basic info
+        self.icon_name_label.setText(icon_info.get('display_name', icon_key))
+        self.icon_description_label.setText(icon_info.get('description', ''))
+        
+        # Update both light and dark previews
+        self.update_icon_previews_dual(icon_key)
+        
+        # Enable controls
+        self.light_browse_btn.setEnabled(True)
+        self.light_reset_btn.setEnabled(True)
+        self.dark_browse_btn.setEnabled(True) 
+        self.dark_reset_btn.setEnabled(True)
+    
+    def update_selected_icon_preview(self, icon_key):
+        """Update the preview of the selected icon"""
+        try:
+            from .icon_manager import get_icon_manager
+            icon_manager = get_icon_manager()
+            
+            if not icon_manager:
+                self.current_icon_label.setText("N/A")
+                return
+            
+            # Get theme state from combo
+            theme_text = self.theme_preview_combo.currentText()
+            is_dark_theme = "Dark" in theme_text
+            is_selected = "Selected" in theme_text
+            
+            # Get icon based on current theme settings
+            icon = icon_manager.get_icon(icon_key, None, is_dark_theme, is_selected)
+            
+            if not icon.isNull():
+                # Display icon
+                pixmap = icon.pixmap(24, 24)
+                self.current_icon_label.setPixmap(pixmap)
+            else:
+                self.current_icon_label.setText("Missing")
+            
+            # Update status information
+            icon_config = icon_manager.ICON_MAP.get(icon_key, "Unknown")
+            
+            if isinstance(icon_config, str):
+                self.theme_info_label.setText("Single icon (auto-adapt)")
+                # Check if file exists
+                import os
+                icon_path = os.path.join(icon_manager.assets_dir, icon_config)
+                if os.path.exists(icon_path):
+                    self.default_status_label.setText("Using: Default file")
+                else:
+                    self.default_status_label.setText("Using: Qt fallback")
+            elif isinstance(icon_config, list):
+                self.theme_info_label.setText("Light/Dark pair")
+                # Check if files exist
+                import os
+                light_exists = os.path.exists(os.path.join(icon_manager.assets_dir, icon_config[0]))
+                dark_exists = len(icon_config) > 1 and os.path.exists(os.path.join(icon_manager.assets_dir, icon_config[1]))
+                
+                if light_exists and dark_exists:
+                    self.default_status_label.setText("Using: Both files")
+                elif light_exists:
+                    self.default_status_label.setText("Using: Light only")
+                else:
+                    self.default_status_label.setText("Using: Qt fallback")
+            else:
+                self.theme_info_label.setText("Invalid config")
+                self.default_status_label.setText("Using: Qt fallback")
+                
+        except Exception as e:
+            print(f"Error updating icon preview: {e}")
+            self.current_icon_label.setText("Error")
+    
+    def update_icon_previews(self):
+        """Update all icon previews when theme changes (legacy compatibility)"""
+        current_item = self.icon_tree.currentItem()
+        if current_item and current_item.data(Qt.ItemDataRole.UserRole):
+            icon_key = current_item.data(Qt.ItemDataRole.UserRole)
+            self.update_icon_previews_dual(icon_key)
+    
+    def update_icon_previews_dual(self, icon_key):
+        """Update both light and dark icon previews with proper state detection"""
+        try:
+            from .icon_manager import get_icon_manager
+            icon_manager = get_icon_manager()
+            
+            if not icon_manager:
+                self.light_status_label.setText("Manager unavailable")
+                self.dark_status_label.setText("Manager unavailable")
+                self.config_type_label.setText("Configuration: Error")
+                return
+            
+            # Get icon configuration
+            icon_config = icon_manager.ICON_MAP.get(icon_key, "Unknown")
+            
+            # Determine configuration type and update label
+            if isinstance(icon_config, str):
+                self.config_type_label.setText("Configuration: Single icon (auto-adapts)")
+                self.config_type_label.setStyleSheet("font-weight: bold; font-size: 10px; color: #0066cc; padding: 5px;")
+            elif isinstance(icon_config, list):
+                self.config_type_label.setText("Configuration: Light/Dark pair (manual control)")
+                self.config_type_label.setStyleSheet("font-weight: bold; font-size: 10px; color: #cc6600; padding: 5px;")
+            else:
+                self.config_type_label.setText("Configuration: Invalid")
+                self.config_type_label.setStyleSheet("font-weight: bold; font-size: 10px; color: #cc0000; padding: 5px;")
+            
+            # Update light theme preview (unselected light theme)
+            light_icon = icon_manager.get_icon(icon_key, None, is_dark_theme=False, is_selected=False, requested_size=96)
+            if not light_icon.isNull():
+                pixmap = light_icon.pixmap(96, 96)  # Match the label size
+                self.light_icon_label.setPixmap(pixmap)
+                
+                # Check if this is inverted from original
+                if isinstance(icon_config, str):
+                    # Single icon - check if this would be inverted
+                    if icon_manager._needs_inversion(is_dark_theme=False, is_selected=False):
+                        self.light_status_label.setText("Original (inverted)")
+                        self.light_status_label.setStyleSheet("font-size: 9px; color: #cc6600;")
+                    else:
+                        self.light_status_label.setText("Original")
+                        self.light_status_label.setStyleSheet("font-size: 9px; color: #006600;")
+                else:
+                    self.light_status_label.setText("Light variant")
+                    self.light_status_label.setStyleSheet("font-size: 9px; color: #006600;")
+            else:
+                self.light_icon_label.setText("Missing")
+                self.light_status_label.setText("Qt fallback")
+                self.light_status_label.setStyleSheet("font-size: 9px; color: #cc0000;")
+            
+            # Update dark theme preview (unselected dark theme) 
+            dark_icon = icon_manager.get_icon(icon_key, None, is_dark_theme=True, is_selected=False, requested_size=96)
+            if not dark_icon.isNull():
+                pixmap = dark_icon.pixmap(96, 96)  # Match the label size
+                self.dark_icon_label.setPixmap(pixmap)
+                
+                # Check if this is inverted from original
+                if isinstance(icon_config, str):
+                    # Single icon - check if this would be inverted
+                    if icon_manager._needs_inversion(is_dark_theme=True, is_selected=False):
+                        self.dark_status_label.setText("Original (inverted)")
+                        self.dark_status_label.setStyleSheet("font-size: 9px; color: #cc6600;")
+                    else:
+                        self.dark_status_label.setText("Original")
+                        self.dark_status_label.setStyleSheet("font-size: 9px; color: #006600;")
+                else:
+                    self.dark_status_label.setText("Dark variant")
+                    self.dark_status_label.setStyleSheet("font-size: 9px; color: #006600;")
+            else:
+                self.dark_icon_label.setText("Missing")
+                self.dark_status_label.setText("Qt fallback")
+                self.dark_status_label.setStyleSheet("font-size: 9px; color: #cc0000;")
+            
+            # Update reset button states based on whether icons are default
+            self._update_reset_button_states(icon_key, icon_config)
+                
+        except Exception as e:
+            print(f"Error updating dual icon previews: {e}")
+            self.light_status_label.setText("Error")
+            self.dark_status_label.setText("Error")
+            self.config_type_label.setText("Configuration: Error")
+    
+    def _update_reset_button_states(self, icon_key, icon_config):
+        """Update reset button states based on whether icons are at default state"""
+        from .icon_manager import get_icon_manager
+        import os
+        
+        icon_manager = get_icon_manager()
+        if not icon_manager:
+            return
+        
+        try:
+            if isinstance(icon_config, str):
+                # Single icon - check if file exists (custom) vs using default
+                icon_path = os.path.join(icon_manager.assets_dir, icon_config)
+                has_custom_file = os.path.exists(icon_path)
+                
+                # Enable reset only if we have a backup (can actually restore)
+                backup_exists = os.path.exists(icon_path + ".backup")
+                
+                self.light_reset_btn.setEnabled(backup_exists)
+                self.dark_reset_btn.setEnabled(backup_exists)
+                
+            elif isinstance(icon_config, list):
+                # Light/dark pair - check each file
+                light_path = os.path.join(icon_manager.assets_dir, icon_config[0])
+                dark_path = os.path.join(icon_manager.assets_dir, icon_config[1]) if len(icon_config) > 1 else None
+                
+                light_backup_exists = os.path.exists(light_path + ".backup")
+                dark_backup_exists = dark_path and os.path.exists(dark_path + ".backup")
+                
+                self.light_reset_btn.setEnabled(light_backup_exists)
+                self.dark_reset_btn.setEnabled(dark_backup_exists if dark_path else False)
+            else:
+                # Invalid config
+                self.light_reset_btn.setEnabled(False)
+                self.dark_reset_btn.setEnabled(False)
+                
+        except Exception as e:
+            print(f"Error updating reset button states: {e}")
+            # Enable by default if we can't determine state
+            self.light_reset_btn.setEnabled(True)
+            self.dark_reset_btn.setEnabled(True)
+    
+    def handle_icon_drop(self, file_path):
+        """Handle dropped icon file"""
+        current_item = self.icon_tree.currentItem()
+        if not current_item or not current_item.data(Qt.ItemDataRole.UserRole):
+            QMessageBox.warning(self, "No Icon Selected", 
+                              "Please select an icon from the list first.")
+            return
+        
+        icon_key = current_item.data(Qt.ItemDataRole.UserRole)
+        
+        # Validate file type
+        if not file_path.lower().endswith(('.png', '.ico', '.svg', '.jpg', '.jpeg')):
+            QMessageBox.warning(self, "Invalid File Type", 
+                              "Please select a valid image file (PNG, ICO, SVG, JPG).")
+            return
+        
+        # Show confirmation
+        msg_box = QMessageBox(self)
+        msg_box.setWindowTitle("Replace Icon")
+        msg_box.setText(f"Replace the icon for '{self.icon_data[icon_key]['display_name']}' with the selected file?")
+        msg_box.setInformativeText(f"File: {file_path}")
+        msg_box.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        
+        if msg_box.exec() == QMessageBox.StandardButton.Yes:
+            self.replace_icon_file(icon_key, file_path)
+    
+    def handle_icon_drop_variant(self, file_path, variant):
+        """Handle dropped icon file for specific variant (light/dark)"""
+        current_item = self.icon_tree.currentItem()
+        if not current_item or not current_item.data(Qt.ItemDataRole.UserRole):
+            QMessageBox.warning(self, "No Icon Selected", 
+                              "Please select an icon from the list first.")
+            return
+        
+        icon_key = current_item.data(Qt.ItemDataRole.UserRole)
+        
+        # Validate file type
+        if not file_path.lower().endswith(('.png', '.ico', '.svg', '.jpg', '.jpeg')):
+            QMessageBox.warning(self, "Invalid File Type", 
+                              "Please select a valid image file (PNG, ICO, SVG, JPG).")
+            return
+        
+        # Show confirmation
+        variant_name = "Light" if variant == 'light' else "Dark"
+        msg_box = QMessageBox(self)
+        msg_box.setWindowTitle("Replace Icon")
+        msg_box.setText(f"Replace the {variant_name.lower()} theme icon for '{self.icon_data[icon_key]['display_name']}' with the selected file?")
+        msg_box.setInformativeText(f"File: {file_path}")
+        msg_box.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        
+        if msg_box.exec() == QMessageBox.StandardButton.Yes:
+            self.replace_icon_file_variant(icon_key, file_path, variant)
+    
+    def browse_for_icon_variant(self, variant):
+        """Browse for icon file for specific light/dark variant"""
+        current_item = self.icon_tree.currentItem()
+        if not current_item or not current_item.data(Qt.ItemDataRole.UserRole):
+            return
+        
+        icon_key = current_item.data(Qt.ItemDataRole.UserRole)
+        
+        file_dialog = QFileDialog(self)
+        file_dialog.setWindowTitle(f"Select {variant.title()} Theme Icon")
+        file_dialog.setFileMode(QFileDialog.FileMode.ExistingFile)
+        file_dialog.setNameFilter("Image files (*.png *.ico *.svg *.jpg *.jpeg)")
+        
+        if file_dialog.exec() == QFileDialog.DialogCode.Accepted:
+            selected_files = file_dialog.selectedFiles()
+            if selected_files:
+                self.replace_icon_file_variant(icon_key, selected_files[0], variant)
+    
+    def browse_for_icon(self):
+        """Browse for icon file (legacy compatibility - defaults to light variant)"""
+        self.browse_for_icon_variant('light')
+    
+    def replace_icon_file(self, icon_key, new_file_path):
+        """Replace an icon file with a new one"""
+        try:
+            from .icon_manager import get_icon_manager
+            import shutil
+            import os
+            
+            icon_manager = get_icon_manager()
+            if not icon_manager:
+                QMessageBox.warning(self, "Error", "Icon manager not available.")
+                return
+            
+            # Get current icon configuration
+            icon_config = icon_manager.ICON_MAP.get(icon_key)
+            if not icon_config:
+                QMessageBox.warning(self, "Error", f"Unknown icon key: {icon_key}")
+                return
+            
+            # Determine target filename
+            if isinstance(icon_config, str):
+                target_filename = icon_config
+            elif isinstance(icon_config, list) and len(icon_config) > 0:
+                target_filename = icon_config[0]  # Replace light version for now
+            else:
+                QMessageBox.warning(self, "Error", "Invalid icon configuration.")
+                return
+            
+            target_path = os.path.join(icon_manager.assets_dir, target_filename)
+            
+            # Create backup if original exists
+            if os.path.exists(target_path):
+                backup_path = target_path + ".backup"
+                shutil.copy2(target_path, backup_path)
+            
+            # Copy new file
+            shutil.copy2(new_file_path, target_path)
+            
+            # Clear icon cache to force reload
+            icon_manager.refresh_cache()
+            
+            # Update preview and refresh main window icons
+            self.update_selected_icon_preview(icon_key)
+            
+            # Refresh main window if it exists
+            if self.parent and hasattr(self.parent, 'refresh_icons'):
+                self.parent.refresh_icons()
+            
+            # Don't mark tab as dirty - icon changes are saved immediately
+            
+            QMessageBox.information(self, "Icon Updated", 
+                                  f"Icon '{self.icon_data[icon_key]['display_name']}' has been updated successfully.")
+            
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to replace icon: {str(e)}")
+    
+    def replace_icon_file_variant(self, icon_key, new_file_path, variant):
+        """Replace an icon file for a specific light/dark variant"""
+        try:
+            from .icon_manager import get_icon_manager
+            import shutil
+            import os
+            
+            icon_manager = get_icon_manager()
+            if not icon_manager:
+                QMessageBox.warning(self, "Error", "Icon manager not available.")
+                return
+            
+            # Get current icon configuration
+            icon_config = icon_manager.ICON_MAP.get(icon_key)
+            if not icon_config:
+                QMessageBox.warning(self, "Error", f"Unknown icon key: {icon_key}")
+                return
+            
+            # Determine target filename based on variant and current config
+            if isinstance(icon_config, str):
+                # Single icon - create dark variant filename when needed
+                if variant == 'light':
+                    target_filename = icon_config
+                else:  # dark variant
+                    # Create dark variant filename (add -dark before extension)
+                    base, ext = os.path.splitext(icon_config)
+                    target_filename = f"{base}-dark{ext}"
+                    
+                    # Always convert to light/dark pair for consistency
+                    new_config = [icon_config, target_filename]
+                    icon_manager.ICON_MAP[icon_key] = new_config
+            elif isinstance(icon_config, list) and len(icon_config) >= 2:
+                # Icon pair - choose based on variant
+                if variant == 'light':
+                    target_filename = icon_config[0]
+                else:  # dark
+                    target_filename = icon_config[1]
+            elif isinstance(icon_config, list) and len(icon_config) == 1:
+                # Single item list - treat as single icon
+                target_filename = icon_config[0]
+            else:
+                QMessageBox.warning(self, "Error", "Invalid icon configuration.")
+                return
+            
+            target_path = os.path.join(icon_manager.assets_dir, target_filename)
+            
+            # Create backup if original exists
+            if os.path.exists(target_path):
+                backup_path = target_path + ".backup"
+                shutil.copy2(target_path, backup_path)
+            
+            # Copy new file
+            shutil.copy2(new_file_path, target_path)
+            
+            # Clear icon cache to force reload
+            icon_manager.refresh_cache()
+            
+            # Update both previews and refresh main window icons
+            self.update_icon_previews_dual(icon_key)
+            
+            # Refresh main window if it exists
+            if self.parent and hasattr(self.parent, 'refresh_icons'):
+                self.parent.refresh_icons()
+            
+            # Don't mark tab as dirty - icon changes are saved immediately
+            
+            variant_name = f"{variant.title()} theme"
+            icon_name = self.icon_data[icon_key]['display_name']
+            QMessageBox.information(self, "Icon Updated", 
+                                  f"{variant_name} icon for '{icon_name}' has been updated successfully.")
+            
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to replace {variant} icon: {str(e)}")
+    
+    def reset_icon_variant(self, variant):
+        """Reset a specific light/dark icon variant to default"""
+        current_item = self.icon_tree.currentItem()
+        if not current_item or not current_item.data(Qt.ItemDataRole.UserRole):
+            return
+        
+        icon_key = current_item.data(Qt.ItemDataRole.UserRole)
+        icon_name = self.icon_data[icon_key]['display_name']
+        variant_name = f"{variant.title()} theme"
+        
+        msg_box = QMessageBox(self)
+        msg_box.setWindowTitle("Reset Icon Variant")
+        msg_box.setText(f"Reset the {variant_name.lower()} icon for '{icon_name}' to default?")
+        msg_box.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        
+        if msg_box.exec() == QMessageBox.StandardButton.Yes:
+            self.restore_default_icon_variant(icon_key, variant)
+    
+    def restore_default_icon_variant(self, icon_key, variant):
+        """Restore a specific light/dark icon variant to its default state"""
+        try:
+            from .icon_manager import get_icon_manager
+            import os
+            
+            icon_manager = get_icon_manager()
+            if not icon_manager:
+                return
+            
+            # Get current icon configuration
+            icon_config = icon_manager.ICON_MAP.get(icon_key)
+            if not icon_config:
+                return
+            
+            # Determine target filename based on variant
+            if isinstance(icon_config, str):
+                # Single icon - reset applies to the single file
+                target_filename = icon_config
+            elif isinstance(icon_config, list):
+                if variant == 'light' and len(icon_config) > 0:
+                    target_filename = icon_config[0]
+                elif variant == 'dark' and len(icon_config) > 1:
+                    target_filename = icon_config[1]
+                else:
+                    QMessageBox.information(self, "No Reset Needed", 
+                                          f"No {variant} variant defined for this icon.")
+                    return
+            else:
+                return
+            
+            target_path = os.path.join(icon_manager.assets_dir, target_filename)
+            backup_path = target_path + ".backup"
+            
+            restored = False
+            if os.path.exists(backup_path):
+                # Restore from backup
+                import shutil
+                shutil.move(backup_path, target_path)
+                restored = True
+            else:
+                # No backup available - cannot reset to original
+                QMessageBox.warning(self, "Cannot Reset", 
+                                  f"No backup available for this icon. Original file was not backed up.\n\n"
+                                  f"To reset, you'll need to manually restore the original {target_filename} file.")
+                return
+            
+            if restored:
+                # Clear icon cache to force reload
+                icon_manager.refresh_cache()
+                
+                # Update both previews and refresh main window icons
+                self.update_icon_previews_dual(icon_key)
+                
+                # Refresh main window if it exists
+                if self.parent and hasattr(self.parent, 'refresh_icons'):
+                    self.parent.refresh_icons()
+                
+                # Don't mark tab as dirty - reset is an immediate filesystem operation
+                
+                icon_name = self.icon_data[icon_key]['display_name']
+                variant_name = f"{variant.title()} theme"
+                QMessageBox.information(self, "Icon Reset", 
+                                      f"{variant_name} icon for '{icon_name}' has been reset to default.")
+            else:
+                QMessageBox.information(self, "No Changes", 
+                                      f"No custom {variant} icon found to reset.")
+            
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to reset {variant} icon: {str(e)}")
+    
+    def reset_selected_icon(self):
+        """Reset selected icon to default"""
+        current_item = self.icon_tree.currentItem()
+        if not current_item or not current_item.data(Qt.ItemDataRole.UserRole):
+            return
+        
+        icon_key = current_item.data(Qt.ItemDataRole.UserRole)
+        
+        msg_box = QMessageBox(self)
+        msg_box.setWindowTitle("Reset Icon")
+        msg_box.setText(f"Reset the icon for '{self.icon_data[icon_key]['display_name']}' to default?")
+        msg_box.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        
+        if msg_box.exec() == QMessageBox.StandardButton.Yes:
+            self.restore_default_icon(icon_key)
+    
+    def restore_default_icon(self, icon_key):
+        """Restore an icon to its default state"""
+        try:
+            from .icon_manager import get_icon_manager
+            import os
+            
+            icon_manager = get_icon_manager()
+            if not icon_manager:
+                return
+            
+            # Get current icon configuration
+            icon_config = icon_manager.ICON_MAP.get(icon_key)
+            if not icon_config:
+                return
+            
+            # Determine target filename(s)
+            filenames = []
+            if isinstance(icon_config, str):
+                filenames = [icon_config]
+            elif isinstance(icon_config, list):
+                filenames = icon_config
+            
+            # Restore from backup if available
+            restored = False
+            for filename in filenames:
+                target_path = os.path.join(icon_manager.assets_dir, filename)
+                backup_path = target_path + ".backup"
+                
+                if os.path.exists(backup_path):
+                    os.rename(backup_path, target_path)
+                    restored = True
+                elif os.path.exists(target_path):
+                    # If no backup, just remove custom file to use fallback
+                    os.remove(target_path)
+                    restored = True
+            
+            if restored:
+                # Clear icon cache to force reload
+                icon_manager.refresh_cache()
+                
+                # Update preview
+                self.update_selected_icon_preview(icon_key)
+                
+                # Mark tab as dirty
+                self.mark_tab_dirty(6)  # Icons tab
+                
+                QMessageBox.information(self, "Icon Reset", 
+                                      f"Icon '{self.icon_data[icon_key]['display_name']}' has been reset to default.")
+            else:
+                QMessageBox.information(self, "No Changes", 
+                                      "No custom icon found to reset.")
+            
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to reset icon: {str(e)}")
+    
+    def reset_all_icons(self):
+        """Reset all icons to defaults"""
+        msg_box = QMessageBox(self)
+        msg_box.setWindowTitle("Reset All Icons")
+        msg_box.setText("Reset ALL icons to their default state?")
+        msg_box.setInformativeText("This will remove all custom icon files and restore defaults.")
+        msg_box.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        msg_box.setDefaultButton(QMessageBox.StandardButton.No)
+        
+        if msg_box.exec() == QMessageBox.StandardButton.Yes:
+            try:
+                from .icon_manager import get_icon_manager
+                
+                icon_manager = get_icon_manager()
+                if not icon_manager:
+                    return
+                
+                reset_count = 0
+                for icon_key in icon_manager.ICON_MAP.keys():
+                    try:
+                        self.restore_default_icon(icon_key)
+                        reset_count += 1
+                    except Exception as e:
+                        print(f"Failed to reset {icon_key}: {e}")
+                
+                # Update current preview if any
+                current_item = self.icon_tree.currentItem()
+                if current_item and current_item.data(Qt.ItemDataRole.UserRole):
+                    icon_key = current_item.data(Qt.ItemDataRole.UserRole)
+                    self.update_selected_icon_preview(icon_key)
+                
+                QMessageBox.information(self, "Reset Complete", 
+                                      f"Reset {reset_count} icons to default state.")
+                
+            except Exception as e:
+                QMessageBox.critical(self, "Error", f"Failed to reset icons: {str(e)}")
+    
+    def validate_all_icons(self):
+        """Validate all icon files and show report"""
+        try:
+            from .icon_manager import get_icon_manager
+            
+            icon_manager = get_icon_manager()
+            if not icon_manager:
+                QMessageBox.warning(self, "Error", "Icon manager not available.")
+                return
+            
+            # Run validation
+            result = icon_manager.validate_icons(report=False)
+            
+            # Show results in a dialog
+            dialog = QDialog(self)
+            dialog.setWindowTitle("Icon Validation Report")
+            dialog.resize(500, 400)
+            
+            layout = QVBoxLayout(dialog)
+            
+            # Summary
+            summary_label = QLabel(f"Total icons: {len(icon_manager.ICON_MAP)}\n"
+                                 f"Found: {len(result['found'])}\n"
+                                 f"Missing: {len(result['missing'])}")
+            summary_label.setStyleSheet("font-weight: bold; padding: 10px;")
+            layout.addWidget(summary_label)
+            
+            # Details
+            details = QPlainTextEdit()
+            details.setReadOnly(True)
+            
+            if result['found']:
+                details.appendPlainText("=== FOUND ICONS ===")
+                for item in result['found']:
+                    details.appendPlainText(f"✓ {item}")
+                details.appendPlainText("")
+            
+            if result['missing']:
+                details.appendPlainText("=== MISSING ICONS ===")
+                for item in result['missing']:
+                    details.appendPlainText(f"✗ {item}")
+            
+            layout.addWidget(details)
+            
+            # Close button
+            close_btn = QPushButton("Close")
+            close_btn.clicked.connect(dialog.accept)
+            layout.addWidget(close_btn)
+            
+            dialog.exec()
+            
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to validate icons: {str(e)}")
 
 
 # Import the dialog classes that will be moved to imxup_dialogs.py
@@ -1728,7 +2723,7 @@ class CredentialSetupDialog(QDialog):
         
         # Info text
         info_text = QLabel(
-            "IMX.to Gallery Uploader credentials:\n\n"
+            "IMX.to credentials:\n\n"
             "• API Key: Required for uploading files\n"
             "• Username/Password: Required for naming galleries\n\n"
             "Without username/password, all galleries will be named \'untitled gallery\'\n\n"

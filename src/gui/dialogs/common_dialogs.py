@@ -77,7 +77,7 @@ class CredentialSetupDialog(QDialog):
     def _create_info_widget(self) -> QLabel:
         """Create the info text widget"""
         info_text = QLabel(
-            "IMX.to Gallery Uploader credentials:\n\n"
+            "IMX.to credentials:\n\n"
             "• API Key: Required for uploading files\n"
             "• Username/Password: Required for naming galleries\n\n"
             "Without username/password, all galleries will be named 'untitled gallery'\n\n"

@@ -92,14 +92,28 @@ class TableProgressWidget(QWidget):
         elif status == "uploading":
             self.progress_bar.setStyleSheet("""
                 QProgressBar {
-                    border: 1px solid #48a2de;
+                    border: 2px solid #6cb4e4;
                     border-radius: 3px;
                     text-align: center;
                     font-size: 9px;
                     font-weight: bold;
                 }
                 QProgressBar::chunk {
-                    background-color: #48a2de;
+                    background-color: #6cb4e4;
+                    border-radius: 2px;
+                }
+            """)
+        elif status == "incomplete":
+            self.progress_bar.setStyleSheet("""
+                QProgressBar {
+                    border: 1px solid #f39c12;
+                    border-radius: 3px;
+                    text-align: center;
+                    font-size: 9px;
+                    font-weight: bold;
+                }
+                QProgressBar::chunk {
+                    background-color: #f39c12;
                     border-radius: 2px;
                 }
             """)

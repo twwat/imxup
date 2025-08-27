@@ -17,9 +17,17 @@ class SplashScreen(QSplashScreen):
     
     def __init__(self):
         # Create a base pixmap for the splash screen
-        pixmap = QPixmap(460, 300)
-        pixmap.fill(QColor(248, 237, 255))  # Dark blue-gray background
+        pixmap = QPixmap(620, 460)  # Increased height for logo
+        pixmap.fill(QColor(29, 22, 22))  # Dark blue-gray background
         super().__init__(pixmap, Qt.WindowType.WindowStaysOnTopHint)
+        
+        # Load the imxup logo
+        try:
+            self.logo_pixmap = QPixmap(os.path.join(os.path.dirname(os.path.dirname(__file__)), '..', 'assets', 'imxup2.png'))
+            if self.logo_pixmap.isNull():
+                self.logo_pixmap = None
+        except Exception:
+            self.logo_pixmap = None
         self.init_action_words = [
             "initializing", "activating actuators", "establishing alibi", "connecting to skynet",
             "fabricating evidence", "concocting plan", "devising exit strategy", "improvising",
@@ -30,7 +38,7 @@ class SplashScreen(QSplashScreen):
             "observifying", "calibrating", "accelerating", "optimizing", "flipping tables",
             "exorcising", "wiping back to front"]
         self.status_text = random.choice(self.init_action_words).title()
-        self.progress_dots = ""
+        self.progress_dots = "•"
         
         # Random action words and objects
         self.action_words = [
@@ -58,7 +66,7 @@ class SplashScreen(QSplashScreen):
             from imxup import __version__
             self.version = f"{__version__}"
         except:
-            self.version = "Version 69"
+            self.version = "v69"
         
         # Auto-cycling timer for random status updates
         self.random_timer = QTimer()
@@ -76,76 +84,87 @@ class SplashScreen(QSplashScreen):
         painter.setPen(QColor(154, 126, 111))
         painter.drawRect(0, 0, self.width() - 1, self.height() - 1)
         
-        # Draw title at top
-        painter.setPen(QColor(203, 73, 25))
-        title_font = QFont("Arial", 26, QFont.Weight.Bold)
-        painter.setFont(title_font)
-        title_text = "IMXup"
-        title_rect = painter.fontMetrics().boundingRect(title_text)
-        title_x = (self.width() - title_rect.width()) // 2
-        painter.drawText(title_x, 40, title_text)
+        # Draw logo at top if available
+        y_offset = 16
+        if self.logo_pixmap and not self.logo_pixmap.isNull():
+            # Scale logo to fit nicely at top
+            logo_height = 140
+            logo_scaled = self.logo_pixmap.scaledToHeight(logo_height, Qt.TransformationMode.SmoothTransformation)
+            logo_x = (self.width() - logo_scaled.width()) // 2
+            painter.drawPixmap(logo_x, y_offset, logo_scaled)
+            y_offset += logo_height + 7
+        
+        # Draw title
+        #painter.setPen(QColor(203, 73, 25))
+        #title_font = QFont("Arial", 26, QFont.Weight.Bold)
+        #painter.setFont(title_font)
+        #title_text = "IMXup"
+        #title_rect = painter.fontMetrics().boundingRect(title_text)
+        #title_x = (self.width() - title_rect.width()) // 2
+        #painter.drawText(title_x, y_offset + 25, title_text)
+        #y_offset += 40
         
         # Draw version
-        version_font = QFont("Courier", 14, QFont.Weight.Bold)
+        version_font = QFont("Courier", 17, QFont.Weight.Bold)
         painter.setFont(version_font)
-        painter.setPen(QColor(203, 73, 25))
+        painter.setPen(QColor(207, 69, 2))
         version_rect = painter.fontMetrics().boundingRect(self.version)
         version_x = (self.width() - version_rect.width()) // 2
-        painter.drawText(version_x, 65, self.version)
+        painter.drawText(version_x, y_offset + 20, self.version)
+        y_offset += 38
         
         copyright_text = "Copyright © 2025 twat"
-        copyright_font = QFont("Courier", 10)
+        copyright_font = QFont("Courier", 11)
         painter.setFont(copyright_font)
-        painter.setPen(QColor(13, 13, 13))
+        painter.setPen(QColor(200, 196, 177))
         copyright_rect = painter.fontMetrics().boundingRect(copyright_text)
         copyright_x = (self.width() - copyright_rect.width()) // 2
-        painter.drawText(copyright_x, 95, copyright_text)
+        painter.drawText(copyright_x, y_offset + 20, copyright_text)
+        y_offset += 33
         
         # Draw copyright and license info
-        painter.setPen(QColor(25, 25, 25))
-        license_font = QFont("Courier New", 8)
+        painter.setPen(QColor(200, 196, 177))
+        license_font = QFont("Courier", 10)
         painter.setFont(license_font)
         
         license_lines = [
             "",
+            ""
             "Licensed under the Apache License, Version 2.0",
             "",
-            "Software is distributed on an \"as is\" basis",
-            "without warranties or conditions of any kind.",
+            "Distributed on an \"as is\" basis without warranties or",
+            "conditions of any kind, either express or implied.",
             "",
-            "'IMX.to' name and logo are property of IMX.to.",
-            "Use of the software to interact with their service",
-            "is subject to their terms & privacy policy.",
-            ""
-            "We are not affiliated with IMX.to in any way."
+            "The \"IMX.to\" name and logo are property of IMX.to,",
+            "we are not affiliated with them in any way.",
         ]
         
-        y_pos = 115
+        y_pos = y_offset
         for line in license_lines:
             if line:
                 line_rect = painter.fontMetrics().boundingRect(line)
                 line_x = (self.width() - line_rect.width()) // 2
                 painter.drawText(line_x, y_pos, line)
-            y_pos += 11
+            y_pos += 16
         
         # Draw status text at bottom
-        painter.setPen(QColor(21, 21, 21))
-        status_font = QFont("Courier", 12)
+        painter.setPen(QColor(200, 196, 177))
+        status_font = QFont("Courier", 11)
         painter.setFont(status_font)
         
         status_rect = painter.fontMetrics().boundingRect(self.status_text)
         status_x = (self.width() - status_rect.width()) // 2
-        painter.drawText(status_x, self.height() - 16, self.status_text)
+        painter.drawText(status_x, self.height() - 50, self.status_text)
         
         # Draw progress dots in fixed position (left-aligned within centered area)
-        dots_font = QFont("Courier", 18, QFont.Weight.Bold)
+        dots_font = QFont("Courier", 17)
         painter.setFont(dots_font)
-        painter.setPen(QColor(203, 73, 25))
+        painter.setPen(QColor(200, 196, 177))
         
         # Create a fixed-width area for dots (centered, but dots are left-aligned within it)
-        dots_area_width = 140
+        dots_area_width = 150
         dots_area_x = (self.width() - dots_area_width) // 2
-        painter.drawText(dots_area_x, self.height() - 40, self.progress_dots)
+        painter.drawText(dots_area_x, self.height() - 17, self.progress_dots)
         
         painter.end()
     

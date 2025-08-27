@@ -135,17 +135,14 @@ class QueueManager(QObject):
         print(f"DEBUG: Scan worker starting")
         while self._scan_worker_running:
             try:
-                print(f"DEBUG: Scan worker waiting for item...")
                 path = self._scan_queue.get(timeout=1.0)
                 print(f"DEBUG: Scan worker got path: {path}")
                 if path is None:  # Shutdown signal
                     break
-                
                 print(f"DEBUG: About to scan path: {path}")
                 self._comprehensive_scan_item(path)
                 print(f"DEBUG: Scan completed for {path}")
                 self._scan_queue.task_done()
-                print(f"DEBUG: task_done() called for {path}")
                 
             except queue.Empty:
                 continue
@@ -705,7 +702,9 @@ class QueueManager(QObject):
             'uploaded_bytes': item.uploaded_bytes,
             'final_kibps': item.final_kibps,
             'failed_files': item.failed_files,
-            'error_message': item.error_message
+            'error_message': item.error_message,
+            'uploaded_files': list(item.uploaded_files),
+            'uploaded_images_data': item.uploaded_images_data
         }
     
     def load_persistent_queue(self):
@@ -742,6 +741,14 @@ class QueueManager(QObject):
         progress = data.get('progress', 0)
         if status == 'completed':
             progress = 100
+        elif status == QUEUE_STATE_INCOMPLETE:
+            # For incomplete items, recalculate progress from uploaded/total images
+            uploaded_images = data.get('uploaded_images', 0)
+            total_images = data.get('total_images', 0)
+            if total_images > 0 and uploaded_images > 0:
+                progress = int((uploaded_images / total_images) * 100)
+            else:
+                progress = 0
         
         item = GalleryQueueItem(
             path=data.get('path', ''),

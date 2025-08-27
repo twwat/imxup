@@ -50,6 +50,8 @@ class UploadEngine:
         template_name: str,
         # Resume support from GUI; pass empty for CLI
         already_uploaded: Optional[Set[str]] = None,
+        # Existing gallery ID for resume/append operations
+        existing_gallery_id: Optional[str] = None,
         # Callbacks (all optional)
         on_progress: Optional[ProgressCallback] = None,
         on_log: Optional[LogCallback] = None,
@@ -124,45 +126,58 @@ class UploadEngine:
             # Best-effort; if unavailable, proceed with provided name
             pass
 
-        # Always create gallery via API by uploading the first image (faster, avoids web login delays)
-        gallery_id: Optional[str] = None
+        # Use existing gallery or create new one
+        gallery_id: Optional[str] = existing_gallery_id
         initial_completed = 0
         initial_uploaded_size = 0
         preseed_images: List[Dict[str, Any]] = []
         files_to_upload: List[str]
-        # Upload first image to create gallery via API
-        first_file = image_files[0]
-        first_image_path = os.path.join(folder_path, first_file)
-        if on_log:
-            on_log(f"Uploading first image to create gallery: {first_file}")
-        first_response = self.uploader.upload_image(
-            first_image_path,
-            create_gallery=True,
-            thumbnail_size=thumbnail_size,
-            thumbnail_format=thumbnail_format,
-        )
-        if first_response.get('status') != 'success':
-            raise Exception(f"Failed to create gallery: {first_response}")
-        gallery_id = first_response['data'].get('gallery_id')
-        preseed_images = [first_response['data']]
-        # Log first image success with URL
-        if on_log:
-            try:
-                first_url = first_response['data'].get('image_url', '')
-                on_log(f"✓ [{gallery_id}] {first_file} uploaded successfully ({first_url})")
-            except Exception:
-                pass
-        initial_completed = 1
-        try:
-            initial_uploaded_size = os.path.getsize(first_image_path)
-        except Exception:
+        
+        if gallery_id:
+            # Resume/append to existing gallery - no need to create new one
+            if on_log:
+                on_log(f"Resuming/appending to existing gallery: {gallery_id}")
+            files_to_upload = image_files
+            # Set initial completed to the number of already-uploaded files for correct progress
+            initial_completed = len(already_uploaded)
+            # Keep uploaded_size at 0 since we're only tracking this session's uploads
             initial_uploaded_size = 0
-        # Report the first image upload so GUI resume/merge includes it
-        if on_image_uploaded:
+        else:
+            # Create new gallery via API by uploading the first image (faster, avoids web login delays)
+            first_file = image_files[0]
+            first_image_path = os.path.join(folder_path, first_file)
+            if on_log:
+                on_log(f"Uploading first image to create gallery: {first_file}")
+            first_response = self.uploader.upload_image(
+                first_image_path,
+                create_gallery=True,
+                thumbnail_size=thumbnail_size,
+                thumbnail_format=thumbnail_format,
+            )
+            if first_response.get('status') != 'success':
+                raise Exception(f"Failed to create gallery: {first_response}")
+            gallery_id = first_response['data'].get('gallery_id')
+            preseed_images = [first_response['data']]
+            # Log first image success with URL
+            if on_log:
+                try:
+                    first_url = first_response['data'].get('image_url', '')
+                    on_log(f"✓ [{gallery_id}] {first_file} uploaded successfully ({first_url})")
+                except Exception:
+                    pass
+            # First image uploaded - set counters and files_to_upload
+            files_to_upload = image_files[1:]  # Remaining files after first
+            initial_completed = 1
             try:
-                on_image_uploaded(first_file, first_response['data'], initial_uploaded_size)
+                initial_uploaded_size = os.path.getsize(first_image_path)
             except Exception:
-                pass
+                initial_uploaded_size = 0
+            # Report the first image upload so GUI resume/merge includes it
+            if on_image_uploaded:
+                try:
+                    on_image_uploaded(first_file, first_response['data'], initial_uploaded_size)
+                except Exception:
+                    pass
         # Attempt immediate rename if a web session exists; otherwise record for later auto-rename
         try:
             last_method = getattr(self.uploader, 'last_login_method', None)
@@ -200,8 +215,8 @@ class UploadEngine:
         # Emit an initial progress update
         if on_progress:
             percent_once = int((initial_completed / max(original_total_images, 1)) * 100)
-            on_progress(initial_completed, original_total_images, percent_once, first_file)
-        files_to_upload = image_files[1:]
+            current_file = (first_file if 'first_file' in locals() else image_files[0] if image_files else "")
+            on_progress(initial_completed, original_total_images, percent_once, current_file)
 
         gallery_url = f"https://imx.to/g/{gallery_id}"
 

@@ -135,6 +135,11 @@ class GUIImxToUploader(ImxToUploader):
                     except Exception:
                         pass
 
+        # Get existing gallery_id for resume/append operations
+        existing_gallery_id = None
+        if current_item and hasattr(current_item, 'gallery_id') and current_item.gallery_id:
+            existing_gallery_id = current_item.gallery_id
+
         results = engine.run(
             folder_path=folder_path,
             gallery_name=gallery_name,
@@ -145,6 +150,7 @@ class GUIImxToUploader(ImxToUploader):
             parallel_batch_size=parallel_batch_size,
             template_name=template_name,
             already_uploaded=already_uploaded,
+            existing_gallery_id=existing_gallery_id,
             on_progress=on_progress,
             on_log=on_log,
             should_soft_stop=should_soft_stop,

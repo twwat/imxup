@@ -16,7 +16,7 @@ from imxup import rename_all_unnamed_with_session, get_central_storage_path
 from src.core.engine import UploadEngine
 from src.core.constants import (
     QUEUE_STATE_UPLOADING, QUEUE_STATE_COMPLETED, QUEUE_STATE_FAILED,
-    QUEUE_STATE_PAUSED, QUEUE_STATE_READY
+    QUEUE_STATE_PAUSED, QUEUE_STATE_READY, QUEUE_STATE_INCOMPLETE
 )
 
 
@@ -138,9 +138,12 @@ class UploadWorker(QThread):
             
             # Start upload
             item.start_time = time.time()
-            item.uploaded_files = set()
-            item.uploaded_images_data = []
-            item.uploaded_bytes = 0
+            # Only reset upload tracking for items that don't have existing uploads
+            # For items with uploaded_files (incomplete resumes), preserve them to enable resume
+            if not hasattr(item, 'uploaded_files') or not item.uploaded_files:
+                item.uploaded_files = set()
+                item.uploaded_images_data = []
+                item.uploaded_bytes = 0
             
             # Perform upload using uploader
             results = self.uploader.upload_folder(

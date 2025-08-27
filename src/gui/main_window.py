@@ -47,6 +47,7 @@ from PyQt6.QtGui import QDragEnterEvent, QDropEvent, QIcon, QFont, QPixmap, QPai
 from imxup import ImxToUploader, load_user_defaults, timestamp, sanitize_gallery_name, encrypt_password, decrypt_password, rename_all_unnamed_with_session, get_config_path, build_gallery_filenames, get_central_storage_path
 from imxup import create_windows_context_menu, remove_windows_context_menu
 from src.gui.splash_screen import SplashScreen
+from src.gui.icon_manager import IconManager, init_icon_manager, get_icon_manager
 
 
 from src.core.engine import UploadEngine
@@ -97,15 +98,18 @@ def get_assets_dir():
     return os.path.join(project_root, "assets")
 
 # Central icon configuration - easily configurable icon mapping
+# Legacy icon config - kept for backward compatibility but deprecated
+# Use IconManager instead
 ICON_CONFIG = {
     # Status icons
     'completed': ['check.png', 'check16.png'],
     'failed': ['error.png'],
     'uploading': ['start.png'],
     'paused': ['pause.png'],
-    'ready': ['ready.png', 'pending.png'],
+    'ready': ['ready.png', 'pending.png'],  
     'pending': ['pending.png'],
-    
+    'scan_failed': ['scan_failed.png'],
+    'incomplete': ['incomplete.png'],
     # Action button icons
     'start': ['play.png', 'start.png'], #ready
     'stop': ['stop.png'],               #uploading
@@ -120,7 +124,32 @@ ICON_CONFIG = {
 }
 
 def get_icon(icon_type: str, fallback_std: Optional[QStyle.StandardPixmap] = None, style_instance=None) -> QIcon:
-    """Get an icon by type from the centralized configuration"""
+    """Get an icon by type - now uses IconManager"""
+    icon_mgr = get_icon_manager()
+    if icon_mgr:
+        # Map old icon types to new icon keys
+        icon_key_map = {
+            'completed': 'status_completed',
+            'failed': 'status_failed',
+            'uploading': 'status_uploading',
+            'paused': 'status_paused',
+            'ready': 'status_ready',
+            'pending': 'status_pending',
+            'scan_failed': 'status_scan_failed',
+            'incomplete': 'status_incomplete',
+            'start': 'action_start',
+            'stop': 'action_stop',
+            'view': 'action_view',
+            'view_error': 'action_view_error',
+            'cancel': 'action_cancel',
+            'templates': 'templates',
+            'credentials': 'credentials',
+            'main_window': 'main_window',
+        }
+        icon_key = icon_key_map.get(icon_type, icon_type)
+        return icon_mgr.get_icon(icon_key, style_instance)
+    
+    # Fallback to old method if IconManager not initialized
     if icon_type not in ICON_CONFIG:
         if fallback_std and style_instance:
             return style_instance.standardIcon(fallback_std)
@@ -2872,24 +2901,24 @@ class GalleryTableWidget(QTableWidget):
         
         # Update gallery based on status
         if added_count > 0:
-            if gallery_item.status in ("ready", "failed", "paused", "incomplete"):
-                # Trigger full rescan for not-yet-uploaded galleries
-                queue_manager.scan_folder(gallery_path)
-            elif gallery_item.status == "completed":
-                # For completed galleries, update counts and mark as incomplete
-                gallery_item.total_images += added_count
+            # Always trigger additive rescan to properly detect and count new files
+            queue_manager.rescan_gallery_additive(gallery_path)
+            
+            # For completed galleries, also mark as incomplete so they can be resumed
+            if gallery_item.status == "completed":
                 gallery_item.status = "incomplete"
-                gallery_item.progress = int((gallery_item.uploaded_images / gallery_item.total_images) * 100)
-                queue_manager.save_persistent_queue([gallery_path])
+                queue_manager.update_item_status(gallery_path, "incomplete")
             
             # Show success message
             if hasattr(parent_window, 'add_log_message'):
                 gallery_name = os.path.basename(gallery_path)
                 parent_window.add_log_message(f"{timestamp()} Added {added_count} file(s) to {gallery_name}")
             
-            # Refresh display
+            # Refresh display to show updated status
             if hasattr(parent_window, 'refresh_filter'):
                 parent_window.refresh_filter()
+            elif hasattr(parent_window, '_update_specific_gallery_display'):
+                parent_window._update_specific_gallery_display(gallery_path)
         
         # Show error if any files failed
         if failed_files:
@@ -4848,6 +4877,17 @@ class ImxUploadGUI(QMainWindow):
         super().__init__()
         print(f"DEBUG: QMainWindow.__init__ completed")
         self.splash = splash
+        # Initialize IconManager
+        if self.splash:
+            self.splash.set_status("Icons and assets")
+        try:
+            assets_dir = get_assets_dir()
+            icon_mgr = init_icon_manager(assets_dir)
+            # Validate icons and report any issues
+            validation_result = icon_mgr.validate_icons(report=True)
+        except Exception as e:
+            print(f"Warning: Failed to initialize IconManager: {e}")
+            
         # Set main window icon
         try:
             icon = get_icon('main_window')
@@ -4962,14 +5002,25 @@ class ImxUploadGUI(QMainWindow):
         print(f"Debug: Setting TabManager in TabbedGalleryWidget: {self.tab_manager}")
         self.gallery_table.set_tab_manager(self.tab_manager)
         
-        # Connect tab change signal to refresh filter
+        # Connect tab change signal to refresh filter and update button counts and progress
         if hasattr(self.gallery_table, 'tab_changed'):
             self.gallery_table.tab_changed.connect(self.refresh_filter)
+            self.gallery_table.tab_changed.connect(self._update_button_counts)
+            self.gallery_table.tab_changed.connect(self.update_progress_display)
         
         # Connect gallery move signal to handle tab assignments
         # Connect tab bar drag-drop signal directly to our handler
         if hasattr(self.gallery_table, 'tab_bar') and hasattr(self.gallery_table.tab_bar, 'galleries_dropped'):
             self.gallery_table.tab_bar.galleries_dropped.connect(self.on_galleries_moved_to_tab)
+        
+        # Connect selection change to refresh icons for proper light/dark variant display
+        # For tabbed gallery system, connect to the inner table's selection model
+        if hasattr(self.gallery_table, 'gallery_table'):
+            inner_table = self.gallery_table.gallery_table
+            if hasattr(inner_table, 'selectionModel'):
+                selection_model = inner_table.selectionModel()
+                if selection_model:
+                    selection_model.selectionChanged.connect(self._on_selection_changed)
         
         # Set reference to update queue in tabbed widget for cache invalidation
         if hasattr(self.gallery_table, '_update_queue'):
@@ -5000,11 +5051,7 @@ class ImxUploadGUI(QMainWindow):
                     except Exception:
                         pass
                 
-                # Lightweight progress display
-                try:
-                    self.update_progress_display()
-                except Exception:
-                    pass
+                # Progress display will update via tab_changed signal and status change events
                     
                 # Scan status
                 try:
@@ -5197,6 +5244,19 @@ class ImxUploadGUI(QMainWindow):
         # Current transfer speed tracking
         self._current_transfer_kbps = 0.0
         
+    def resizeEvent(self, event):
+        """Update right panel maximum width when window is resized"""
+        super().resizeEvent(event)
+        try:
+            # Update right panel max width to 50% of current window width
+            if hasattr(self, 'right_panel'):
+                window_width = self.width()
+                if window_width > 0:
+                    max_width = int(window_width * 0.5)
+                    self.right_panel.setMaximumWidth(max_width)
+        except Exception:
+            pass
+    
     def _format_rate_consistent(self, rate_kbps, precision=2):
         """Consistent rate formatting everywhere"""
         if rate_kbps >= 1000:  # Switch to MiB/s at 1000 KiB/s for readability
@@ -5371,52 +5431,134 @@ class ImxUploadGUI(QMainWindow):
 
     def _set_status_cell_icon(self, row: int, status: str):
         """Render the Status column as an icon only, without background/text.
-        Supported statuses: completed, failed, uploading, paused, queued, ready, incomplete, scanning.
-        Others fall back to pending icon.
+        Explicitly handles all possible statuses with clear icon assignments.
         """
         # Validate row bounds to prevent setting icons on wrong rows
         if row < 0 or row >= self.gallery_table.rowCount():
             print(f"DEBUG: _set_status_cell_icon: Invalid row {row}, table has {self.gallery_table.rowCount()} rows")
             return
-# Removed debug output - Status column working correctly
         
-        # Use the same simple icon loading approach as Action column buttons
         try:
-            # Map status to icon files and fallbacks using central configuration
-            icon = QIcon()
-            tooltip = ""
+            # Determine theme and selection state
+            is_dark_theme = self._get_cached_theme()
             
-            if status == "completed":
-                icon = get_icon('completed', QStyle.StandardPixmap.SP_DialogApplyButton, self.style())
-                tooltip = "Completed"
-            elif status == "failed":
-                icon = get_icon('failed', QStyle.StandardPixmap.SP_DialogCancelButton, self.style())
-                tooltip = "Failed"
-            elif status == "scan_failed":
-                icon = get_icon('scan_failed', QStyle.StandardPixmap.SP_DirIcon, self.style())
-                tooltip = "Scan Failed - Click to rescan"
-            elif status == "upload_failed":
-                icon = get_icon('upload_failed', QStyle.StandardPixmap.SP_MessageBoxCritical, self.style())
-                tooltip = "Upload Failed - Click to retry"
-            elif status == "uploading":
-                icon = get_icon('uploading', QStyle.StandardPixmap.SP_MediaPlay, self.style())
-                tooltip = "Uploading"
-            elif status == "paused":
-                icon = get_icon('paused', QStyle.StandardPixmap.SP_MediaPause, self.style())
-                tooltip = "Paused"
-            elif status == "ready":
-                icon = get_icon('ready', QStyle.StandardPixmap.SP_DialogOkButton, self.style())
-                tooltip = "Ready"
+            # Check if this row is selected using existing pattern
+            selected_rows = {item.row() for item in self.gallery_table.selectedItems()}
+            is_selected = row in selected_rows
+                
+            # Debug output for selection detection
+            if status in ["completed", "failed"] and row < 5:  # Only log for first few rows of common statuses
+                print(f"DEBUG: Row {row}, status={status}, dark_theme={is_dark_theme}, selected={is_selected}")
+            
+            icon_mgr = get_icon_manager()
+            if icon_mgr:
+                # Use IconManager with theme and selection awareness
+                icon = icon_mgr.get_status_icon(status, self.style(), is_dark_theme, is_selected)
+                tooltip = icon_mgr.get_status_tooltip(status)
             else:
-                # Default for queued, incomplete, scanning, etc.
-                icon = get_icon('pending', QStyle.StandardPixmap.SP_ComputerIcon, self.style())
-                tooltip = status.title() if isinstance(status, str) else "Pending"
+                # Fallback to old method if IconManager not available
+                icon, tooltip = self._get_legacy_status_icon(status)
             
-            # Apply the icon directly to the table cell
+            # Apply the icon to the table cell
             self._apply_icon_to_cell(row, 4, icon, tooltip, status)
             
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"Warning: Failed to set status icon for {status}: {e}")
+            
+    def _get_legacy_status_icon(self, status: str):
+        """Legacy status icon handling (fallback)."""
+        icon = QIcon()
+        tooltip = ""
+        
+        # Explicit handling for each status - no hidden fallbacks
+        if status == "completed":
+            icon = get_icon('completed', QStyle.StandardPixmap.SP_DialogApplyButton, self.style())
+            tooltip = "Completed"
+        elif status == "failed":
+            icon = get_icon('failed', QStyle.StandardPixmap.SP_DialogCancelButton, self.style())
+            tooltip = "Failed"
+        elif status == "scan_failed":
+            icon = get_icon('scan_failed', QStyle.StandardPixmap.SP_MessageBoxWarning, self.style())
+            tooltip = "Scan Failed - Click to rescan"
+        elif status == "upload_failed":
+            icon = get_icon('failed', QStyle.StandardPixmap.SP_MessageBoxCritical, self.style())
+            tooltip = "Upload Failed - Click to retry"
+        elif status == "uploading":
+            icon = get_icon('uploading', QStyle.StandardPixmap.SP_MediaPlay, self.style())
+            tooltip = "Uploading"
+        elif status == "paused":
+            icon = get_icon('paused', QStyle.StandardPixmap.SP_MediaPause, self.style())
+            tooltip = "Paused"
+        elif status == "ready":
+            icon = get_icon('ready', QStyle.StandardPixmap.SP_DialogOkButton, self.style())
+            tooltip = "Ready"
+        elif status == "queued":
+            icon = get_icon('pending', QStyle.StandardPixmap.SP_FileIcon, self.style())
+            tooltip = "Queued"
+        elif status == "incomplete":
+            icon = get_icon('incomplete', QStyle.StandardPixmap.SP_BrowserReload, self.style())
+            tooltip = "Incomplete - Resume to continue"
+        elif status == "scanning":
+            icon = get_icon('pending', QStyle.StandardPixmap.SP_BrowserReload, self.style())
+            tooltip = "Scanning"
+        elif status == "pending":
+            icon = get_icon('pending', QStyle.StandardPixmap.SP_FileIcon, self.style())
+            tooltip = "Pending"
+        else:
+            # Unknown status - use warning icon
+            icon = self.style().standardIcon(QStyle.StandardPixmap.SP_MessageBoxWarning)
+            tooltip = f"Unknown status: {status}"
+            print(f"Warning: Unknown status '{status}' - using warning icon")
+        
+        return icon, tooltip
+    
+    def _on_selection_changed(self, selected, deselected):
+        """Handle gallery table selection changes to refresh icons"""
+        try:
+            # For tabbed gallery system, use the inner table
+            inner_table = getattr(self.gallery_table, 'gallery_table', None)
+            if not inner_table or not hasattr(inner_table, 'rowCount'):
+                return
+                
+            # Refresh icons for all visible rows (selection state might have changed)
+            for row in range(inner_table.rowCount()):
+                # Get status from the queue item
+                name_item = inner_table.item(row, 1)  # Name column
+                if name_item:
+                    path = name_item.data(Qt.ItemDataRole.UserRole)
+                    if path and path in self.queue_manager.items:
+                        item = self.queue_manager.items[path]
+                        self._set_status_cell_icon(row, item.status)
+                            
+        except Exception as e:
+            print(f"Warning: Error in selection change handler: {e}")
+    
+    def refresh_icons(self):
+        """Alias for refresh_all_status_icons - called from settings dialog"""
+        self.refresh_all_status_icons()
+    
+    def refresh_all_status_icons(self):
+        """Refresh all status icons after icon changes in settings"""
+        try:
+            icon_mgr = get_icon_manager()
+            if icon_mgr:
+                # Clear icon cache to force reload of changed icons
+                icon_mgr.refresh_cache()
+                
+                # Update all visible status icons in the table
+                for row in range(self.gallery_table.rowCount()):
+                    # Get the gallery path from the name column (UserRole data)
+                    name_item = self.gallery_table.item(row, 1)
+                    if name_item:
+                        path = name_item.data(Qt.ItemDataRole.UserRole)
+                        if path and path in self.queue_manager.items:
+                            item = self.queue_manager.items[path]
+                            # Refresh the status icon for this row
+                            self._set_status_cell_icon(row, item.status)
+                
+                print("All status icons refreshed successfully")
+        except Exception as e:
+            print(f"Error refreshing status icons: {e}")
         
     def _apply_icon_to_cell(self, row: int, col: int, icon, tooltip: str, status: str):
         """Apply icon to table cell - runs on main thread"""
@@ -5592,9 +5734,9 @@ class ImxUploadGUI(QMainWindow):
     def setup_ui(self):
         try:
             from imxup import __version__
-            self.setWindowTitle(f"IMX.to Gallery Uploader v{__version__}")
+            self.setWindowTitle(f"IMXup {__version__}")
         except Exception:
-            self.setWindowTitle("IMX.to Gallery Uploader")
+            self.setWindowTitle("IMXup")
         self.setMinimumSize(800, 650)  # Allow log to shrink to accommodate Settings
         
         central_widget = QWidget()
@@ -5609,11 +5751,11 @@ class ImxUploadGUI(QMainWindow):
         except Exception:
             pass
         
-        # Top section with queue and settings
-        top_layout = QHBoxLayout()
+        # Top section with queue and settings - using splitter for resizable divider
+        self.top_splitter = QSplitter(Qt.Orientation.Horizontal)
         try:
-            top_layout.setContentsMargins(0, 0, 0, 0)
-            top_layout.setSpacing(6)
+            self.top_splitter.setContentsMargins(0, 0, 0, 0)
+            self.top_splitter.setHandleWidth(6)
         except Exception:
             pass
         
@@ -5718,14 +5860,19 @@ class ImxUploadGUI(QMainWindow):
         queue_layout.addLayout(controls_layout)
         left_layout.addWidget(queue_group)
         
-        top_layout.addWidget(left_panel, 3)  # 3/4 width for queue (more space)
+        # Set minimum width for left panel (Upload Queue)
+        left_panel.setMinimumWidth(400)
+        self.top_splitter.addWidget(left_panel)
         
         # Right panel - Settings and logs
-        right_panel = QWidget()
-        right_layout = QVBoxLayout(right_panel)
+        self.right_panel = QWidget()
+        right_layout = QVBoxLayout(self.right_panel)
+        # Set maximum width to 50% of window to keep queue panel visible
         try:
-            # Keep the settings/log area from expanding too wide on large windows
-            right_panel.setMaximumWidth(520)
+            # Calculate 50% of current window width as max width
+            window_width = self.width() if self.width() > 0 else 1000  # fallback for initial sizing
+            max_width = int(window_width * 0.5)
+            self.right_panel.setMaximumWidth(max_width)
         except Exception:
             pass
         try:
@@ -5977,9 +6124,18 @@ class ImxUploadGUI(QMainWindow):
         right_layout.addWidget(self.settings_group)
         right_layout.addWidget(log_group, 1)  # Give it stretch priority
         
-        top_layout.addWidget(right_panel, 0)  # Do not give extra stretch; obey max width
+        # Set minimum width for right panel (Settings + Log) - reduced for better resizing
+        self.right_panel.setMinimumWidth(250)
+        self.top_splitter.addWidget(self.right_panel)
         
-        main_layout.addLayout(top_layout)
+        # Configure splitter to prevent panels from disappearing
+        self.top_splitter.setCollapsible(0, False)  # Left panel (queue) cannot collapse
+        self.top_splitter.setCollapsible(1, False)  # Right panel (settings+log) cannot collapse
+        
+        # Set initial splitter sizes (roughly 60/40 split)
+        self.top_splitter.setSizes([600, 400])
+        
+        main_layout.addWidget(self.top_splitter)
         
         # Bottom section - Overall progress (left) and Help (right)
         bottom_layout = QHBoxLayout()
@@ -5990,8 +6146,8 @@ class ImxUploadGUI(QMainWindow):
             pass
         
 
-        # Overall progress group (left)
-        progress_group = QGroupBox("Overall Progress")
+        # Current tab progress group (left)
+        progress_group = QGroupBox("Current Tab Progress")
         progress_layout = QVBoxLayout(progress_group)
         try:
             progress_layout.setContentsMargins(10, 10, 10, 10)
@@ -6001,7 +6157,7 @@ class ImxUploadGUI(QMainWindow):
         
 
         overall_layout = QHBoxLayout()
-        overall_layout.addWidget(QLabel("Overall:"))
+        overall_layout.addWidget(QLabel("Progress:"))
         self.overall_progress = QProgressBar()
         self.overall_progress.setMinimum(0)
         self.overall_progress.setMaximum(100)
@@ -6272,20 +6428,88 @@ class ImxUploadGUI(QMainWindow):
             pass
 
     def show_about_dialog(self):
-        """Show a minimal About dialog."""
+        """Show a custom About dialog with logo."""
+        import os
+        from PyQt6.QtWidgets import QDialog, QVBoxLayout, QLabel, QTextBrowser, QPushButton
+        from PyQt6.QtCore import Qt
+        from PyQt6.QtGui import QPixmap
+        
         try:
             from imxup import __version__
             version = f"{__version__}"
         except Exception:
-            version = ""
-        text = "IMX.to Gallery Uploader"
-        if version:
-            text = f"{text}\n\nVersion {version}\n\nCopyright © 2025, twat\n\nLicense: Apache 2.0\n\nIMX.to name and logo are property of IMX.to. Use of the IMX.to service is subject to their terms of service:\nhttps://imx.to/page/terms"
+            version = "69"
+            
+        dialog = QDialog(self)
+        dialog.setWindowTitle("About IMXup")
+        dialog.setFixedSize(400, 500)
+        dialog.setModal(True)
+        
+        layout = QVBoxLayout(dialog)
+        layout.setSpacing(10)
+        layout.setContentsMargins(20, 20, 20, 20)
+        
+        # Add logo at top
         try:
-            QMessageBox.about(self, "About", text)
+            logo_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), '..', 'assets', 'imxup.png')
+            logo_pixmap = QPixmap(logo_path)
+            if not logo_pixmap.isNull():
+                logo_label = QLabel()
+                # Scale logo to reasonable size
+                scaled_logo = logo_pixmap.scaledToHeight(80, Qt.TransformationMode.SmoothTransformation)
+                logo_label.setPixmap(scaled_logo)
+                logo_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                layout.addWidget(logo_label)
         except Exception:
-            # Fallback if about() not available
-            QMessageBox.information(self, "About", text)
+            pass
+        
+        # Add title
+        title_label = QLabel("IMXup")
+        title_label.setStyleSheet("font-size: 24px; font-weight: bold; color: #CB4919;")
+        title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(title_label)
+        
+        # Add subtitle
+        subtitle_label = QLabel("IMX.to Gallery Uploader")
+        subtitle_label.setStyleSheet("font-size: 14px; color: #666;")
+        subtitle_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(subtitle_label)
+        
+        # Add version
+        version_label = QLabel(version)
+        version_label.setStyleSheet("font-size: 12px; font-weight: bold;")
+        version_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(version_label)
+        
+        # Add info text
+        info_text = QTextBrowser()
+        info_text.setMaximumHeight(200)
+        info_text.setStyleSheet("background: transparent; border: none; font-size: 10px;")
+        info_html = """
+        <div align="center">
+        <p><strong>Copyright © 2025, twat</strong></p>
+        <p><strong>License:</strong> Apache 2.0</p>
+        <br>
+        <p style="color: #666; font-size: 9px;">
+        IMX.to name and logo are property of IMX.to.<br>
+        Use of the IMX.to service is subject to their terms of service:<br>
+        <a href="https://imx.to/page/terms">https://imx.to/page/terms</a>
+        </p>
+        <p style="color: #888; font-size: 8px;">
+        We are not affiliated with IMX.to in any way.
+        </p>
+        </div>
+        """
+        info_text.setHtml(info_html)
+        layout.addWidget(info_text)
+        
+        # Add close button
+        close_btn = QPushButton("Close")
+        close_btn.clicked.connect(dialog.accept)
+        close_btn.setStyleSheet("QPushButton { min-width: 80px; }")
+        layout.addWidget(close_btn, alignment=Qt.AlignmentFlag.AlignCenter)
+        
+        dialog.exec()
 
     def check_credentials(self):
         """Prompt to set credentials only if API key is not set."""
@@ -6424,6 +6648,9 @@ class ImxUploadGUI(QMainWindow):
             if hasattr(self, 'gallery_table') and hasattr(self.gallery_table, 'update_theme'):
                 self.gallery_table.update_theme()
             
+            # Refresh all icons to use correct light/dark variants for new theme
+            self.refresh_all_status_icons()
+            
             # Update checked menu items if available
             try:
                 if mode == 'light':
@@ -6535,6 +6762,7 @@ class ImxUploadGUI(QMainWindow):
                 
                 table_font_size = max(font_size - 1, 6)  # Table 1pt smaller, minimum 6pt
                 name_font_size = font_size  # Name column same as base
+                header_font_size = table_font_size  # Headers same as table content
                 
                 # Just update existing table items without changing stylesheet
                 for row in range(table.rowCount()):
@@ -7834,23 +8062,57 @@ class ImxUploadGUI(QMainWindow):
             except Exception:
                 pass
     
+    def _get_current_tab_items(self):
+        """Get items filtered by current tab"""
+        current_tab = getattr(self.gallery_table, 'current_tab', 'Main')
+        
+        if current_tab == "All Tabs":
+            return self.queue_manager.get_all_items()
+        elif current_tab == "Main" or not self.tab_manager:
+            # For Main tab, get items with no tab assignment or explicit Main assignment
+            all_items = self.queue_manager.get_all_items()
+            return [item for item in all_items if not item.tab_name or item.tab_name == "Main"]
+        else:
+            # For custom tabs, get items assigned to that tab
+            try:
+                tab_galleries = self.tab_manager.load_tab_galleries(current_tab)
+                tab_paths = {g.get('path') for g in tab_galleries if g.get('path')}
+                all_items = self.queue_manager.get_all_items()
+                return [item for item in all_items if item.path in tab_paths]
+            except Exception:
+                return []
+
+    def _update_counts_and_progress(self):
+        """Update both button counts and progress display together"""
+        self._update_button_counts()
+        self.update_progress_display()
+    
     def _update_button_counts(self):
-        """Update button counts and states without rebuilding the table"""
+        """Update button counts and states based on currently visible items (respecting filter)"""
         try:
-            # Periodically rebuild status counts to prevent drift
-            if not hasattr(self, '_last_counter_rebuild') or time.time() - self._last_counter_rebuild > 5.0:
-                self.queue_manager._rebuild_status_counts()
-                self._last_counter_rebuild = time.time()
-                
-            # Use efficient status counters instead of iterating through all items
-            status_counts = self.queue_manager.get_status_counts()
-            count_startable = (status_counts.get("ready", 0) + 
-                             status_counts.get("paused", 0) + 
-                             status_counts.get("incomplete", 0) + 
-                             status_counts.get("scanning", 0))
-            count_pausable = (status_counts.get("uploading", 0) + 
-                            status_counts.get("queued", 0))
-            count_completed = status_counts.get("completed", 0)
+            # Get items that are currently visible (not filtered out)
+            visible_items = []
+            all_items = self.queue_manager.get_all_items()
+            
+            # Build path to row mapping for quick lookup
+            path_to_row = {}
+            for row in range(self.gallery_table.rowCount()):
+                name_item = self.gallery_table.item(row, 1)
+                if name_item:
+                    path = name_item.data(Qt.ItemDataRole.UserRole)
+                    if path:
+                        path_to_row[path] = row
+            
+            # Only count items that are visible in the current filter
+            for item in all_items:
+                row = path_to_row.get(item.path)
+                if row is not None and not self.gallery_table.isRowHidden(row):
+                    visible_items.append(item)
+            
+            # Count statuses from visible items only
+            count_startable = sum(1 for item in visible_items if item.status in ("ready", "paused", "incomplete", "scanning"))
+            count_pausable = sum(1 for item in visible_items if item.status in ("uploading", "queued"))
+            count_completed = sum(1 for item in visible_items if item.status == "completed")
 
             # Update button texts with counts (preserve leading space for visual alignment)
             self.start_all_btn.setText(f" Start All ({count_startable})")
@@ -7866,8 +8128,8 @@ class ImxUploadGUI(QMainWindow):
             pass
     
     def update_progress_display(self):
-        """Update overall progress and statistics"""
-        items = self.queue_manager.get_all_items()
+        """Update current tab progress and statistics"""
+        items = self._get_current_tab_items()
         
         if not items:
             self.overall_progress.setValue(0)
@@ -7876,19 +8138,20 @@ class ImxUploadGUI(QMainWindow):
             self.overall_progress.setStyleSheet(
                 """
                 QProgressBar {
-                    border: 1px solid #48a2de;
+                    border: 2px solid #6cb4e4;
                     border-radius: 3px;
                     text-align: center;
                     font-size: 11px;
                     font-weight: bold;
                 }
                 QProgressBar::chunk {
-                    background-color: #48a2de;
+                    background-color: #6cb4e4;
                     border-radius: 2px;
                 }
                 """
             )
-            self.stats_label.setText("Ready to upload galleries")
+            current_tab_name = getattr(self.gallery_table, 'current_tab', 'All Tabs')
+            self.stats_label.setText(f"No galleries in {current_tab_name}")
             return
         
         # Calculate overall progress (account for resumed items' previously uploaded files)
@@ -7926,14 +8189,14 @@ class ImxUploadGUI(QMainWindow):
                 self.overall_progress.setStyleSheet(
                     """
                     QProgressBar {
-                        border: 1px solid #48a2de;
+                        border: 2px solid #6cb4e4;
                         border-radius: 3px;
                         text-align: center;
                         font-size: 11px;
                         font-weight: bold;
                     }
                     QProgressBar::chunk {
-                        background-color: #48a2de;
+                        background-color: #6cb4e4;
                         border-radius: 2px;
                     }
                     """
@@ -7945,18 +8208,47 @@ class ImxUploadGUI(QMainWindow):
             self.overall_progress.setStyleSheet(
                 """
                 QProgressBar {
-                    border: 1px solid #48a2de;
+                    border: 2px solid #6cb4e4;
                     border-radius: 3px;
                     text-align: center;
                     font-size: 11px;
                     font-weight: bold;
                 }
                 QProgressBar::chunk {
-                    background-color: #48a2de;
+                    background-color: #6cb4e4;
                     border-radius: 2px;
                 }
                 """
             )
+        
+        # Update stats label with current tab status counts
+        current_tab_name = getattr(self.gallery_table, 'current_tab', 'All Tabs')
+        status_counts = {
+            'uploading': sum(1 for item in items if item.status == 'uploading'),
+            'queued': sum(1 for item in items if item.status == 'queued'),
+            'completed': sum(1 for item in items if item.status == 'completed'),
+            'ready': sum(1 for item in items if item.status in ('ready', 'paused', 'incomplete', 'scanning')),
+            'failed': sum(1 for item in items if item.status == 'failed')
+        }
+        
+        # Build status summary - only show non-zero counts
+        status_parts = []
+        if status_counts['uploading'] > 0:
+            status_parts.append(f"Uploading: {status_counts['uploading']}")
+        if status_counts['queued'] > 0:
+            status_parts.append(f"Queued: {status_counts['queued']}")
+        if status_counts['completed'] > 0:
+            status_parts.append(f"Completed: {status_counts['completed']}")
+        if status_counts['ready'] > 0:
+            status_parts.append(f"Ready: {status_counts['ready']}")
+        if status_counts['failed'] > 0:
+            status_parts.append(f"Error: {status_counts['failed']}")
+        
+        if status_parts:
+            self.stats_label.setText(" | ".join(status_parts))
+        else:
+            self.stats_label.setText(f"No galleries in {current_tab_name}")
+        
         # Update Stats and Speed box values
         # Skip expensive network call for unnamed count - defer to background update
         QTimer.singleShot(100, self._update_unnamed_count_background)
@@ -8046,8 +8338,8 @@ class ImxUploadGUI(QMainWindow):
                     action_widget.update_buttons(current_status)
                 break
         
-        # Update button counts after gallery starts
-        QTimer.singleShot(0, self._update_button_counts)
+        # Update button counts and progress after gallery starts
+        QTimer.singleShot(0, self._update_counts_and_progress)
     
     def on_progress_updated(self, path: str, completed: int, total: int, progress_percent: int, current_image: str):
         """Handle progress updates from worker - NON-BLOCKING"""
@@ -8256,8 +8548,8 @@ class ImxUploadGUI(QMainWindow):
         # Update display with targeted update instead of full rebuild
         self._update_specific_gallery_display(path)
         
-        # Update button counts after status change
-        QTimer.singleShot(0, self._update_button_counts)
+        # Update button counts and progress after status change
+        QTimer.singleShot(0, self._update_counts_and_progress)
         
         # Defer only the heavy stats update to avoid blocking
         QTimer.singleShot(50, lambda: self._update_stats_deferred(results))
@@ -8409,8 +8701,8 @@ class ImxUploadGUI(QMainWindow):
         # Update display when status changes  
         self._update_specific_gallery_display(path)
         
-        # Update button counts after status change
-        QTimer.singleShot(0, self._update_button_counts)
+        # Update button counts and progress after status change
+        QTimer.singleShot(0, self._update_counts_and_progress)
         
         gallery_name = os.path.basename(path)
         self.add_log_message(f"{timestamp()} ✗ Failed: {gallery_name} - {error_message}")
@@ -8546,8 +8838,8 @@ class ImxUploadGUI(QMainWindow):
                             action_widget.update_buttons("ready")
                 
                 self._update_specific_gallery_display(path)
-                # Force immediate button count update
-                self._update_button_counts()
+                # Force immediate button count and progress update
+                self._update_counts_and_progress()
     
     def start_upload_for_item(self, path: str):
         """Start upload for a specific item"""
@@ -8665,9 +8957,9 @@ class ImxUploadGUI(QMainWindow):
         print(f"[TIMING] start_all_uploads() started at {start_time:.6f}")
         
         get_items_start = time.time()
-        items = self.queue_manager.get_all_items()
+        items = self._get_current_tab_items()
         get_items_duration = time.time() - get_items_start
-        print(f"[TIMING] get_all_items() took {get_items_duration:.6f}s")
+        print(f"[TIMING] _get_current_tab_items() took {get_items_duration:.6f}s")
         
         started_count = 0
         started_paths = []
@@ -8696,8 +8988,8 @@ class ImxUploadGUI(QMainWindow):
             # Update all affected items individually instead of rebuilding table
             for path in started_paths:
                 self._update_specific_gallery_display(path)
-            # Update button counts after state changes
-            QTimer.singleShot(0, self._update_button_counts)
+            # Update button counts and progress after state changes
+            QTimer.singleShot(0, self._update_counts_and_progress)
         else:
             self.add_log_message(f"{timestamp()} No items to start")
         
@@ -8708,8 +9000,8 @@ class ImxUploadGUI(QMainWindow):
         print(f"[TIMING] start_all_uploads() completed in {total_duration:.6f}s total")
     
     def pause_all_uploads(self):
-        """Reset all queued items back to ready (acts like Cancel for queued)"""
-        items = self.queue_manager.get_all_items()
+        """Reset all queued items back to ready (acts like Cancel for queued) - tab-specific"""
+        items = self._get_current_tab_items()
         reset_count = 0
         reset_paths = []
         with QMutexLocker(self.queue_manager.mutex):
@@ -8724,8 +9016,8 @@ class ImxUploadGUI(QMainWindow):
             # Update all affected items individually instead of rebuilding table
             for path in reset_paths:
                 self._update_specific_gallery_display(path)
-            # Update button counts after state changes
-            QTimer.singleShot(0, self._update_button_counts)
+            # Update button counts and progress after state changes
+            QTimer.singleShot(0, self._update_counts_and_progress)
         else:
             self.add_log_message(f"{timestamp()} No queued items to reset")
     
@@ -8743,7 +9035,7 @@ class ImxUploadGUI(QMainWindow):
             pass
         try:
             # Pre-check counts for diagnostics
-            items_snapshot = self.queue_manager.get_all_items()
+            items_snapshot = self._get_current_tab_items()
             count_completed = sum(1 for it in items_snapshot if it.status == "completed")
             count_failed = sum(1 for it in items_snapshot if it.status == "failed")
             self.add_log_message(f"{timestamp()} [queue] Attempting clear: completed={count_completed}, failed={count_failed}")
@@ -8751,15 +9043,14 @@ class ImxUploadGUI(QMainWindow):
             # Get paths to remove before clearing them
             comp_paths = [it.path for it in items_snapshot if it.status in ("completed", "failed")]
             
-            removed_count = self.queue_manager.clear_completed()
-            # Fallback: if nothing removed but UI shows completed, try explicit path removal
-            if removed_count == 0 and (count_completed or count_failed):
-                if comp_paths:
-                    self.add_log_message(f"{timestamp()} [queue] Retrying clear via explicit path delete for {len(comp_paths)} item(s)")
-                    try:
-                        removed_count = self.queue_manager.remove_items(comp_paths)
-                    except Exception:
-                        removed_count = 0
+            # Clear only items from current tab
+            if comp_paths:
+                try:
+                    removed_count = self.queue_manager.remove_items(comp_paths)
+                except Exception:
+                    removed_count = 0
+            else:
+                removed_count = 0
             
             if removed_count > 0:
                 # Remove items from table using targeted removal
@@ -8917,6 +9208,12 @@ class ImxUploadGUI(QMainWindow):
         if geometry:
             self.restoreGeometry(geometry)
         
+        # Restore splitter state for resizable divider between queue and settings
+        if hasattr(self, 'top_splitter'):
+            splitter_state = self.settings.value("splitter/state")
+            if splitter_state:
+                self.top_splitter.restoreState(splitter_state)
+        
         # Load settings from .ini file
         defaults = load_user_defaults()
         
@@ -8947,6 +9244,9 @@ class ImxUploadGUI(QMainWindow):
         """Save window settings"""
         self.settings.setValue("geometry", self.saveGeometry())
         self.settings.setValue("confirm_delete", self.confirm_delete_check.isChecked())
+        # Save splitter state for resizable divider between queue and settings
+        if hasattr(self, 'top_splitter'):
+            self.settings.setValue("splitter/state", self.top_splitter.saveState())
         self.save_table_settings()
 
     def save_table_settings(self):
