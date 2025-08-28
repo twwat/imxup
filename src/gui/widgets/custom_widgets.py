@@ -36,7 +36,7 @@ class TableProgressWidget(QWidget):
         
         self.progress_bar = QProgressBar()
         self.progress_bar.setTextVisible(True)
-        self.progress_bar.setMaximumHeight(20)
+        self.progress_bar.setProperty("class", "table-progress")
         
         layout.addWidget(self.progress_bar)
         self.setLayout(layout)
@@ -60,77 +60,11 @@ class TableProgressWidget(QWidget):
         """Update progress value with status-based styling"""
         self.progress_bar.setValue(value)
         
-        # Color code by status
-        if status == "completed":
-            self.progress_bar.setStyleSheet("""
-                QProgressBar {
-                    border: 1px solid #76ca9a;
-                    border-radius: 3px;
-                    text-align: center;
-                    font-size: 9px;
-                    font-weight: bold;
-                }
-                QProgressBar::chunk {
-                    background-color: #76ca9a;
-                    border-radius: 2px;
-                }
-            """)
-        elif status == "failed":
-            self.progress_bar.setStyleSheet("""
-                QProgressBar {
-                    border: 1px solid #e74c3c;
-                    border-radius: 3px;
-                    text-align: center;
-                    font-size: 9px;
-                    font-weight: bold;
-                }
-                QProgressBar::chunk {
-                    background-color: #e74c3c;
-                    border-radius: 2px;
-                }
-            """)
-        elif status == "uploading":
-            self.progress_bar.setStyleSheet("""
-                QProgressBar {
-                    border: 2px solid #6cb4e4;
-                    border-radius: 3px;
-                    text-align: center;
-                    font-size: 9px;
-                    font-weight: bold;
-                }
-                QProgressBar::chunk {
-                    background-color: #6cb4e4;
-                    border-radius: 2px;
-                }
-            """)
-        elif status == "incomplete":
-            self.progress_bar.setStyleSheet("""
-                QProgressBar {
-                    border: 1px solid #f39c12;
-                    border-radius: 3px;
-                    text-align: center;
-                    font-size: 9px;
-                    font-weight: bold;
-                }
-                QProgressBar::chunk {
-                    background-color: #f39c12;
-                    border-radius: 2px;
-                }
-            """)
-        else:
-            self.progress_bar.setStyleSheet("""
-                QProgressBar {
-                    border: 1px solid #ccc;
-                    border-radius: 3px;
-                    text-align: center;
-                    font-size: 9px;
-                    font-weight: bold;
-                }
-                QProgressBar::chunk {
-                    background-color: #f0f0f0;
-                    border-radius: 2px;
-                }
-            """)
+        # Set CSS class-like properties for theme-based styling via styles.qss
+        self.progress_bar.setProperty("status", status)
+        
+        # Force style update to apply new property
+        self.progress_bar.style().polish(self.progress_bar)
 
 
 class ActionButtonWidget(QWidget):

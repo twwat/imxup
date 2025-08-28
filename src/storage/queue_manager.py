@@ -474,9 +474,12 @@ class QueueManager(QObject):
                         print(f"{timestamp()} [RESCAN_REDUCED] {item.name or os.path.basename(path)}: "
                               f"{removed} images removed, {current_count} total")
                     else:
-                        # Same count - just clear error if any
+                        # Same count - just clear error if any, but preserve completed status
                         if item.status in [QUEUE_STATE_SCAN_FAILED, QUEUE_STATE_FAILED]:
                             item.status = QUEUE_STATE_INCOMPLETE if (item.uploaded_images or 0) > 0 else QUEUE_STATE_READY
+                        # Keep completed galleries as completed if no changes
+                        elif item.status == QUEUE_STATE_COMPLETED:
+                            pass  # Don't change completed status when no files changed
                         item.error_message = ""
                         
                         from imxup import timestamp

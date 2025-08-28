@@ -15,38 +15,34 @@ class IconManager:
     
     # Hybrid icon mapping: string for auto-invert, list for manual light/dark pairs
     ICON_MAP = {
-        # Status icons - single icons (auto-invert) or [light, dark] pairs
-        'status_completed': 'check.png',                    # Auto-invert
-        'status_failed': 'error.png',                       # Auto-invert  
-        'status_uploading': 'start.png',                    # Auto-invert
-        'status_paused': 'pause.png',                       # Auto-invert
-        'status_queued': 'queued.png',                      # Auto-invert
-        'status_ready': 'ready.png',                        # Auto-invert
-        'status_pending': 'pending.png',                    # Auto-invert
-        'status_incomplete': 'incomplete.png',              # Auto-invert
-        'status_scan_failed': 'scan_failed.png',           # Auto-invert
-        'status_upload_failed': 'error.png',               # Auto-invert (reuses error.png)
-        'status_scanning': 'pending.png',                  # Auto-invert (reuses pending.png)
-        
-        # Example of manual light/dark pairs (uncomment when dark versions available):
-        # 'status_failed': ['error.png', 'error-dark.png'],  # Manual pair
-        
-        # Action button icons
-        'action_start': 'play.png',
-        'action_stop': 'stop.png',
-        'action_view': 'view.png',
-        'action_view_error': 'view_error.png',
-        'action_cancel': 'pause.png',
-        'action_resume': 'play.png',  # Reuses play.png
+        # Status icons           Light icon                      Dark icon        
+        'status_completed':     ['status_completed-light.png',  'status_completed-dark.png'],
+        'status_failed':        ['status_failed-light.png',     'status_failed-dark.png'], 
+        'status_uploading':     ['status_uploading-light.png',  'status_uploading-dark.png'],
+        'status_paused':        ['status_paused-light.png',     'status_paused-dark.png'],
+        'status_queued':        ['status_queued-light.png',     'status_queued-dark.png'],
+        'status_ready':         ['status_ready-light.png',      'status_ready-dark.png'],
+        'status_pending':       ['status_pending-light.png',    'status_pending-dark.png'],
+        'status_incomplete':    ['status_incomplete-light.png', 'status_incomplete-dark.png'],
+        'status_scan_failed':   ['status_scan_failed-light.png','status_scan_failed-dark.png'],
+        'status_upload_failed': ['status_error-light.png',      'status_error-dark.png'],
+        'status_scanning':      ['status_scanning-light.png',   'status_scanning-dark.png'],
+                        
+        # Action button icons    Light icon                      Dark icon
+        'action_start':         ['action_start-light.png',      'action_start-dark.png'],
+        'action_stop':          ['action_stop-light.png',       'action_stop-dark.png'],
+        'action_view':          ['action_view-light.png',       'action_view-dark.png'],
+        'action_view_error':    ['action_view_error-light.png', 'action_view_error-dark.png'],
+        'action_cancel':        ['action_cancel-light.png',     'action_cancel-dark.png'],
+        'action_resume':        ['action_resume-light.png',     'action_resume-dark.png'],
         
         # UI element icons
-        'templates': 'templates.svg',
-        'credentials': 'credentials.svg',
-        'main_window': 'imxup.png',
-        'app_icon': 'imxup.ico',
-        
+        'templates':            ['templates-light.png',         'templates-dark.png'],
+        'credentials':          ['credentials-light.png',       'credentials-dark.png'],
+        'main_window':          'imxup.png',
+        'app_icon':             'imxup.ico',
         # Alternative sizes (optional)
-        'check_small': 'check16.png',
+        'check_small':          'check16.png',
     }
     
     # Qt standard icon fallbacks (explicit, not hidden)
@@ -85,23 +81,23 @@ class IconManager:
         self._create_missing_dark_variants()
         
         # Force convert status icons to use dark variants since they exist
-        status_conversions = {
-            'status_completed':     ['status_completed-light.png',  'status_completed-dark.png'],
-            'status_failed':        ['status_failed-light.png',     'status_failed-dark.png'], 
-            'status_uploading':     ['status_uploading-light.png',  'status_uploading-dark.png'],
-            'status_paused':        ['status_paused-light.png',     'status_paused-dark.png'],
-            'status_queued':        ['status_queued-light.png',     'status_queued-dark.png'],
-            'status_ready':         ['status_ready-light.png',      'status_ready-dark.png'],
-            'status_pending':       ['status_pending-light.png',    'status_pending-dark.png'],
-            'status_incomplete':    ['status_incomplete-light.png', 'status_incomplete-dark.png'],
-            'status_scan_failed':   ['status_scan_failed-light.png','status_scan_failed-dark.png'],
-            'status_upload_failed': ['status_error-light.png',      'status_error-dark.png'],
-            'status_scanning':      ['status_scanning-light.png',   'status_scanning-dark.png'],
-        }
-        
-        for key, config in status_conversions.items():
-            if key in self.ICON_MAP:
-                self.ICON_MAP[key] = config
+        #status_conversions = {
+        #    'status_completed':     ['status_completed-light.png',  'status_completed-dark.png'],
+        #    'status_failed':        ['status_failed-light.png',     'status_failed-dark.png'], 
+        #    'status_uploading':     ['status_uploading-light.png',  'status_uploading-dark.png'],
+        #    'status_paused':        ['status_paused-light.png',     'status_paused-dark.png'],
+        #    'status_queued':        ['status_queued-light.png',     'status_queued-dark.png'],
+        #    'status_ready':         ['status_ready-light.png',      'status_ready-dark.png'],
+        #    'status_pending':       ['status_pending-light.png',    'status_pending-dark.png'],
+        #    'status_incomplete':    ['status_incomplete-light.png', 'status_incomplete-dark.png'],
+        #    'status_scan_failed':   ['status_scan_failed-light.png','status_scan_failed-dark.png'],
+        #    'status_upload_failed': ['status_error-light.png',      'status_error-dark.png'],
+        #    'status_scanning':      ['status_scanning-light.png',   'status_scanning-dark.png'],
+        #}
+        # 
+        #for key, config in status_conversions.items():
+        #    if key in self.ICON_MAP:
+        #        self.ICON_MAP[key] = config
         
         # Debug: show final config state
         print(f"DEBUG: Icon configs after auto-generation:")
@@ -123,6 +119,15 @@ class IconManager:
         Returns:
             QIcon object (may be null if not found and no fallback)
         """
+        # Auto-detect dark theme if not explicitly set to True
+        if not is_dark_theme:
+            from PyQt6.QtWidgets import QApplication
+            app = QApplication.instance()
+            if app:
+                palette = app.palette()
+                window_color = palette.color(palette.ColorRole.Window)
+                is_dark_theme = window_color.lightness() < 128
+        
         # Create cache key that includes theme/selection state and size
         cache_key = f"{icon_key}_{is_dark_theme}_{is_selected}_{requested_size}"
         
@@ -145,6 +150,10 @@ class IconManager:
         filename = self._get_themed_filename(config, is_dark_theme, is_selected)
         if not filename:
             return QIcon()
+            
+        # Debug output for templates icon
+        if icon_key == 'templates':
+            print(f"DEBUG: templates icon - is_dark_theme: {is_dark_theme}, config: {config}, filename: {filename}")
             
         icon_path = os.path.join(self.assets_dir, filename)
         

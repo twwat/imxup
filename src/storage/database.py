@@ -378,7 +378,7 @@ class QueueStore:
         insertion_order = int(item.get('insertion_order', 0) or 0)
         failed_files = json.dumps(item.get('failed_files', []))
         tab_name = item.get('tab_name', 'Main')
-        print(f"DEBUG: _upsert_gallery_row called with tab_name='{tab_name}' for path='{item.get('path', 'unknown')}'", flush=True)
+        #print(f"DEBUG: _upsert_gallery_row called with tab_name='{tab_name}' for path='{item.get('path', 'unknown')}'", flush=True)
         
         # Get tab_id for the tab_name
         cursor = conn.execute("SELECT id FROM tabs WHERE name = ? AND is_active = 1", (tab_name,))

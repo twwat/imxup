@@ -901,6 +901,7 @@ class TabbedGalleryWidget(QWidget):
         self.new_tab_btn = QPushButton("+")
         self.new_tab_btn.setFixedSize(32, 25)
         self.new_tab_btn.setToolTip("Add new tab (Ctrl+T)")
+        self.new_tab_btn.setProperty("class", "new-tab-button")
         
         # Tab bar styling - set after button creation
         self._setup_tab_styling()
@@ -914,7 +915,7 @@ class TabbedGalleryWidget(QWidget):
         
         tab_widget = QWidget()
         tab_widget.setLayout(tab_container)
-        tab_widget.setMaximumHeight(35)
+        # Height set in styles.qss
         
         layout.addWidget(tab_widget)
         
@@ -1648,8 +1649,8 @@ class TabbedGalleryWidget(QWidget):
             self.tab_bar.setCurrentIndex(index)
     
     def _setup_tab_styling(self):
-        """Setup theme-aware tab styling with enhanced visual feedback"""
-        # Check if we're in dark mode
+        """Setup special tab data attributes not handled by styles.qss"""
+        # Check if we're in dark mode for special attributes only
         app = QApplication.instance()
         is_dark = False
         if app:
@@ -1657,133 +1658,30 @@ class TabbedGalleryWidget(QWidget):
             window_color = palette.color(palette.ColorRole.Window)
             is_dark = window_color.lightness() < 128
         
-        if is_dark:
-            tab_style = """
-                QTabBar::tab {
-                    background: #2b2b2b;
-                    border: 1px solid #404040;
-                    border-bottom: none;
-                    padding: 8px 16px;
-                    margin-right: 1px;
-                    min-width: 80px;
-                    border-top-left-radius: 4px;
-                    border-top-right-radius: 4px;
-                    color: #e6e6e6;
-                    font-weight: 500;
-                }
-                QTabBar::tab:selected {
-                    background: #3d3d3d;
-                    border-bottom: 3px solid #3498db;
-                    color: #ffffff;
-                    font-weight: 600;
-                }
-                QTabBar::tab:hover:!selected {
-                    background: #353535;
-                    border-color: #505050;
-                }
-                QTabBar::tab:!selected:hover {
-                    color: #f0f0f0;
-                }
-                QTabBar::tab[data-tab-type="system"] {
-                    font-style: italic;
-                }
-                QTabBar::tab[data-modified="true"] {
-                    color: #f39c12;
-                }
-                QTabBar::tab[data-drag-highlight="true"] {
-                    border: 2px solid #3498db;
-                    background: #404040;
-                }
-            """
-        else:
-            tab_style = """
-                QTabBar::tab {
-                    background: #f8f9fa;
-                    border: 1px solid #dee2e6;
-                    border-bottom: none;
-                    padding: 8px 16px;
-                    margin-right: 1px;
-                    min-width: 80px;
-                    border-top-left-radius: 4px;
-                    border-top-right-radius: 4px;
-                    color: #495057;
-                    font-weight: 500;
-                }
-                QTabBar::tab:selected {
-                    background: #ffffff;
-                    border-bottom: 3px solid #3498db;
-                    color: #212529;
-                    font-weight: 600;
-                    box-shadow: 0 1px 3px rgba(0,0,0,0.1);
-                }
-                QTabBar::tab:hover:!selected {
-                    background: #e9ecef;
-                    border-color: #adb5bd;
-                }
-                QTabBar::tab:!selected:hover {
-                    color: #212529;
-                }
-                QTabBar::tab[data-tab-type="system"] {
-                    font-style: italic;
-                }
-                QTabBar::tab[data-modified="true"] {
-                    color: #e67e22;
-                }
-                QTabBar::tab[data-drag-highlight="true"] {
-                    border: 2px solid #3498db;
-                    background: #e3f2fd;
-                }
-            """
+        # Only apply special data attribute styling - main styling comes from styles.qss
+        special_style = """
+            QTabBar::tab[data-tab-type="system"] {
+                font-style: italic;
+            }
+            QTabBar::tab[data-modified="true"] {
+                color: %s;
+            }
+            QTabBar::tab[data-drag-highlight="true"] {
+                border: 2px solid #3498db;
+                background: %s;
+            }
+        """ % (
+            "#f39c12" if is_dark else "#e67e22",  # modified color
+            "#404040" if is_dark else "#e3f2fd"   # drag highlight background
+        )
         
-        self.tab_bar.setStyleSheet(tab_style)
+        self.tab_bar.setStyleSheet(special_style)
         self._update_new_tab_button_style(is_dark)
     
     def _update_new_tab_button_style(self, is_dark=False):
         """Update the new tab button styling to match current theme"""
-        if is_dark:
-            button_style = """
-                QPushButton {
-                    background: #2b2b2b;
-                    border: 1px solid #404040;
-                    border-radius: 4px;
-                    color: #e6e6e6;
-                    font-weight: bold;
-                    font-size: 16px;
-                    padding: 2px;
-                }
-                QPushButton:hover {
-                    background: #353535;
-                    border-color: #505050;
-                    color: #3498db;
-                }
-                QPushButton:pressed {
-                    background: #1e1e1e;
-                    border-color: #3498db;
-                }
-            """
-        else:
-            button_style = """
-                QPushButton {
-                    background: #f8f9fa;
-                    border: 1px solid #dee2e6;
-                    border-radius: 4px;
-                    color: #495057;
-                    font-weight: bold;
-                    font-size: 16px;
-                    padding: 2px;
-                }
-                QPushButton:hover {
-                    background: #e9ecef;
-                    border-color: #adb5bd;
-                    color: #3498db;
-                }
-                QPushButton:pressed {
-                    background: #dee2e6;
-                    border-color: #3498db;
-                }
-            """
-        
-        self.new_tab_btn.setStyleSheet(button_style)
+        # Force style update to apply theme from styles.qss
+        self.new_tab_btn.style().polish(self.new_tab_btn)
     
     def update_theme(self):
         """Update tab styling when theme changes"""
@@ -2149,21 +2047,6 @@ class GalleryTableWidget(QTableWidget):
         
         # Set larger icon size for Status column icons (default is usually 16x16)
         self.setIconSize(QSize(20, 20))
-        
-        # Set global font styles for table items to prevent size changes
-        self.setStyleSheet("""
-            QTableWidget::item {
-                font-size: 8pt !important;
-                font-family: system;
-                padding: 2px;
-            }
-            QTableWidget::item:selected {
-                font-size: 8pt !important;
-            }
-            QTableWidgetItem {
-                font-size: 8pt !important;
-            }
-        """)
         try:
             # Left-align the 'gallery name' header specifically
             hn = self.horizontalHeaderItem(1)
@@ -2229,49 +2112,7 @@ class GalleryTableWidget(QTableWidget):
         self.setSortingEnabled(True)
         self.horizontalHeader().setSortIndicatorShown(False)  # No initial sort indicator
         
-        # Styling - theme-aware stylesheet for light/dark modes
-        try:
-            pal = self.palette()
-            bg = pal.window().color()
-            is_dark = (0.2126 * bg.redF() + 0.7152 * bg.greenF() + 0.0722 * bg.blueF()) < 0.5
-        except Exception:
-            is_dark = False
-        table_bg = "#1e1e1e" if is_dark else "white"
-        gridline = "rgba(255, 255, 255, 0.08)" if is_dark else "rgba(128, 128, 128, 0.1)"
-        alt_bg = "rgba(64, 64, 64, 0.35)" if is_dark else "rgba(240, 240, 240, 0.3)"
-        border = "#444444" if is_dark else "#cccccc"
-        header_bg = "#333333" if is_dark else "#f0f0f0"
-        header_hover = "#3a3a3a" if is_dark else "#e0e0e0"
-        header_bottom = "#3498db" if not is_dark else "#2d6ea3"
-        selected_bg = "#1f6aa5" if is_dark else "#2980b9"
-        self.setStyleSheet(f"""
-            QTableWidget {{
-                gridline-color: {gridline};
-                alternate-background-color: {alt_bg};
-                border: 1px solid {border};
-                border-radius: 4px;
-                background-color: {table_bg};
-            }}
-            QTableWidget::item {{
-                padding: 0px 4px;
-                border: none;
-            }}
-            QTableWidget::item:selected {{
-                background-color: {selected_bg};
-                color: white;
-            }}
-            QHeaderView::section {{
-                background-color: {header_bg};
-                padding: 1px 3px; /* tighter header padding */
-                border: none;
-                font-weight: bold;
-                font-size: 10px; /* slightly smaller header text */
-                border-bottom: 2px solid {header_bottom};
-            }}
-            QHeaderView::section:hover {{
-                background-color: {header_hover};
-            }}
-        """)
+        # Let styles.qss handle the styling for proper theme support
         self.setShowGrid(True)
         self.setAlternatingRowColors(True)
         self.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
@@ -3277,7 +3118,7 @@ class ActionButtonWidget(QWidget):
         
         
         # Set consistent minimum height for the widget to match table row height
-        self.setMinimumHeight(24)
+        self.setProperty("class", "status-row")
         
         self.start_btn = QPushButton("Start")
         self.start_btn.setFixedSize(20, 20)  # smaller icon-only buttons
@@ -3287,12 +3128,7 @@ class ActionButtonWidget(QWidget):
             self.start_btn.setIconSize(QSize(16, 16))
             self.start_btn.setText("")
             self.start_btn.setToolTip("Start")
-            icon_btn_style = (
-                "QPushButton { background-color: transparent; border: none; padding: 2px; }"
-                "QPushButton:hover { background-color: rgba(0,0,0,0.06); border-radius: 4px; }"
-                "QPushButton:pressed { background-color: rgba(0,0,0,0.12); }"
-            )
-            self.start_btn.setStyleSheet(icon_btn_style)
+            self.start_btn.setProperty("class", "icon-btn")
         except Exception:
             pass
         
@@ -3322,7 +3158,7 @@ class ActionButtonWidget(QWidget):
             self.stop_btn.setIconSize(QSize(16, 16))
             self.stop_btn.setText("")
             self.stop_btn.setToolTip("Stop")
-            self.stop_btn.setStyleSheet(icon_btn_style)
+            self.stop_btn.setProperty("class", "icon-btn")
         except Exception:
             pass
         #self.stop_btn.setStyleSheet("""
@@ -3351,7 +3187,7 @@ class ActionButtonWidget(QWidget):
             self.view_btn.setIconSize(QSize(16, 16))
             self.view_btn.setText("")
             self.view_btn.setToolTip("View")
-            self.view_btn.setStyleSheet(icon_btn_style)
+            self.view_btn.setProperty("class", "icon-btn")
         except Exception:
             pass
         #self.view_btn.setStyleSheet("""
@@ -3380,7 +3216,7 @@ class ActionButtonWidget(QWidget):
             self.cancel_btn.setIconSize(QSize(16, 16))
             self.cancel_btn.setText("")
             self.cancel_btn.setToolTip("Pause/Cancel queued item")
-            self.cancel_btn.setStyleSheet(icon_btn_style)
+            self.cancel_btn.setProperty("class", "icon-btn")
         except Exception:
             pass    
         #self.cancel_btn.setStyleSheet("""
@@ -3516,7 +3352,7 @@ class CredentialSetupDialog(QDialog):
             
         )
         info_text.setWordWrap(True)
-        info_text.setStyleSheet(f"padding: 10px; background-color: {self._panel_bg}; border: 1px solid {self._panel_border}; border-radius: 5px; color: {self._text_color};")
+        info_text.setProperty("class", "info-panel")
         layout.addWidget(info_text)
         
 
@@ -3529,7 +3365,7 @@ class CredentialSetupDialog(QDialog):
         username_status_layout = QHBoxLayout()
         username_status_layout.addWidget(QLabel("Username: "))
         self.username_status_label = QLabel("NOT SET")
-        self.username_status_label.setStyleSheet(f"color: {self._muted_color}; font-style: italic;")
+        self.username_status_label.setProperty("class", "status-muted")
         username_status_layout.addWidget(self.username_status_label)
         username_status_layout.addStretch()
         self.username_change_btn = QPushButton("Set")
@@ -3548,7 +3384,7 @@ class CredentialSetupDialog(QDialog):
         password_status_layout = QHBoxLayout()
         password_status_layout.addWidget(QLabel("Password: "))
         self.password_status_label = QLabel("NOT SET")
-        self.password_status_label.setStyleSheet(f"color: {self._muted_color}; font-style: italic;")
+        self.password_status_label.setProperty("class", "status-muted")
         password_status_layout.addWidget(self.password_status_label)
         password_status_layout.addStretch()
         self.password_change_btn = QPushButton("Set")
@@ -3567,7 +3403,7 @@ class CredentialSetupDialog(QDialog):
         api_key_status_layout = QHBoxLayout()
         api_key_status_layout.addWidget(QLabel("API Key: "))
         self.api_key_status_label = QLabel("NOT SET")
-        self.api_key_status_label.setStyleSheet(f"color: {self._muted_color}; font-style: italic;")
+        self.api_key_status_label.setProperty("class", "status-muted")
         api_key_status_layout.addWidget(self.api_key_status_label)
         api_key_status_layout.addStretch()
         self.api_key_change_btn = QPushButton("Set")
@@ -3586,7 +3422,7 @@ class CredentialSetupDialog(QDialog):
         cookies_status_layout = QHBoxLayout()
         cookies_status_layout.addWidget(QLabel("Firefox cookies: "))
         self.cookies_status_label = QLabel("Unknown")
-        self.cookies_status_label.setStyleSheet(f"color: {self._muted_color}; font-style: italic;")
+        self.cookies_status_label.setProperty("class", "status-muted")
         cookies_status_layout.addWidget(self.cookies_status_label)
         cookies_status_layout.addStretch()
         self.cookies_enable_btn = QPushButton("Enable")
@@ -3653,7 +3489,8 @@ class CredentialSetupDialog(QDialog):
                 
                 if username:
                     self.username_status_label.setText(username)
-                    self.username_status_label.setStyleSheet("color: #27ae60; font-weight: bold;")
+                    self.username_status_label.setProperty("class", "status-success")
+                    self.username_status_label.style().polish(self.username_status_label)
                     # Buttons: Change/Unset
                     try:
                         txt = " Change"
@@ -3665,7 +3502,8 @@ class CredentialSetupDialog(QDialog):
                     self.username_remove_btn.setEnabled(True)
                 else:
                     self.username_status_label.setText("NOT SET")
-                    self.username_status_label.setStyleSheet("color: #666; font-style: italic;")
+                    self.username_status_label.setProperty("class", "status-muted")
+                    self.username_status_label.style().polish(self.username_status_label)
                     try:
                         txt = " Set"
                         if not txt.startswith(" "):
@@ -3677,7 +3515,8 @@ class CredentialSetupDialog(QDialog):
                 
                 if password:
                     self.password_status_label.setText("********")
-                    self.password_status_label.setStyleSheet("color: #27ae60; font-weight: bold;")
+                    self.password_status_label.setProperty("class", "status-success")
+                    self.password_status_label.style().polish(self.password_status_label)
                     try:
                         txt = " Change"
                         if not txt.startswith(" "):
@@ -3688,7 +3527,8 @@ class CredentialSetupDialog(QDialog):
                     self.password_remove_btn.setEnabled(True)
                 else:
                     self.password_status_label.setText("NOT SET")
-                    self.password_status_label.setStyleSheet("color: #666; font-style: italic;")
+                    self.password_status_label.setProperty("class", "status-muted")
+                    self.password_status_label.style().polish(self.password_status_label)
                     try:
                         txt = " Set"
                         if not txt.startswith(" "):
@@ -3706,7 +3546,8 @@ class CredentialSetupDialog(QDialog):
                         if api_key and len(api_key) > 8:
                             masked_key = api_key[:4] + "*" * 20 + api_key[-4:]
                             self.api_key_status_label.setText(masked_key)
-                            self.api_key_status_label.setStyleSheet("color: #27ae60; font-weight: bold;")
+                            self.api_key_status_label.setProperty("class", "status-success")
+                            self.api_key_status_label.style().polish(self.api_key_status_label)
                             try:
                                 txt = " Change"
                                 if not txt.startswith(" "):
@@ -3717,7 +3558,8 @@ class CredentialSetupDialog(QDialog):
                             self.api_key_remove_btn.setEnabled(True)
                         else:
                             self.api_key_status_label.setText("SET")
-                            self.api_key_status_label.setStyleSheet("color: #27ae60; font-weight: bold;")
+                            self.api_key_status_label.setProperty("class", "status-success")
+                            self.api_key_status_label.style().polish(self.api_key_status_label)
                             try:
                                 txt = " Change"
                                 if not txt.startswith(" "):
@@ -3728,7 +3570,8 @@ class CredentialSetupDialog(QDialog):
                             self.api_key_remove_btn.setEnabled(True)
                     except:
                         self.api_key_status_label.setText("SET")
-                        self.api_key_status_label.setStyleSheet("color: #27ae60; font-weight: bold;")
+                        self.api_key_status_label.setProperty("class", "status-success")
+                        self.api_key_status_label.style().polish(self.api_key_status_label)
                         try:
                             txt = " Change"
                             if not txt.startswith(" "):
@@ -3739,7 +3582,8 @@ class CredentialSetupDialog(QDialog):
                         self.api_key_remove_btn.setEnabled(True)
                 else:
                     self.api_key_status_label.setText("NOT SET")
-                    self.api_key_status_label.setStyleSheet("color: #666; font-style: italic;")
+                    self.api_key_status_label.setProperty("class", "status-muted")
+                    self.api_key_status_label.style().polish(self.api_key_status_label)
                      # When not set, offer Set and disable Unset
                     try:
                         txt = " Set"
@@ -3755,17 +3599,20 @@ class CredentialSetupDialog(QDialog):
                 cookies_enabled = cookies_enabled_val != 'false'
                 if cookies_enabled:
                     self.cookies_status_label.setText("Enabled")
-                    self.cookies_status_label.setStyleSheet("color: #27ae60; font-weight: bold;")
+                    self.cookies_status_label.setProperty("class", "status-success")
+                    self.cookies_status_label.style().polish(self.cookies_status_label)
                 else:
                     self.cookies_status_label.setText("Disabled")
-                    self.cookies_status_label.setStyleSheet("color: #c0392b; font-weight: bold;")
+                    self.cookies_status_label.setProperty("class", "status-error")
+                    self.cookies_status_label.style().polish(self.cookies_status_label)
                 # Toggle button states
                 self.cookies_enable_btn.setEnabled(not cookies_enabled)
                 self.cookies_disable_btn.setEnabled(cookies_enabled)
         else:
             # Defaults if no file
             self.cookies_status_label.setText("Enabled")
-            self.cookies_status_label.setStyleSheet("color: #27ae60; font-weight: bold;")
+            self.cookies_status_label.setProperty("class", "status-success")
+            self.cookies_status_label.style().polish(self.cookies_status_label)
             self.cookies_enable_btn.setEnabled(False)
             self.cookies_disable_btn.setEnabled(True)
     
@@ -3935,7 +3782,7 @@ class CredentialSetupDialog(QDialog):
         
         # Info label
         info_label = QLabel("Get your API key from: https://imx.to/user/api")
-        info_label.setStyleSheet("color: #666; font-size: 11px;")
+        info_label.setProperty("class", "small-text status-muted")
         layout.addWidget(info_label)
         
         # Buttons
@@ -4166,7 +4013,7 @@ class BBCodeViewerDialog(QDialog):
         
         # Text editor
         self.text_edit = QPlainTextEdit()
-        self.text_edit.setFont(QFont("Consolas", 10))
+        self.text_edit.setProperty("class", "console")
         layout.addWidget(self.text_edit)
         
         # Buttons
@@ -4324,7 +4171,7 @@ class HelpDialog(QDialog):
                 any_docs_loaded = True
                 editor = QTextEdit()
                 editor.setReadOnly(True)
-                editor.setFont(QFont("Consolas", 10))
+                editor.setProperty("class", "console")
                 try:
                     # Prefer Markdown rendering if available
                     editor.setMarkdown(open(path, "r", encoding="utf-8").read())
@@ -4593,7 +4440,7 @@ class LogViewerDialog(QDialog):
             self.log_view.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
         except Exception:
             pass
-        self.log_view.setFont(QFont("Consolas", 10))
+        self.log_view.setProperty("class", "console")
         body_hbox.addWidget(self.log_view, 1)
         logs_vbox.addLayout(body_hbox)
 
@@ -4879,14 +4726,15 @@ class ImxUploadGUI(QMainWindow):
         self.splash = splash
         # Initialize IconManager
         if self.splash:
-            self.splash.set_status("Icons and assets")
+            self.splash.set_status("IconManager")
         try:
             assets_dir = get_assets_dir()
             icon_mgr = init_icon_manager(assets_dir)
             # Validate icons and report any issues
             validation_result = icon_mgr.validate_icons(report=True)
         except Exception as e:
-            print(f"Warning: Failed to initialize IconManager: {e}")
+            print(f"WARNING: Failed to initialize IconManager: {e}")
+            
             
         # Set main window icon
         try:
@@ -4898,6 +4746,8 @@ class ImxUploadGUI(QMainWindow):
         if self.splash:
             self.splash.set_status("SQLite database")
         print(f"DEBUG: About to create QueueManager")
+        if self.splash:
+            self.splash.set_status("QueueManager")
         self.queue_manager = QueueManager()
         print(f"DEBUG: QueueManager created")
         self.queue_manager.parent = self  # Give QueueManager access to parent for settings
@@ -4924,6 +4774,8 @@ class ImxUploadGUI(QMainWindow):
         
         # Initialize completion worker for background processing
         print(f"DEBUG: Creating CompletionWorker")
+        if self.splash:
+            self.splash.set_status("Completion worker")
         self.completion_worker = CompletionWorker(self)
         print(f"DEBUG: CompletionWorker created")
         self.completion_worker.completion_processed.connect(self.on_completion_processed)
@@ -4941,6 +4793,8 @@ class ImxUploadGUI(QMainWindow):
         self._last_scan_states = {}  # Maps path -> scan_complete status
         
         # Cache expensive operations to improve responsiveness
+        if self.splash:
+            self.splash.set_status("function cache")
         self._cached_is_dark_mode = False
         self._theme_cache_time = 0
         self._format_functions_cached = False
@@ -4949,11 +4803,15 @@ class ImxUploadGUI(QMainWindow):
         self._cache_format_functions()
         
         # Initialize non-blocking components
+        if self.splash:
+            self.splash.set_status("Thread Pool")
         self._thread_pool = QThreadPool()
         self._thread_pool.setMaxThreadCount(4)  # Limit background threads
         self._icon_cache = IconCache()
         
         # Initialize progress update batcher
+        if self.splash:
+            self.splash.set_status("ProgressUpdateBatcher")
         self._progress_batcher = ProgressUpdateBatcher(
             self._process_batched_progress_update,
             batch_interval=0.05  # 50ms batching
@@ -4966,12 +4824,14 @@ class ImxUploadGUI(QMainWindow):
         self.setAcceptDrops(True)
         
         # Single instance server
+        if self.splash:
+            self.splash.set_status("Single Instance Server")
         self.server = SingleInstanceServer()
         self.server.folder_received.connect(self.add_folder_from_command_line)
         self.server.start()
         
         if self.splash:
-            self.splash.set_status("user interface")
+            self.splash.set_status("UI")
         self.setup_ui()
         if self.splash:
             self.splash.set_status("menu bar")
@@ -4987,7 +4847,7 @@ class ImxUploadGUI(QMainWindow):
         if self.splash:
             self.splash.set_status("gremlins")
             QApplication.processEvents()
-            time.sleep(0.01)  # Very brief
+            time.sleep(0.001)  # Very brief
         
         # Initialize table update queue after table creation
         self._table_update_queue = TableUpdateQueue(self.gallery_table, self.path_to_row)
@@ -5445,11 +5305,7 @@ class ImxUploadGUI(QMainWindow):
             # Check if this row is selected using existing pattern
             selected_rows = {item.row() for item in self.gallery_table.selectedItems()}
             is_selected = row in selected_rows
-                
-            # Debug output for selection detection
-            if status in ["completed", "failed"] and row < 5:  # Only log for first few rows of common statuses
-                print(f"DEBUG: Row {row}, status={status}, dark_theme={is_dark_theme}, selected={is_selected}")
-            
+
             icon_mgr = get_icon_manager()
             if icon_mgr:
                 # Use IconManager with theme and selection awareness
@@ -5689,6 +5545,12 @@ class ImxUploadGUI(QMainWindow):
             pass  # Removed deprecated update_queue_display call that overwrites correct rename status
         except Exception:
             pass
+        
+        # Refresh button icons with correct theme now that palette is ready
+        try:
+            self._refresh_button_icons()
+        except Exception:
+            pass
     
     def _cache_format_functions(self):
         """Pre-cache ALL imxup functions to avoid blocking imports during runtime"""
@@ -5786,7 +5648,7 @@ class ImxUploadGUI(QMainWindow):
         
         # Tabbed gallery widget (replaces single table)
         self.gallery_table = TabbedGalleryWidget()
-        self.gallery_table.setMinimumHeight(400)  # Taller table
+        self.gallery_table.setProperty("class", "gallery-table")
         queue_layout.addWidget(self.gallery_table, 1)  # Give it stretch priority
         
         # Header context menu for column visibility + persist widths/visibility
@@ -5802,7 +5664,9 @@ class ImxUploadGUI(QMainWindow):
         
         # Add keyboard shortcut hint
         shortcut_hint = QLabel("💡 Tips: Press Delete key to remove selected items / drag and drop to add folders")
-        shortcut_hint.setStyleSheet("color: #666; font-size: 11px; font-style: italic;")
+        shortcut_hint.setProperty("class", "small-text status-muted")
+        shortcut_hint.setStyleSheet("font-size: 10px; color: #999999; font-style: italic;")
+        #shortcut_hint.style().polish(shortcut_hint)
         shortcut_hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
         queue_layout.addWidget(shortcut_hint)
         
@@ -5813,7 +5677,7 @@ class ImxUploadGUI(QMainWindow):
         if not self.start_all_btn.text().startswith(" "):
             self.start_all_btn.setText(" " + self.start_all_btn.text())
         self.start_all_btn.clicked.connect(self.start_all_uploads)
-        self.start_all_btn.setMinimumHeight(34)
+        self.start_all_btn.setProperty("class", "main-action-btn")
         #self.start_all_btn.setStyleSheet("""
         #    QPushButton {
         #        background-color: #bee6cf;
@@ -5837,14 +5701,14 @@ class ImxUploadGUI(QMainWindow):
         if not self.pause_all_btn.text().startswith(" "):
             self.pause_all_btn.setText(" " + self.pause_all_btn.text())
         self.pause_all_btn.clicked.connect(self.pause_all_uploads)
-        self.pause_all_btn.setMinimumHeight(34)
+        self.pause_all_btn.setProperty("class", "main-action-btn")
         controls_layout.addWidget(self.pause_all_btn)
         
         self.clear_completed_btn = QPushButton("Clear Completed")
         if not self.clear_completed_btn.text().startswith(" "):
             self.clear_completed_btn.setText(" " + self.clear_completed_btn.text())
         self.clear_completed_btn.clicked.connect(self.clear_completed)
-        self.clear_completed_btn.setMinimumHeight(34)
+        self.clear_completed_btn.setProperty("class", "main-action-btn")
         controls_layout.addWidget(self.clear_completed_btn)
 
         # Browse button (moved here to be to the right of Clear Completed)
@@ -5852,7 +5716,7 @@ class ImxUploadGUI(QMainWindow):
         if not self.browse_btn.text().startswith(" "):
             self.browse_btn.setText(" " + self.browse_btn.text())
         self.browse_btn.clicked.connect(self.browse_for_folders)
-        self.browse_btn.setMinimumHeight(34)
+        self.browse_btn.setProperty("class", "main-action-btn")
         controls_layout.addWidget(self.browse_btn)
         
 
@@ -5885,7 +5749,7 @@ class ImxUploadGUI(QMainWindow):
         
         # Settings section
         self.settings_group = QGroupBox("Settings")
-        self.settings_group.setMinimumHeight(350)  # Prevent button overlap when window is resized
+        self.settings_group.setProperty("class", "settings-group")
         settings_layout = QGridLayout(self.settings_group)
         try:
             settings_layout.setContentsMargins(10, 10, 10, 10)
@@ -6026,9 +5890,9 @@ class ImxUploadGUI(QMainWindow):
         if not self.save_settings_btn.text().startswith(" "):
             self.save_settings_btn.setText(" " + self.save_settings_btn.text())
         self.save_settings_btn.clicked.connect(self.save_upload_settings)
-        self.save_settings_btn.setMinimumHeight(30)
-        self.save_settings_btn.setMaximumHeight(34)
+        self.save_settings_btn.setProperty("class", "settings-btn")
         self.save_settings_btn.setEnabled(False)  # Initially disabled
+        self.save_settings_btn.setVisible(False)  # Initially hidden
         #self.save_settings_btn.setStyleSheet("""
         #    QPushButton {
         #        background-color: #ffe4b2;
@@ -6058,15 +5922,18 @@ class ImxUploadGUI(QMainWindow):
         
         # Add icons if available
         try:
-            templates_icon = get_icon('templates')
-            if not templates_icon.isNull():
-                self.manage_templates_btn.setIcon(templates_icon)
-                self.manage_templates_btn.setIconSize(QSize(16, 16))
-                
-            credentials_icon = get_icon('credentials')
-            if not credentials_icon.isNull():
-                self.manage_credentials_btn.setIcon(credentials_icon)
-                self.manage_credentials_btn.setIconSize(QSize(16, 16))
+            icon_mgr = get_icon_manager()
+            if icon_mgr:
+                is_dark_theme = self._get_cached_theme()
+                templates_icon = icon_mgr.get_icon('templates', self.style(), is_dark_theme)
+                if not templates_icon.isNull():
+                    self.manage_templates_btn.setIcon(templates_icon)
+                    self.manage_templates_btn.setIconSize(QSize(16, 16))
+                    
+                credentials_icon = icon_mgr.get_icon('credentials', self.style(), is_dark_theme)
+                if not credentials_icon.isNull():
+                    self.manage_credentials_btn.setIcon(credentials_icon)
+                    self.manage_credentials_btn.setIconSize(QSize(16, 16))
         except Exception:
             pass
         
@@ -6074,8 +5941,7 @@ class ImxUploadGUI(QMainWindow):
         self.manage_credentials_btn.clicked.connect(self.manage_credentials)
         
         for btn in [self.manage_templates_btn, self.manage_credentials_btn]:
-            btn.setMinimumHeight(30)
-            btn.setMaximumHeight(34)
+            btn.setProperty("class", "settings-btn")
         
         settings_layout.addWidget(self.manage_templates_btn, 9, 0)
         settings_layout.addWidget(self.manage_credentials_btn, 9, 1)
@@ -6163,36 +6029,21 @@ class ImxUploadGUI(QMainWindow):
         self.overall_progress.setMaximum(100)
         self.overall_progress.setTextVisible(True)
         self.overall_progress.setFormat("Ready")
-        self.overall_progress.setMinimumHeight(24)
-        self.overall_progress.setMaximumHeight(26)
         self.overall_progress.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        # Style to match other progress meters
-        self.overall_progress.setStyleSheet("""
-            QProgressBar {
-                border: 1px solid #ccc;
-                border-radius: 3px;
-                text-align: center;
-                font-size: 11px;
-                font-weight: bold;
-                margin: 0px;
-                padding: 0px;
-            }
-            QProgressBar::chunk {
-                border-radius: 2px;
-            }
-        """)
+        self.overall_progress.setProperty("class", "overall-progress")
+        self.overall_progress.setProperty("status", "ready")
         overall_layout.addWidget(self.overall_progress)
         progress_layout.addLayout(overall_layout)
 
         # Statistics
         self.stats_label = QLabel("Ready to upload galleries")
         self.stats_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.stats_label.setStyleSheet("color: #666; font-style: italic;")
+        self.stats_label.setStyleSheet("font-style: italic;")  # Let styles.qss handle the color
         progress_layout.addWidget(self.stats_label)
 
         # Keep bottom short like the original progress box
         progress_group.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        progress_group.setMaximumHeight(100)
+        progress_group.setProperty("class", "progress-group")
         bottom_layout.addWidget(progress_group, 3)  # Match left/right ratio (3:1)
 
         # Help group (right) -> repurpose as Stats details
@@ -6214,32 +6065,15 @@ class ImxUploadGUI(QMainWindow):
         self.stats_total_images_value_label = QLabel("0")
         #self.stats_current_speed_label = QLabel("Current speed: 0.0 KiB/s")
         #self.stats_fastest_speed_label = QLabel("Fastest speed: 0.0 KiB/s")
-        for lbl in (
-            self.stats_unnamed_text_label,
-            self.stats_total_galleries_text_label,
-            self.stats_total_images_text_label,
-        ):
-            try:
-                pal = self.palette()
-                bg = pal.window().color()
-                is_dark = (0.2126 * bg.redF() + 0.7152 * bg.greenF() + 0.0722 * bg.blueF()) < 0.5
-            except Exception:
-                is_dark = False
-            lbl.setStyleSheet(f"color: {'#dddddd' if is_dark else '#333333'};")
+        # Let styles.qss handle the colors for these labels
         for lbl in (
             self.stats_unnamed_value_label,
             self.stats_total_galleries_value_label,
             self.stats_total_images_value_label,
         ):
+            # Let styles.qss handle the colors for these value labels
             try:
-                pal = self.palette()
-                bg = pal.window().color()
-                is_dark = (0.2126 * bg.redF() + 0.7152 * bg.greenF() + 0.0722 * bg.blueF()) < 0.5
-            except Exception:
-                is_dark = False
-            lbl.setStyleSheet(f"color: {'#eeeeee' if is_dark else '#333333'};")
-            try:
-                lbl.setFont(QFont("Consolas", 10))
+                lbl.setProperty("class", "console")
             except Exception:
                 pass
             try:
@@ -6263,7 +6097,7 @@ class ImxUploadGUI(QMainWindow):
         except Exception:
             pass
         stats_group.setMinimumWidth(160)
-        stats_group.setMaximumHeight(100)
+        stats_group.setProperty("class", "stats-group")
 
         bottom_layout.addWidget(stats_group, 1)
 
@@ -6283,32 +6117,15 @@ class ImxUploadGUI(QMainWindow):
         self.speed_fastest_value_label = QLabel("0.0 KiB/s")
         self.speed_transferred_text_label = QLabel("Transferred:")
         self.speed_transferred_value_label = QLabel("0 B")
-        for lbl in (
-            self.speed_current_text_label,
-            self.speed_fastest_text_label,
-            self.speed_transferred_text_label,
-        ):
-            try:
-                pal = self.palette()
-                bg = pal.window().color()
-                is_dark = (0.2126 * bg.redF() + 0.7152 * bg.greenF() + 0.0722 * bg.blueF()) < 0.5
-            except Exception:
-                is_dark = False
-            lbl.setStyleSheet(f"color: {'#dddddd' if is_dark else '#333333'};")
+        # Let styles.qss handle the colors for Speed box text labels
         for lbl in (
             self.speed_current_value_label,
             self.speed_fastest_value_label,
             self.speed_transferred_value_label,
         ):
+            # Let styles.qss handle the colors for Speed box value labels
             try:
-                pal = self.palette()
-                bg = pal.window().color()
-                is_dark = (0.2126 * bg.redF() + 0.7152 * bg.greenF() + 0.0722 * bg.blueF()) < 0.5
-            except Exception:
-                is_dark = False
-            lbl.setStyleSheet(f"color: {'#eeeeee' if is_dark else '#333333'};")
-            try:
-                lbl.setFont(QFont("Consolas", 10))
+                lbl.setProperty("class", "console")
             except Exception:
                 pass
             try:
@@ -6318,7 +6135,7 @@ class ImxUploadGUI(QMainWindow):
 
         # Make current transfer speed value 1px larger than others
         try:
-            self.speed_current_value_label.setFont(QFont("Consolas", 11))
+            self.speed_current_value_label.setProperty("class", "console-large")
         except Exception:
             pass
 
@@ -6336,7 +6153,7 @@ class ImxUploadGUI(QMainWindow):
             speed_group.setFixedWidth(200)
         except Exception:
             pass
-        speed_group.setMaximumHeight(100)
+        speed_group.setProperty("class", "speed-group")
         bottom_layout.addWidget(speed_group, 1)
 
         main_layout.addLayout(bottom_layout)
@@ -6465,26 +6282,25 @@ class ImxUploadGUI(QMainWindow):
         
         # Add title
         title_label = QLabel("IMXup")
-        title_label.setStyleSheet("font-size: 24px; font-weight: bold; color: #CB4919;")
+        title_label.setProperty("class", "about-title")
         title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(title_label)
         
         # Add subtitle
         subtitle_label = QLabel("IMX.to Gallery Uploader")
-        subtitle_label.setStyleSheet("font-size: 14px; color: #666;")
+        subtitle_label.setProperty("class", "about-subtitle")
         subtitle_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(subtitle_label)
         
         # Add version
         version_label = QLabel(version)
-        version_label.setStyleSheet("font-size: 12px; font-weight: bold;")
+        version_label.setProperty("class", "about-version")
         version_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(version_label)
         
         # Add info text
         info_text = QTextBrowser()
-        info_text.setMaximumHeight(200)
-        info_text.setStyleSheet("background: transparent; border: none; font-size: 10px;")
+        info_text.setProperty("class", "about-info")
         info_html = """
         <div align="center">
         <p><strong>Copyright © 2025, twat</strong></p>
@@ -6667,12 +6483,37 @@ class ImxUploadGUI(QMainWindow):
     def _load_base_stylesheet(self) -> str:
         """Load the base QSS stylesheet for consistent fonts and styling."""
         try:
-            # Try to load from styles.qss file in the same directory as this script
+            # First try to load from project root styles.qss
             script_dir = os.path.dirname(os.path.abspath(__file__))
+            project_root = os.path.dirname(os.path.dirname(script_dir))
+            qss_path = os.path.join(project_root, "styles.qss")
+            if os.path.exists(qss_path):
+                with open(qss_path, 'r', encoding='utf-8') as f:
+                    full_content = f.read()
+                    # Extract base styles (everything before LIGHT_THEME_START)
+                    light_start = full_content.find('/* LIGHT_THEME_START')
+                    if light_start != -1:
+                        return full_content[:light_start].strip()
+                    # Fallback: everything before DARK_THEME_START
+                    dark_start = full_content.find('/* DARK_THEME_START')
+                    if dark_start != -1:
+                        return full_content[:dark_start].strip()
+                    return full_content
+            
+            # Fallback: try styles.qss in same directory as this script
             qss_path = os.path.join(script_dir, "styles.qss")
             if os.path.exists(qss_path):
                 with open(qss_path, 'r', encoding='utf-8') as f:
-                    return f.read()
+                    full_content = f.read()
+                    # Extract base styles (everything before LIGHT_THEME_START)
+                    light_start = full_content.find('/* LIGHT_THEME_START')
+                    if light_start != -1:
+                        return full_content[:light_start].strip()
+                    # Fallback: everything before DARK_THEME_START
+                    dark_start = full_content.find('/* DARK_THEME_START')
+                    if dark_start != -1:
+                        return full_content[:dark_start].strip()
+                    return full_content
         except Exception:
             pass
         
@@ -6686,6 +6527,72 @@ class ImxUploadGUI(QMainWindow):
             QPushButton { font-size: 9pt; }
             QLabel { font-size: 9pt; }
         """
+
+    def _load_theme_styles(self, theme_type: str) -> str:
+        """Load theme styles from styles.qss file."""
+        start_marker = f'/* {theme_type.upper()}_THEME_START'
+        end_marker = f'/* {theme_type.upper()}_THEME_END */'
+        
+        try:
+            # First try to load from project root styles.qss
+            script_dir = os.path.dirname(os.path.abspath(__file__))
+            project_root = os.path.dirname(os.path.dirname(script_dir))
+            qss_path = os.path.join(project_root, "styles.qss")
+            if os.path.exists(qss_path):
+                with open(qss_path, 'r', encoding='utf-8') as f:
+                    full_content = f.read()
+                    # Extract theme styles (between START and END markers)
+                    theme_start = full_content.find(start_marker)
+                    theme_end = full_content.find(end_marker)
+                    if theme_start != -1 and theme_end != -1:
+                        theme_content = full_content[theme_start:theme_end]
+                        # Remove the marker comment line
+                        lines = theme_content.split('\n')
+                        return '\n'.join(lines[1:])
+            
+            # Fallback: try styles.qss in same directory as this script
+            qss_path = os.path.join(script_dir, "styles.qss")
+            if os.path.exists(qss_path):
+                with open(qss_path, 'r', encoding='utf-8') as f:
+                    full_content = f.read()
+                    # Extract theme styles (between START and END markers)
+                    theme_start = full_content.find(start_marker)
+                    theme_end = full_content.find(end_marker)
+                    if theme_start != -1 and theme_end != -1:
+                        theme_content = full_content[theme_start:theme_end]
+                        # Remove the marker comment line
+                        lines = theme_content.split('\n')
+                        return '\n'.join(lines[1:])
+        except Exception:
+            pass
+        
+        # Fallback: inline theme styles
+        if theme_type == 'dark':
+            return """
+                QWidget { color: #e6e6e6; }
+                QToolTip { color: #e6e6e6; background-color: #333333; border: 1px solid #555; }
+                QTableWidget { background-color: #1e1e1e; color: #e6e6e6; gridline-color: #555555; border: 1px solid #555555; }
+                QTableWidget::item { background-color: #1e1e1e; color: #e6e6e6; }
+                QTableWidget::item:selected { background-color: #2f5f9f; color: #ffffff; }
+                QHeaderView::section { background-color: #2d2d2d; color: #e6e6e6; }
+                QMenu { background-color: #2d2d2d; color: #e6e6e6; border: 1px solid #555; font-size: 12px; }
+                QMenu::item { background-color: transparent; }
+                QMenu::item:selected { background-color: #2f5f9f; }
+                QLabel { color: #e6e6e6; }
+            """
+        else:  # light theme
+            return """
+                QWidget { color: #333333; }
+                QToolTip { color: #333333; background-color: #ffffcc; border: 1px solid #999; }
+                QTableWidget { background-color: #ffffff; color: #333333; gridline-color: #cccccc; border: 1px solid #cccccc; }
+                QTableWidget::item { background-color: #ffffff; color: #333333; }
+                QTableWidget::item:selected { background-color: #3399ff; color: #ffffff; }
+                QHeaderView::section { background-color: #f0f0f0; color: #333333; }
+                QMenu { background-color: #ffffff; color: #333333; border: 1px solid #999; font-size: 12px; }
+                QMenu::item { background-color: transparent; }
+                QMenu::item:selected { background-color: #3399ff; }
+                QLabel { color: #333333; }
+            """
 
     def apply_theme(self, mode: str):
         """Apply theme. 'system' uses palette-based inference; 'light'/'dark' set an application stylesheet.
@@ -6714,11 +6621,10 @@ class ImxUploadGUI(QMainWindow):
                 except Exception:
                     pass
                 app.setPalette(palette)
-                dark_theme_qss = """
-                    QWidget { color: #e6e6e6; }
-                    QToolTip { color: #e6e6e6; background-color: #333333; border: 1px solid #555; }
-                """
-                app.setStyleSheet(base_qss + "\n" + dark_theme_qss)
+                
+                # Load dark theme styles from styles.qss
+                theme_qss = self._load_theme_styles('dark')
+                app.setStyleSheet(base_qss + "\n" + theme_qss)
             elif mode == 'light':
                 palette = app.palette()
                 try:
@@ -6733,7 +6639,10 @@ class ImxUploadGUI(QMainWindow):
                 except Exception:
                     pass
                 app.setPalette(palette)
-                app.setStyleSheet(base_qss)
+                
+                # Load light theme styles from styles.qss
+                theme_qss = self._load_theme_styles('light')
+                app.setStyleSheet(base_qss + "\n" + theme_qss)
             else:
                 # system: apply base stylesheet but use system palette
                 app.setStyleSheet(base_qss)
@@ -6745,6 +6654,9 @@ class ImxUploadGUI(QMainWindow):
                 if hasattr(self, 'gallery_table') and self.gallery_table:
                     font_size = self._get_current_font_size()
                     self.apply_font_size(font_size)
+                
+                # Refresh all button icons that use the icon manager for theme changes
+                self._refresh_button_icons()
             except Exception:
                 pass
         except Exception:
@@ -7393,6 +7305,34 @@ class ImxUploadGUI(QMainWindow):
             except Exception:
                 pass
         return self._cached_is_dark_mode
+    
+    def _refresh_button_icons(self):
+        """Refresh all button icons that use the icon manager for correct theme"""
+        try:
+            icon_mgr = get_icon_manager()
+            if not icon_mgr:
+                return
+                
+            # Clear theme cache to force recalculation
+            self._theme_cache_time = 0
+            is_dark_theme = self._get_cached_theme()
+            
+            # Map of button attributes to their icon keys
+            button_icon_map = [
+                ('manage_templates_btn', 'templates'),
+                ('manage_credentials_btn', 'credentials'),
+                # Add more buttons here as needed when they get icon manager support
+            ]
+            
+            # Update each button's icon if it exists
+            for button_attr, icon_key in button_icon_map:
+                if hasattr(self, button_attr):
+                    button = getattr(self, button_attr)
+                    icon = icon_mgr.get_icon(icon_key, self.style(), is_dark_theme)
+                    if not icon.isNull():
+                        button.setIcon(icon)
+        except Exception as e:
+            print(f"Error refreshing button icons: {e}")
 
     def _populate_table_row(self, row: int, item: GalleryQueueItem):
         """Update row data immediately with proper font consistency - COMPLETE VERSION"""
@@ -7422,7 +7362,6 @@ class ImxUploadGUI(QMainWindow):
         # Upload progress - start blank until images are counted
         total_images = getattr(item, 'total_images', 0) or 0
         uploaded_images = getattr(item, 'uploaded_images', 0) or 0
-        print(f"DEBUG: _populate_table_row for {item.path}: total_images={total_images}, uploaded_images={uploaded_images}")
         if total_images > 0:
             uploaded_text = f"{uploaded_images}/{total_images}"
             uploaded_item = QTableWidgetItem(uploaded_text)
@@ -7450,7 +7389,6 @@ class ImxUploadGUI(QMainWindow):
         # Added time
         added_text, added_tooltip = format_timestamp_for_display(item.added_time)
         added_item = QTableWidgetItem(added_text)
-        print(f"DEBUG: Setting added column for {item.path}: text='{added_text}', font will be 8pt")
         added_item.setFlags(added_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
         added_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
         if added_tooltip:
@@ -8135,21 +8073,8 @@ class ImxUploadGUI(QMainWindow):
             self.overall_progress.setValue(0)
             self.overall_progress.setFormat("Ready")
             # Blue for active/ready
-            self.overall_progress.setStyleSheet(
-                """
-                QProgressBar {
-                    border: 2px solid #6cb4e4;
-                    border-radius: 3px;
-                    text-align: center;
-                    font-size: 11px;
-                    font-weight: bold;
-                }
-                QProgressBar::chunk {
-                    background-color: #6cb4e4;
-                    border-radius: 2px;
-                }
-                """
-            )
+            self.overall_progress.setProperty("status", "ready")
+            self.overall_progress.style().polish(self.overall_progress)
             current_tab_name = getattr(self.gallery_table, 'current_tab', 'All Tabs')
             self.stats_label.setText(f"No galleries in {current_tab_name}")
             return
@@ -8170,56 +8095,16 @@ class ImxUploadGUI(QMainWindow):
             self.overall_progress.setFormat(f"{overall_percent}% ({uploaded_images}/{total_images})")
             # Blue while in progress, green when 100%
             if overall_percent >= 100:
-                self.overall_progress.setStyleSheet(
-                    """
-                    QProgressBar {
-                        border: 1px solid #76ca9a;
-                        border-radius: 3px;
-                        text-align: center;
-                        font-size: 11px;
-                        font-weight: bold;
-                    }
-                    QProgressBar::chunk {
-                        background-color: #76ca9a;
-                        border-radius: 2px;
-                    }
-                    """
-                )
+                self.overall_progress.setProperty("status", "completed")
             else:
-                self.overall_progress.setStyleSheet(
-                    """
-                    QProgressBar {
-                        border: 2px solid #6cb4e4;
-                        border-radius: 3px;
-                        text-align: center;
-                        font-size: 11px;
-                        font-weight: bold;
-                    }
-                    QProgressBar::chunk {
-                        background-color: #6cb4e4;
-                        border-radius: 2px;
-                    }
-                    """
-                )
+                self.overall_progress.setProperty("status", "uploading")
+            self.overall_progress.style().polish(self.overall_progress)
         else:
             self.overall_progress.setValue(0)
             self.overall_progress.setFormat("Preparing...")
             # Blue while preparing
-            self.overall_progress.setStyleSheet(
-                """
-                QProgressBar {
-                    border: 2px solid #6cb4e4;
-                    border-radius: 3px;
-                    text-align: center;
-                    font-size: 11px;
-                    font-weight: bold;
-                }
-                QProgressBar::chunk {
-                    background-color: #6cb4e4;
-                    border-radius: 2px;
-                }
-                """
-            )
+            self.overall_progress.setProperty("status", "uploading")
+            self.overall_progress.style().polish(self.overall_progress)
         
         # Update stats label with current tab status counts
         current_tab_name = getattr(self.gallery_table, 'current_tab', 'All Tabs')
@@ -8879,11 +8764,21 @@ class ImxUploadGUI(QMainWindow):
             # For upload failures, retry the upload
             self.start_upload_for_item(path)
         elif item.status == "scan_failed" or item.status == "failed":
-            # For scan failures or generic failures, show file manager
-            self.manage_gallery_files(path)
+            # For scan failures or generic failures, find widget with manage_gallery_files method
+            widget = self
+            while widget:
+                if hasattr(widget, 'manage_gallery_files') and widget != self:
+                    widget.manage_gallery_files(path)
+                    return
+                widget = widget.parent()
         else:
-            # For other statuses (uploading, paused, etc.), show file manager
-            self.manage_gallery_files(path)
+            # For other statuses (uploading, paused, etc.), find widget with manage_gallery_files method
+            widget = self
+            while widget:
+                if hasattr(widget, 'manage_gallery_files') and widget != self:
+                    widget.manage_gallery_files(path)
+                    return
+                widget = widget.parent()
     
     
     def view_bbcode_files(self, path: str):
@@ -9372,6 +9267,7 @@ class ImxUploadGUI(QMainWindow):
     def on_setting_changed(self):
         """Handle when any setting is changed"""
         self.save_settings_btn.setEnabled(True)
+        self.save_settings_btn.setVisible(True)  # Show button when settings change
     
     def save_upload_settings(self):
         """Save upload settings to .ini file"""
@@ -9421,8 +9317,9 @@ class ImxUploadGUI(QMainWindow):
             with open(config_file, 'w') as f:
                 config.write(f)
             
-            # Disable save button
+            # Disable and hide save button
             self.save_settings_btn.setEnabled(False)
+            self.save_settings_btn.setVisible(False)
             
             # Show success message
             self.add_log_message(f"{timestamp()} Settings saved successfully")
@@ -9635,12 +9532,7 @@ class TemplateManagerDialog(QDialog):
         self.template_list = QListWidget()
         self.template_list.setMinimumWidth(200)
         self.template_list.itemSelectionChanged.connect(self.on_template_selected)
-        self.template_list.setStyleSheet("""
-            QListWidget::item:selected {
-                background-color: #2980b9;
-                color: white;
-            }
-        """)
+        # Selection styling handled in styles.qss
         list_layout.addWidget(self.template_list)
         
         # Template actions
@@ -9710,7 +9602,7 @@ class TemplateManagerDialog(QDialog):
         
         # Template content editor with syntax highlighting
         self.template_editor = QPlainTextEdit()
-        self.template_editor.setFont(QFont("Consolas", 10))
+        self.template_editor.setProperty("class", "template-editor")
         self.template_editor.textChanged.connect(self.on_template_changed)
         
         # Add syntax highlighter for placeholders
@@ -9822,14 +9714,10 @@ class TemplateManagerDialog(QDialog):
             self.save_btn.setEnabled(False)  # Will be enabled when content changes (if not default)
             
             if is_default:
-                self.template_editor.setStyleSheet("""
-                    QPlainTextEdit {
-                        background-color: #f8f9fa;
-                        color: #6c757d;
-                    }
-                """)
+                self.template_editor.setProperty("class", "template-editor-placeholder")
             else:
-                self.template_editor.setStyleSheet("")
+                self.template_editor.setProperty("class", "template-editor")
+                self.template_editor.style().polish(self.template_editor)
         else:
             self.template_editor.clear()
             self.current_template_name = None

@@ -8,8 +8,8 @@ import random
 import threading
 import time
 from PyQt6.QtWidgets import QSplashScreen, QApplication, QVBoxLayout, QLabel, QWidget
-from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer, QSize
-from PyQt6.QtGui import QPixmap, QFont, QPainter, QColor, QMovie
+from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer, QSize, QRectF
+from PyQt6.QtGui import QPixmap, QFont, QPainter, QColor, QMovie, QPen, QPainterPath, QRegion
 
 
 class SplashScreen(QSplashScreen):
@@ -17,7 +17,7 @@ class SplashScreen(QSplashScreen):
     
     def __init__(self):
         # Create a base pixmap for the splash screen
-        pixmap = QPixmap(620, 460)  # Increased height for logo
+        pixmap = QPixmap(560, 420)  # Increased height for logo
         pixmap.fill(QColor(29, 22, 22))  # Dark blue-gray background
         super().__init__(pixmap, Qt.WindowType.WindowStaysOnTopHint)
         
@@ -38,7 +38,7 @@ class SplashScreen(QSplashScreen):
             "observifying", "calibrating", "accelerating", "optimizing", "flipping tables",
             "exorcising", "wiping back to front"]
         self.status_text = random.choice(self.init_action_words).title()
-        self.progress_dots = "•"
+        self.progress_dots = ""
         
         # Random action words and objects
         self.action_words = [
@@ -72,6 +72,16 @@ class SplashScreen(QSplashScreen):
         self.random_timer = QTimer()
         self.random_timer.timeout.connect(self.update_random_status)
         self.random_timer.start(random.randint(300, 700))  # Random interval
+        
+        # Set rounded window shape
+        self.setWindowShape()
+    
+    def setWindowShape(self):
+        """Set the window to have rounded corners"""
+        path = QPainterPath()
+        path.addRoundedRect(QRectF(self.rect()), 20, 20)
+        region = QRegion(path.toFillPolygon().toPolygon())
+        self.setMask(region)
     
     def paintEvent(self, event):
         """Custom paint event to draw text and layout"""
@@ -80,9 +90,9 @@ class SplashScreen(QSplashScreen):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         
-        # Draw solid border
-        painter.setPen(QColor(154, 126, 111))
-        painter.drawRect(0, 0, self.width() - 1, self.height() - 1)
+        # Draw rounded border with 2px thickness, 20px radius
+        painter.setPen(QPen(QColor(207, 69, 2), 2))
+        painter.drawRoundedRect(2, 2, self.width() - 4, self.height() - 4, 20, 20)
         
         # Draw logo at top if available
         y_offset = 16
@@ -92,7 +102,7 @@ class SplashScreen(QSplashScreen):
             logo_scaled = self.logo_pixmap.scaledToHeight(logo_height, Qt.TransformationMode.SmoothTransformation)
             logo_x = (self.width() - logo_scaled.width()) // 2
             painter.drawPixmap(logo_x, y_offset, logo_scaled)
-            y_offset += logo_height + 7
+            y_offset += logo_height
         
         # Draw title
         #painter.setPen(QColor(203, 73, 25))
@@ -105,13 +115,13 @@ class SplashScreen(QSplashScreen):
         #y_offset += 40
         
         # Draw version
-        version_font = QFont("Courier", 17, QFont.Weight.Bold)
+        version_font = QFont("Courier", 15, QFont.Weight.Bold)
         painter.setFont(version_font)
         painter.setPen(QColor(207, 69, 2))
         version_rect = painter.fontMetrics().boundingRect(self.version)
         version_x = (self.width() - version_rect.width()) // 2
         painter.drawText(version_x, y_offset + 20, self.version)
-        y_offset += 38
+        y_offset += 32
         
         copyright_text = "Copyright © 2025 twat"
         copyright_font = QFont("Courier", 11)
@@ -159,10 +169,10 @@ class SplashScreen(QSplashScreen):
         # Draw progress dots in fixed position (left-aligned within centered area)
         dots_font = QFont("Courier", 17)
         painter.setFont(dots_font)
-        painter.setPen(QColor(200, 196, 177))
+        painter.setPen(QColor(227, 69, 69))
         
         # Create a fixed-width area for dots (centered, but dots are left-aligned within it)
-        dots_area_width = 150
+        dots_area_width = 220
         dots_area_x = (self.width() - dots_area_width) // 2
         painter.drawText(dots_area_x, self.height() - 17, self.progress_dots)
         
@@ -182,10 +192,10 @@ class SplashScreen(QSplashScreen):
         
         # Add some variety to the format
         formats = [
-            f"{action} {obj}...",
             f"{action} {obj}",
-            f"{action} {random.randint(1, 999)} {obj}...",
-            f"{action} the {obj}...",
+            f"{action} {obj}",
+            f"{action} {random.randint(1, 999)} {obj}",
+            f"{action} the {obj}",
         ]
         
         status = random.choice(formats)
