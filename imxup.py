@@ -19,6 +19,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import concurrent.futures
 import time
 from tqdm import tqdm
+from src.utils.format_utils import format_binary_size, format_binary_rate
 import configparser
 import hashlib
 import getpass
@@ -43,41 +44,7 @@ def timestamp():
     """Return current timestamp for logging"""
     return datetime.now().strftime("%H:%M:%S")
 
-def format_binary_size(num_bytes: int | float, precision: int = 1) -> str:
-    """Format a byte count using binary prefixes (B, KiB, MiB, GiB, TiB).
 
-    - Uses 1024 as the step size
-    - Shows no decimals for bytes; otherwise uses the given precision
-    """
-    try:
-        value = float(num_bytes or 0)
-    except Exception:
-        value = 0.0
-    units = ["B", "KiB", "MiB", "GiB", "TiB", "PiB"]
-    unit_index = 0
-    while value >= 1024.0 and unit_index < len(units) - 1:
-        value /= 1024.0
-        unit_index += 1
-    if units[unit_index] == "B":
-        return f"{int(value)} B"
-    return f"{value:.{precision}f} {units[unit_index]}"
-
-def format_binary_rate(kib_per_s: float | int, precision: int = 1) -> str:
-    """Format a transfer rate given in KiB/s using binary prefixes.
-
-    - Input is expected to be in KiB/s
-    - Scales to MiB/s, GiB/s, etc. as appropriate
-    """
-    try:
-        rate = float(kib_per_s or 0)
-    except Exception:
-        rate = 0.0
-    units = ["KiB/s", "MiB/s", "GiB/s", "TiB/s"]
-    unit_index = 0
-    while rate >= 1024.0 and unit_index < len(units) - 1:
-        rate /= 1024.0
-        unit_index += 1
-    return f"{rate:.{precision}f} {units[unit_index]}"
 
 def get_config_path() -> str:
     """Return the canonical path to the application's config file (~/.imxup/imxup.ini)."""

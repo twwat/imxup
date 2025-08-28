@@ -21,7 +21,7 @@ QProgressBar::chunk       { border-radius: 1px; }
 QProgressBar[class="overall-progress"]   { margin-top: 4px; }
 
 /* Widget sizing - theme independent */
-QTabWidget { max-height: 35px; }
+QTabWidget[class="gallery-tabs"] { max-height: 35px; }
 QTableWidget[class="gallery-table"]    { min-height: 400px; }
 QProgressBar[class="overall-progress"] { max-height: 20px; font-size: 11px; }
 QGroupBox[class="progress-group"], QGroupBox[class="stats-group"], QGroupBox[class="speed-group"] { max-height: 100px; }
@@ -38,6 +38,7 @@ QLabel[class="console"]                                     { font-family: "Cons
 QLabel[class="console-large"]                               { font-family: "Consolas"; font-size: 11pt; }
 QLabel[class="small-text"]                                  { font-size: 9px; }
 QLabel[class="tiny-text"]                                   { font-size: 10px; }
+QLabel[class="tab-description"]                             { font-size: 11px; padding: 5px; margin-bottom: 8px; }
 QTextEdit[class="template-editor"]                          { font-family: "Consolas"; font-size: 10pt; }
 QLabel[class="about-title"]                                 { font-size: 24px; font-weight: bold; }
 QLabel[class="about-subtitle"]                              { font-size: 14px; }
@@ -50,6 +51,7 @@ QTableWidget::item[class="small-item"]                      { font-size: 8pt; }
 QWidget  { color: #333333; }
 QToolTip { color: #333333; background-color: #ffffcc; border: 1px solid #999; }
 QLabel   { color: #333333; }
+QLabel[class="tab-description"] { color: #666666; }
 
 /* Tables */
 QTableWidget                      { background-color: #ffffff; color: #333333; gridline-color: #cccccc; border: 1px solid #cccccc; border-radius: 4px; alternate-background-color: rgba(240, 240, 240, 0.3); }
@@ -136,6 +138,7 @@ QFrame[class="dark-icon-frame"]  { border: 2px dashed #555; background: #2b2b2b;
 QWidget  { color: #e6e6e6; }
 QToolTip { color: #e6e6e6; background-color: #333333; border: 1px solid #555; }
 QLabel   { color: #e6e6e6; }
+QLabel[class="tab-description"] { color: #aaaaaa; }
 
 /* Tables */
 QTableWidget                      { background-color: #1e1e1e; color: #e6e6e6; gridline-color: #444444; border: 1px solid #444444; border-radius: 4px; alternate-background-color: rgba(64, 64, 64, 0.35); }

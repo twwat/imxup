@@ -46,6 +46,7 @@ from PyQt6.QtGui import QDragEnterEvent, QDropEvent, QIcon, QFont, QPixmap, QPai
 # Import the core uploader functionality
 from imxup import ImxToUploader, load_user_defaults, timestamp, sanitize_gallery_name, encrypt_password, decrypt_password, rename_all_unnamed_with_session, get_config_path, build_gallery_filenames, get_central_storage_path
 from imxup import create_windows_context_menu, remove_windows_context_menu
+from src.utils.format_utils import format_binary_size, format_binary_rate
 from src.gui.splash_screen import SplashScreen
 from src.gui.icon_manager import IconManager, init_icon_manager, get_icon_manager
 
@@ -4153,6 +4154,7 @@ class HelpDialog(QDialog):
         layout = QVBoxLayout(self)
 
         self.tabs = QTabWidget()
+        self.tabs.setProperty("class", "gallery-tabs")
         layout.addWidget(self.tabs)
 
         # Candidate documentation files in preferred order
@@ -6862,7 +6864,6 @@ class ImxUploadGUI(QMainWindow):
                 images = int(s.get('images', 0) or 0)
                 by = int(s.get('bytes', 0) or 0)
                 try:
-                    from imxup import format_binary_size
                     size_str = format_binary_size(by, precision=1)
                 except Exception:
                     size_str = f"{by} B"
@@ -7586,7 +7587,6 @@ class ImxUploadGUI(QMainWindow):
         size_bytes = int(getattr(item, 'total_size', 0) or 0)
         if not self._format_functions_cached:
             try:
-                from imxup import format_binary_size, format_binary_rate
                 self._format_binary_size = format_binary_size
                 self._format_binary_rate = format_binary_rate
                 self._format_functions_cached = True
@@ -7850,7 +7850,6 @@ class ImxUploadGUI(QMainWindow):
             if existing_size_item is None or not existing_size_item.text().strip():
                 size_text = ""
                 try:
-                    from imxup import format_binary_size
                     size_text = format_binary_size(int(getattr(item, 'total_size', 0) or 0), precision=2)
                 except Exception:
                     try:

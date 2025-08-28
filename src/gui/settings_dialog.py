@@ -23,6 +23,7 @@ from PyQt6.QtGui import QSyntaxHighlighter
 
 # Import local modules
 from imxup import load_user_defaults, get_config_path, encrypt_password, decrypt_password
+from src.gui.dialogs.message_factory import MessageBoxFactory, show_info, show_error, show_warning
 
 
 class IconDropFrame(QFrame):
@@ -256,11 +257,18 @@ class ComprehensiveSettingsDialog(QDialog):
         
         theme_layout.addRow("Font size:", self.font_size_spin)
         
-        # Add all groups to layout
-        layout.addWidget(upload_group)
-        layout.addWidget(general_group)
-        layout.addWidget(storage_group)
-        layout.addWidget(theme_group)
+        # Add all groups to layout in 2x2 grid with 40/60 split
+        grid_layout = QGridLayout()
+        grid_layout.addWidget(upload_group, 0, 0)      # Top left
+        grid_layout.addWidget(general_group, 0, 1)     # Top right
+        grid_layout.addWidget(theme_group, 1, 0)       # Bottom left
+        grid_layout.addWidget(storage_group, 1, 1)     # Bottom right
+        
+        # Set column stretch factors for 40/60 split
+        grid_layout.setColumnStretch(0, 40)  # Left column gets 40%
+        grid_layout.setColumnStretch(1, 60)  # Right column gets 60%
+        
+        layout.addLayout(grid_layout)
         layout.addStretch()
         
         # Connect change signals to mark tab as dirty
@@ -635,18 +643,11 @@ class ComprehensiveSettingsDialog(QDialog):
                     break
             
             # Show success message
-            msg_box = QMessageBox(self)
-            msg_box.setWindowTitle("Success")
-            msg_box.setText(f"Tab '{name}' created successfully!")
-            msg_box.open()
+            show_info(self, "Success", f"Tab '{name}' created successfully!")
             
         except ValueError as e:
             # Show error message
-            msg_box = QMessageBox(self)
-            msg_box.setIcon(QMessageBox.Icon.Warning)
-            msg_box.setWindowTitle("Error")
-            msg_box.setText(str(e))
-            msg_box.open()
+            show_error(self, "Error", str(e))
     
     def rename_selected_tab(self):
         """Rename the selected tab"""
@@ -681,18 +682,11 @@ class ComprehensiveSettingsDialog(QDialog):
                 self.load_tabs_settings()
                 
                 # Show success message
-                msg_box = QMessageBox(self)
-                msg_box.setWindowTitle("Success")
-                msg_box.setText(f"Tab renamed to '{new_name}' successfully!")
-                msg_box.open()
+                show_info(self, "Success", f"Tab renamed to '{new_name}' successfully!")
             
         except ValueError as e:
             # Show error message
-            msg_box = QMessageBox(self)
-            msg_box.setIcon(QMessageBox.Icon.Warning)
-            msg_box.setWindowTitle("Error")
-            msg_box.setText(str(e))
-            msg_box.open()
+            show_error(self, "Error", str(e))
     
     def delete_selected_tab(self):
         """Delete the selected tab"""
@@ -711,11 +705,7 @@ class ComprehensiveSettingsDialog(QDialog):
         
         # Don't allow deleting Main or Archive
         if tab_info.name in ['Main', 'Archive']:
-            msg_box = QMessageBox(self)
-            msg_box.setIcon(QMessageBox.Icon.Warning)
-            msg_box.setWindowTitle("Cannot Delete")
-            msg_box.setText(f"Cannot delete the {tab_info.name} tab.")
-            msg_box.open()
+            show_warning(self, "Cannot Delete", f"Cannot delete the {tab_info.name} tab.")
             return
         
         # Confirm deletion
@@ -727,7 +717,7 @@ class ComprehensiveSettingsDialog(QDialog):
         msg_box.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
         msg_box.setDefaultButton(QMessageBox.StandardButton.No)
         
-        # Use non-blocking approach
+        # Use non-blocking approach - keep existing pattern for async behavior
         msg_box.finished.connect(lambda result: self._handle_delete_confirmation(result, tab_info))
         msg_box.open()
     
@@ -745,19 +735,12 @@ class ComprehensiveSettingsDialog(QDialog):
                 self.load_tabs_settings()
                 
                 # Show success message
-                msg_box = QMessageBox(self)
-                msg_box.setWindowTitle("Success")
-                msg_box.setText(f"Tab '{tab_info.name}' deleted successfully!\n"
-                               f"{gallery_count} galleries moved to Main tab.")
-                msg_box.open()
+                success_text = f"Tab '{tab_info.name}' deleted successfully!\n{gallery_count} galleries moved to Main tab."
+                show_info(self, "Success", success_text)
             
         except ValueError as e:
             # Show error message
-            msg_box = QMessageBox(self)
-            msg_box.setIcon(QMessageBox.Icon.Warning)
-            msg_box.setWindowTitle("Error")
-            msg_box.setText(str(e))
-            msg_box.open()
+            show_error(self, "Error", str(e))
     
     def move_tab_up(self):
         """Move selected tab up in display order"""
@@ -934,18 +917,13 @@ class ComprehensiveSettingsDialog(QDialog):
             if len(candidates) > 20:
                 preview_text += f"\n... and {len(candidates) - 20} more"
             
-            msg_box = QMessageBox(self)
-            msg_box.setWindowTitle("Archive Preview")
-            msg_box.setText(preview_text)
-            msg_box.setDetailedText("\n".join(candidates))
-            msg_box.open()
+            MessageBoxFactory.information(
+                self, "Archive Preview", preview_text, 
+                detailed_text="\n".join(candidates)
+            )
             
         except Exception as e:
-            msg_box = QMessageBox(self)
-            msg_box.setIcon(QMessageBox.Icon.Warning)
-            msg_box.setWindowTitle("Error")
-            msg_box.setText(f"Failed to preview archive candidates: {e}")
-            msg_box.open()
+            show_error(self, "Error", f"Failed to preview archive candidates: {e}")
     
     def execute_archive_now(self):
         """Execute auto-archive operation immediately"""
@@ -1023,6 +1001,11 @@ class ComprehensiveSettingsDialog(QDialog):
         # Info label
         info_label = QLabel("Configure image scanning behavior for performance optimization.")
         info_label.setWordWrap(True)
+        info_label.setProperty("class", "tab-description")
+        info_label.setMaximumHeight(40)  # Consistent with Icon Manager tab
+        from PyQt6.QtWidgets import QSizePolicy
+        info_label.setSizePolicy(info_label.sizePolicy().horizontalPolicy(), 
+                                QSizePolicy.Policy.Fixed)  # Fixed vertical size policy
         layout.addWidget(info_label)
         
         # Scanning strategy group
@@ -1073,8 +1056,15 @@ class ComprehensiveSettingsDialog(QDialog):
         # Header info
         info_label = QLabel("Customize application icons. Single icons auto-adapt to themes, pairs give full control.")
         info_label.setWordWrap(True)
-        info_label.setStyleSheet("color: #666; font-size: 10px; padding: 5px;")
+        info_label.setProperty("class", "tab-description")
+        info_label.setMaximumHeight(40)  # Limit height to prevent it from taking too much space
+        from PyQt6.QtWidgets import QSizePolicy
+        info_label.setSizePolicy(info_label.sizePolicy().horizontalPolicy(), 
+                                QSizePolicy.Policy.Fixed)  # Fixed vertical size policy
         layout.addWidget(info_label)
+        
+        # Add spacing to match QGroupBox margin in other tabs
+        layout.addSpacing(8)
         
         # Create splitter for icon categories and preview
         splitter = QSplitter(Qt.Orientation.Horizontal)
@@ -1910,7 +1900,7 @@ class ComprehensiveSettingsDialog(QDialog):
         except Exception as e:
             print(f"Error saving icons tab: {e}")
             from PyQt6.QtWidgets import QMessageBox
-            QMessageBox.critical(self, "Error", f"Failed to apply icon changes: {str(e)}")
+            show_error(self, "Error", f"Failed to apply icon changes: {str(e)}")
             return False
     
     def _save_logs_tab(self):
@@ -1964,7 +1954,19 @@ class ComprehensiveSettingsDialog(QDialog):
             # Add category header
             category_item = QListWidgetItem(f"=== {category} ===")
             category_item.setFlags(Qt.ItemFlag.NoItemFlags)  # Not selectable
-            category_item.setBackground(QColor(240, 240, 240))
+            
+            # Set theme-aware background color
+            try:
+                pal = self.palette()
+                bg = pal.window().color()
+                is_dark = (0.2126 * bg.redF() + 0.7152 * bg.greenF() + 0.0722 * bg.blueF()) < 0.5
+                if is_dark:
+                    category_item.setBackground(QColor(64, 64, 64))  # Dark theme
+                else:
+                    category_item.setBackground(QColor(240, 240, 240))  # Light theme
+            except Exception:
+                category_item.setBackground(QColor(240, 240, 240))  # Fallback
+            
             font = category_item.font()
             font.setBold(True)
             category_item.setFont(font)
@@ -2213,7 +2215,7 @@ class ComprehensiveSettingsDialog(QDialog):
         """Handle dropped icon file"""
         current_item = self.icon_tree.currentItem()
         if not current_item or not current_item.data(Qt.ItemDataRole.UserRole):
-            QMessageBox.warning(self, "No Icon Selected", 
+            show_warning(self, "No Icon Selected", 
                               "Please select an icon from the list first.")
             return
         
@@ -2221,25 +2223,25 @@ class ComprehensiveSettingsDialog(QDialog):
         
         # Validate file type
         if not file_path.lower().endswith(('.png', '.ico', '.svg', '.jpg', '.jpeg')):
-            QMessageBox.warning(self, "Invalid File Type", 
+            show_warning(self, "Invalid File Type", 
                               "Please select a valid image file (PNG, ICO, SVG, JPG).")
             return
         
         # Show confirmation
-        msg_box = QMessageBox(self)
-        msg_box.setWindowTitle("Replace Icon")
-        msg_box.setText(f"Replace the icon for '{self.icon_data[icon_key]['display_name']}' with the selected file?")
-        msg_box.setInformativeText(f"File: {file_path}")
-        msg_box.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        confirmation_text = f"Replace the icon for '{self.icon_data[icon_key]['display_name']}' with the selected file?"
+        detailed_text = f"File: {file_path}"
         
-        if msg_box.exec() == QMessageBox.StandardButton.Yes:
+        if MessageBoxFactory.question(
+            self, "Replace Icon", confirmation_text, detailed_text,
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        ) == QMessageBox.StandardButton.Yes:
             self.replace_icon_file(icon_key, file_path)
     
     def handle_icon_drop_variant(self, file_path, variant):
         """Handle dropped icon file for specific variant (light/dark)"""
         current_item = self.icon_tree.currentItem()
         if not current_item or not current_item.data(Qt.ItemDataRole.UserRole):
-            QMessageBox.warning(self, "No Icon Selected", 
+            show_warning(self, "No Icon Selected", 
                               "Please select an icon from the list first.")
             return
         
@@ -2247,19 +2249,19 @@ class ComprehensiveSettingsDialog(QDialog):
         
         # Validate file type
         if not file_path.lower().endswith(('.png', '.ico', '.svg', '.jpg', '.jpeg')):
-            QMessageBox.warning(self, "Invalid File Type", 
+            show_warning(self, "Invalid File Type", 
                               "Please select a valid image file (PNG, ICO, SVG, JPG).")
             return
         
         # Show confirmation
         variant_name = "Light" if variant == 'light' else "Dark"
-        msg_box = QMessageBox(self)
-        msg_box.setWindowTitle("Replace Icon")
-        msg_box.setText(f"Replace the {variant_name.lower()} theme icon for '{self.icon_data[icon_key]['display_name']}' with the selected file?")
-        msg_box.setInformativeText(f"File: {file_path}")
-        msg_box.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        confirmation_text = f"Replace the {variant_name.lower()} theme icon for '{self.icon_data[icon_key]['display_name']}' with the selected file?"
+        detailed_text = f"File: {file_path}"
         
-        if msg_box.exec() == QMessageBox.StandardButton.Yes:
+        if MessageBoxFactory.question(
+            self, "Replace Icon", confirmation_text, detailed_text,
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        ) == QMessageBox.StandardButton.Yes:
             self.replace_icon_file_variant(icon_key, file_path, variant)
     
     def browse_for_icon_variant(self, variant):
@@ -2293,13 +2295,13 @@ class ComprehensiveSettingsDialog(QDialog):
             
             icon_manager = get_icon_manager()
             if not icon_manager:
-                QMessageBox.warning(self, "Error", "Icon manager not available.")
+                show_warning(self, "Error", "Icon manager not available.")
                 return
             
             # Get current icon configuration
             icon_config = icon_manager.ICON_MAP.get(icon_key)
             if not icon_config:
-                QMessageBox.warning(self, "Error", f"Unknown icon key: {icon_key}")
+                show_warning(self, "Error", f"Unknown icon key: {icon_key}")
                 return
             
             # Determine target filename
@@ -2308,7 +2310,7 @@ class ComprehensiveSettingsDialog(QDialog):
             elif isinstance(icon_config, list) and len(icon_config) > 0:
                 target_filename = icon_config[0]  # Replace light version for now
             else:
-                QMessageBox.warning(self, "Error", "Invalid icon configuration.")
+                show_warning(self, "Error", "Invalid icon configuration.")
                 return
             
             target_path = os.path.join(icon_manager.assets_dir, target_filename)
@@ -2333,11 +2335,11 @@ class ComprehensiveSettingsDialog(QDialog):
             
             # Don't mark tab as dirty - icon changes are saved immediately
             
-            QMessageBox.information(self, "Icon Updated", 
+            show_info(self, "Icon Updated", 
                                   f"Icon '{self.icon_data[icon_key]['display_name']}' has been updated successfully.")
             
         except Exception as e:
-            QMessageBox.critical(self, "Error", f"Failed to replace icon: {str(e)}")
+            show_error(self, "Error", f"Failed to replace icon: {str(e)}")
     
     def replace_icon_file_variant(self, icon_key, new_file_path, variant):
         """Replace an icon file for a specific light/dark variant"""
@@ -2348,13 +2350,13 @@ class ComprehensiveSettingsDialog(QDialog):
             
             icon_manager = get_icon_manager()
             if not icon_manager:
-                QMessageBox.warning(self, "Error", "Icon manager not available.")
+                show_warning(self, "Error", "Icon manager not available.")
                 return
             
             # Get current icon configuration
             icon_config = icon_manager.ICON_MAP.get(icon_key)
             if not icon_config:
-                QMessageBox.warning(self, "Error", f"Unknown icon key: {icon_key}")
+                show_warning(self, "Error", f"Unknown icon key: {icon_key}")
                 return
             
             # Determine target filename based on variant and current config
@@ -2380,7 +2382,7 @@ class ComprehensiveSettingsDialog(QDialog):
                 # Single item list - treat as single icon
                 target_filename = icon_config[0]
             else:
-                QMessageBox.warning(self, "Error", "Invalid icon configuration.")
+                show_warning(self, "Error", "Invalid icon configuration.")
                 return
             
             target_path = os.path.join(icon_manager.assets_dir, target_filename)
@@ -2407,11 +2409,11 @@ class ComprehensiveSettingsDialog(QDialog):
             
             variant_name = f"{variant.title()} theme"
             icon_name = self.icon_data[icon_key]['display_name']
-            QMessageBox.information(self, "Icon Updated", 
+            show_info(self, "Icon Updated", 
                                   f"{variant_name} icon for '{icon_name}' has been updated successfully.")
             
         except Exception as e:
-            QMessageBox.critical(self, "Error", f"Failed to replace {variant} icon: {str(e)}")
+            show_error(self, "Error", f"Failed to replace {variant} icon: {str(e)}")
     
     def reset_icon_variant(self, variant):
         """Reset a specific light/dark icon variant to default"""
@@ -2423,12 +2425,12 @@ class ComprehensiveSettingsDialog(QDialog):
         icon_name = self.icon_data[icon_key]['display_name']
         variant_name = f"{variant.title()} theme"
         
-        msg_box = QMessageBox(self)
-        msg_box.setWindowTitle("Reset Icon Variant")
-        msg_box.setText(f"Reset the {variant_name.lower()} icon for '{icon_name}' to default?")
-        msg_box.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        question_text = f"Reset the {variant_name.lower()} icon for '{icon_name}' to default?"
         
-        if msg_box.exec() == QMessageBox.StandardButton.Yes:
+        if MessageBoxFactory.question(
+            self, "Reset Icon Variant", question_text,
+            buttons=QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        ) == QMessageBox.StandardButton.Yes:
             self.restore_default_icon_variant(icon_key, variant)
     
     def restore_default_icon_variant(self, icon_key, variant):
@@ -2456,7 +2458,7 @@ class ComprehensiveSettingsDialog(QDialog):
                 elif variant == 'dark' and len(icon_config) > 1:
                     target_filename = icon_config[1]
                 else:
-                    QMessageBox.information(self, "No Reset Needed", 
+                    show_info(self, "No Reset Needed", 
                                           f"No {variant} variant defined for this icon.")
                     return
             else:
@@ -2473,7 +2475,7 @@ class ComprehensiveSettingsDialog(QDialog):
                 restored = True
             else:
                 # No backup available - cannot reset to original
-                QMessageBox.warning(self, "Cannot Reset", 
+                show_warning(self, "Cannot Reset", 
                                   f"No backup available for this icon. Original file was not backed up.\n\n"
                                   f"To reset, you'll need to manually restore the original {target_filename} file.")
                 return
@@ -2493,14 +2495,14 @@ class ComprehensiveSettingsDialog(QDialog):
                 
                 icon_name = self.icon_data[icon_key]['display_name']
                 variant_name = f"{variant.title()} theme"
-                QMessageBox.information(self, "Icon Reset", 
+                show_info(self, "Icon Reset", 
                                       f"{variant_name} icon for '{icon_name}' has been reset to default.")
             else:
-                QMessageBox.information(self, "No Changes", 
+                show_info(self, "No Changes", 
                                       f"No custom {variant} icon found to reset.")
             
         except Exception as e:
-            QMessageBox.critical(self, "Error", f"Failed to reset {variant} icon: {str(e)}")
+            show_error(self, "Error", f"Failed to reset {variant} icon: {str(e)}")
     
     def reset_selected_icon(self):
         """Reset selected icon to default"""
@@ -2510,12 +2512,12 @@ class ComprehensiveSettingsDialog(QDialog):
         
         icon_key = current_item.data(Qt.ItemDataRole.UserRole)
         
-        msg_box = QMessageBox(self)
-        msg_box.setWindowTitle("Reset Icon")
-        msg_box.setText(f"Reset the icon for '{self.icon_data[icon_key]['display_name']}' to default?")
-        msg_box.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        question_text = f"Reset the icon for '{self.icon_data[icon_key]['display_name']}' to default?"
         
-        if msg_box.exec() == QMessageBox.StandardButton.Yes:
+        if MessageBoxFactory.question(
+            self, "Reset Icon", question_text,
+            buttons=QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        ) == QMessageBox.StandardButton.Yes:
             self.restore_default_icon(icon_key)
     
     def restore_default_icon(self, icon_key):
@@ -2564,25 +2566,23 @@ class ComprehensiveSettingsDialog(QDialog):
                 # Mark tab as dirty
                 self.mark_tab_dirty(6)  # Icons tab
                 
-                QMessageBox.information(self, "Icon Reset", 
+                show_info(self, "Icon Reset", 
                                       f"Icon '{self.icon_data[icon_key]['display_name']}' has been reset to default.")
             else:
-                QMessageBox.information(self, "No Changes", 
+                show_info(self, "No Changes", 
                                       "No custom icon found to reset.")
             
         except Exception as e:
-            QMessageBox.critical(self, "Error", f"Failed to reset icon: {str(e)}")
+            show_error(self, "Error", f"Failed to reset icon: {str(e)}")
     
     def reset_all_icons(self):
         """Reset all icons to defaults"""
-        msg_box = QMessageBox(self)
-        msg_box.setWindowTitle("Reset All Icons")
-        msg_box.setText("Reset ALL icons to their default state?")
-        msg_box.setInformativeText("This will remove all custom icon files and restore defaults.")
-        msg_box.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
-        msg_box.setDefaultButton(QMessageBox.StandardButton.No)
-        
-        if msg_box.exec() == QMessageBox.StandardButton.Yes:
+        if MessageBoxFactory.question(
+            self, "Reset All Icons", "Reset ALL icons to their default state?",
+            detailed_text="This will remove all custom icon files and restore defaults.",
+            buttons=QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            default_button=QMessageBox.StandardButton.No
+        ) == QMessageBox.StandardButton.Yes:
             try:
                 from .icon_manager import get_icon_manager
                 
@@ -2604,11 +2604,11 @@ class ComprehensiveSettingsDialog(QDialog):
                     icon_key = current_item.data(Qt.ItemDataRole.UserRole)
                     self.update_selected_icon_preview(icon_key)
                 
-                QMessageBox.information(self, "Reset Complete", 
+                show_info(self, "Reset Complete", 
                                       f"Reset {reset_count} icons to default state.")
                 
             except Exception as e:
-                QMessageBox.critical(self, "Error", f"Failed to reset icons: {str(e)}")
+                show_error(self, "Error", f"Failed to reset icons: {str(e)}")
     
     def validate_all_icons(self):
         """Validate all icon files and show report"""
@@ -2617,7 +2617,7 @@ class ComprehensiveSettingsDialog(QDialog):
             
             icon_manager = get_icon_manager()
             if not icon_manager:
-                QMessageBox.warning(self, "Error", "Icon manager not available.")
+                show_warning(self, "Error", "Icon manager not available.")
                 return
             
             # Run validation
@@ -2662,7 +2662,7 @@ class ComprehensiveSettingsDialog(QDialog):
             dialog.exec()
             
         except Exception as e:
-            QMessageBox.critical(self, "Error", f"Failed to validate icons: {str(e)}")
+            show_error(self, "Error", f"Failed to validate icons: {str(e)}")
 
 
 # Import the dialog classes that will be moved to imxup_dialogs.py
