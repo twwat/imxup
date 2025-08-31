@@ -134,7 +134,7 @@ class SplashScreen(QSplashScreen):
         
         # Draw copyright and license info
         painter.setPen(QColor(231, 216, 206))
-        license_font = QFont("Courier", 9)
+        license_font = QFont("Courier", 10)
         painter.setFont(license_font)
         
         license_lines = [
@@ -209,7 +209,7 @@ class SplashScreen(QSplashScreen):
     
     def set_status(self, text):
         """Set status text with random action word and add progress dot"""
-        self.random_timer.stop()
+        #self.random_timer.stop()
         action = random.choice(self.action_words).title()
         self.status_text = f"{action} {text}"
         self.progress_dots += "•"

@@ -153,7 +153,6 @@ def load_user_defaults() -> Dict[str, Any]:
         'thumbnail_size': 3,
         'thumbnail_format': 2,
         'max_retries': 3,
-        'public_gallery': 1,
         'parallel_batch_size': 4,
         'template_name': 'default',
         'auto_rename': True,
@@ -180,7 +179,7 @@ def load_user_defaults() -> Dict[str, Any]:
                     
                     # Convert to appropriate type
                     if key in ['thumbnail_size', 'thumbnail_format', 'max_retries', 
-                               'public_gallery', 'parallel_batch_size']:
+                               'parallel_batch_size']:
                         try:
                             defaults[key] = int(value)
                         except ValueError:

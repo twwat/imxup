@@ -30,7 +30,7 @@ class GUIImxToUploader(ImxToUploader):
         self.worker_thread = worker_thread
     
     def upload_folder(self, folder_path, gallery_name=None, thumbnail_size=3, 
-                     thumbnail_format=2, max_retries=3, public_gallery=1, 
+                     thumbnail_format=2, max_retries=3, 
                      parallel_batch_size=4, template_name="default"):
         """GUI-friendly upload delegating to the shared UploadEngine."""
         # Non-blocking signals and resume support
@@ -146,7 +146,6 @@ class GUIImxToUploader(ImxToUploader):
             thumbnail_size=thumbnail_size,
             thumbnail_format=thumbnail_format,
             max_retries=max_retries,
-            public_gallery=public_gallery,
             parallel_batch_size=parallel_batch_size,
             template_name=template_name,
             already_uploaded=already_uploaded,

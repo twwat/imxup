@@ -242,7 +242,6 @@ class UploadWorker(QThread):
                 thumbnail_size=defaults.get('thumbnail_size', 3),
                 thumbnail_format=defaults.get('thumbnail_format', 2),
                 max_retries=defaults.get('max_retries', 3),
-                public_gallery=defaults.get('public_gallery', 1),
                 parallel_batch_size=defaults.get('parallel_batch_size', 4),
                 template_name=item.template_name
             )

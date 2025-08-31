@@ -7,6 +7,7 @@ Contains all settings-related dialogs and configuration management
 import os
 import sys
 import configparser
+import subprocess
 from typing import List, Dict, Any, Optional
 
 from PyQt6.QtWidgets import (
@@ -15,7 +16,7 @@ from PyQt6.QtWidgets import (
     QLabel, QGroupBox, QLineEdit, QMessageBox, QFileDialog,
     QListWidget, QListWidgetItem, QPlainTextEdit, QInputDialog,
     QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView,
-    QButtonGroup, QFrame, QSplitter
+    QButtonGroup, QFrame, QSplitter, QRadioButton, QApplication
 )
 from PyQt6.QtCore import Qt, QSettings, pyqtSignal
 from PyQt6.QtGui import QIcon, QFont, QColor, QTextCharFormat, QPixmap, QPainter, QPen, QDragEnterEvent, QDropEvent
@@ -169,6 +170,21 @@ class ComprehensiveSettingsDialog(QDialog):
         self.batch_size_spin.setToolTip("Number of images to upload simultaneously. Higher values = faster uploads but more server load.")
         upload_layout.addWidget(self.batch_size_spin, 3, 1)
         
+        # Upload timeouts
+        upload_layout.addWidget(QLabel("Connect Timeout (s):"), 4, 0)
+        self.connect_timeout_spin = QSpinBox()
+        self.connect_timeout_spin.setRange(5, 300)
+        self.connect_timeout_spin.setValue(defaults.get('upload_connect_timeout', 30))
+        self.connect_timeout_spin.setToolTip("Maximum time to wait for server connection. Increase if you have slow internet.")
+        upload_layout.addWidget(self.connect_timeout_spin, 4, 1)
+        
+        upload_layout.addWidget(QLabel("Read Timeout (s):"), 5, 0)
+        self.read_timeout_spin = QSpinBox()
+        self.read_timeout_spin.setRange(10, 600)
+        self.read_timeout_spin.setValue(defaults.get('upload_read_timeout', 120))
+        self.read_timeout_spin.setToolTip("Maximum time to wait for server response. Increase for large images or slow servers.")
+        upload_layout.addWidget(self.read_timeout_spin, 5, 1)
+        
         # General settings group
         general_group = QGroupBox("General Settings")
         general_layout = QGridLayout(general_group)
@@ -178,15 +194,10 @@ class ComprehensiveSettingsDialog(QDialog):
         self.confirm_delete_check.setChecked(defaults.get('confirm_delete', True))
         general_layout.addWidget(self.confirm_delete_check, 0, 0)
         
-        # Public gallery
-        self.public_gallery_check = QCheckBox("Make galleries public")
-        self.public_gallery_check.setChecked(defaults.get('public_gallery', 1) == 1)
-        general_layout.addWidget(self.public_gallery_check, 0, 1)
-        
         # Auto-rename
         self.auto_rename_check = QCheckBox("Auto-rename galleries")
         self.auto_rename_check.setChecked(defaults.get('auto_rename', True))
-        general_layout.addWidget(self.auto_rename_check, 1, 0, 1, 2)
+        general_layout.addWidget(self.auto_rename_check, 0, 1)
         
         # Storage options group
         storage_group = QGroupBox("Storage Options")
@@ -195,39 +206,72 @@ class ComprehensiveSettingsDialog(QDialog):
         # Store in uploaded folder
         self.store_in_uploaded_check = QCheckBox("Save artifacts in .uploaded folder")
         self.store_in_uploaded_check.setChecked(defaults.get('store_in_uploaded', True))
-        storage_layout.addWidget(self.store_in_uploaded_check, 0, 0, 1, 2)
+        storage_layout.addWidget(self.store_in_uploaded_check, 0, 0, 1, 3)
         
         # Store in central location
         self.store_in_central_check = QCheckBox("Save artifacts in central store")
         self.store_in_central_check.setChecked(defaults.get('store_in_central', True))
-        storage_layout.addWidget(self.store_in_central_check, 1, 0, 1, 2)
+        storage_layout.addWidget(self.store_in_central_check, 1, 0, 1, 3)
         
-        # Central store path
+        # Data location section
+        location_label = QLabel("Data location:")
+        storage_layout.addWidget(location_label, 2, 0, 1, 3)
+        
+        # Import path functions
         from imxup import get_central_store_base_path, get_default_central_store_base_path
+        
+        # Get current path and determine mode
         current_path = defaults.get('central_store_path') or get_central_store_base_path()
+        home_path = get_default_central_store_base_path()
+        app_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        portable_path = os.path.join(app_root, '.imxup')
         
-        path_label = QLabel("Central store path:")
-        self.path_edit = QLineEdit(current_path)
+        # Radio buttons for location selection
+        self.home_radio = QRadioButton(f"Home folder: {home_path}")
+        self.portable_radio = QRadioButton(f"Portable install: {portable_path}")
+        self.custom_radio = QRadioButton("Custom location:")
+        
+        # Determine which radio to check based on current path
+        storage_mode = defaults.get('storage_mode', 'home')
+        if storage_mode == 'portable':
+            self.portable_radio.setChecked(True)
+        elif storage_mode == 'custom':
+            self.custom_radio.setChecked(True)
+        else:
+            self.home_radio.setChecked(True)
+        
+        # Custom path input and browse button
+        self.path_edit = QLineEdit(current_path if storage_mode == 'custom' else '')
         self.path_edit.setReadOnly(True)
-        browse_btn = QPushButton("Browse...")
-        browse_btn.clicked.connect(self.browse_central_store)
+        self.browse_btn = QPushButton("Browse...")
+        self.browse_btn.clicked.connect(self.browse_central_store)
         
-        storage_layout.addWidget(path_label, 2, 0)
-        storage_layout.addWidget(self.path_edit, 2, 1)
-        storage_layout.addWidget(browse_btn, 2, 2)
+        # Layout radio buttons and custom path controls
+        storage_layout.addWidget(self.home_radio, 3, 0, 1, 3)
+        storage_layout.addWidget(self.portable_radio, 4, 0, 1, 3)
+        storage_layout.addWidget(self.custom_radio, 5, 0)
+        storage_layout.addWidget(self.path_edit, 5, 1)
+        storage_layout.addWidget(self.browse_btn, 5, 2)
         
-        # Enable/disable path controls based on central store checkbox
-        def set_path_controls_enabled(enabled):
-            path_label.setEnabled(enabled)
-            self.path_edit.setEnabled(enabled)
-            browse_btn.setEnabled(enabled)
+        # Enable/disable custom path controls based on radio selection
+        def update_custom_path_controls():
+            is_custom = self.custom_radio.isChecked()
+            self.path_edit.setReadOnly(not is_custom)
+            self.browse_btn.setEnabled(is_custom)
+            if not is_custom:
+                self.path_edit.clear()
         
-        set_path_controls_enabled(self.store_in_central_check.isChecked())
-        self.store_in_central_check.toggled.connect(set_path_controls_enabled)
+        # Connect radio button changes
+        self.home_radio.toggled.connect(update_custom_path_controls)
+        self.portable_radio.toggled.connect(update_custom_path_controls)
+        self.custom_radio.toggled.connect(update_custom_path_controls)
+        
+        # Initialize custom path controls state
+        update_custom_path_controls()
         
         # Theme & Display group
-        theme_group = QGroupBox("Theme & Display")
-        theme_layout = QFormLayout(theme_group)
+        theme_group = QGroupBox("Theme and Display")
+        theme_layout = QGridLayout(theme_group)
         
         # Theme setting
         self.theme_combo = QComboBox()
@@ -240,7 +284,10 @@ class ComprehensiveSettingsDialog(QDialog):
             if index >= 0:
                 self.theme_combo.setCurrentIndex(index)
         
-        theme_layout.addRow("Theme mode:", self.theme_combo)
+        # Add theme controls
+        theme_label = QLabel("Theme mode:")
+        theme_layout.addWidget(theme_label, 0, 0)
+        theme_layout.addWidget(self.theme_combo, 0, 1)
         
         # Font size setting
         self.font_size_spin = QSpinBox()
@@ -255,7 +302,14 @@ class ComprehensiveSettingsDialog(QDialog):
         else:
             self.font_size_spin.setValue(9)
         
-        theme_layout.addRow("Font size:", self.font_size_spin)
+        # Add font size controls
+        font_label = QLabel("Font size:")
+        theme_layout.addWidget(font_label, 1, 0)
+        theme_layout.addWidget(self.font_size_spin, 1, 1)
+        
+        # Set column stretch for 50/50 split
+        theme_layout.setColumnStretch(0, 1)  # Label column 50%
+        theme_layout.setColumnStretch(1, 1)  # Control column 50%
         
         # Add all groups to layout in 2x2 grid with 40/60 split
         grid_layout = QGridLayout()
@@ -276,11 +330,15 @@ class ComprehensiveSettingsDialog(QDialog):
         self.thumbnail_format_combo.currentIndexChanged.connect(lambda: self.mark_tab_dirty(0))
         self.max_retries_spin.valueChanged.connect(lambda: self.mark_tab_dirty(0))
         self.batch_size_spin.valueChanged.connect(lambda: self.mark_tab_dirty(0))
+        self.connect_timeout_spin.valueChanged.connect(lambda: self.mark_tab_dirty(0))
+        self.read_timeout_spin.valueChanged.connect(lambda: self.mark_tab_dirty(0))
         self.confirm_delete_check.toggled.connect(lambda: self.mark_tab_dirty(0))
-        self.public_gallery_check.toggled.connect(lambda: self.mark_tab_dirty(0))
         self.auto_rename_check.toggled.connect(lambda: self.mark_tab_dirty(0))
         self.store_in_uploaded_check.toggled.connect(lambda: self.mark_tab_dirty(0))
         self.store_in_central_check.toggled.connect(lambda: self.mark_tab_dirty(0))
+        self.home_radio.toggled.connect(lambda: self.mark_tab_dirty(0))
+        self.portable_radio.toggled.connect(lambda: self.mark_tab_dirty(0))
+        self.custom_radio.toggled.connect(lambda: self.mark_tab_dirty(0))
         self.path_edit.textChanged.connect(lambda: self.mark_tab_dirty(0))
         self.theme_combo.currentIndexChanged.connect(lambda: self.mark_tab_dirty(0))
         self.font_size_spin.valueChanged.connect(lambda: self.mark_tab_dirty(0))
@@ -1250,7 +1308,9 @@ class ComprehensiveSettingsDialog(QDialog):
     def _handle_directory_selected(self, directory):
         """Handle selected directory"""
         if directory:
+            self.custom_radio.setChecked(True)
             self.path_edit.setText(directory)
+            self.mark_tab_dirty(0)
             
 
             
@@ -1293,7 +1353,6 @@ class ComprehensiveSettingsDialog(QDialog):
             if self.parent:
                 # Update parent's settings objects for checkboxes
                 self.parent.confirm_delete_check.setChecked(self.confirm_delete_check.isChecked())
-                self.parent.public_gallery_check.setChecked(self.public_gallery_check.isChecked())
                 self.parent.auto_rename_check.setChecked(self.auto_rename_check.isChecked())
                 self.parent.store_in_uploaded_check.setChecked(self.store_in_uploaded_check.isChecked())
                 self.parent.store_in_central_check.setChecked(self.store_in_central_check.isChecked())
@@ -1405,11 +1464,12 @@ class ComprehensiveSettingsDialog(QDialog):
             self.thumbnail_format_combo.setCurrentIndex(1)  # Proportional (default)
             self.max_retries_spin.setValue(3)  # 3 retries (default)
             self.batch_size_spin.setValue(4)  # 4 concurrent (default)
+            self.connect_timeout_spin.setValue(30)  # 30 seconds (default)
+            self.read_timeout_spin.setValue(120)  # 120 seconds (default)
             # Template selection is now handled in the Templates tab
             
             # Reset checkboxes
             self.confirm_delete_check.setChecked(True)
-            self.public_gallery_check.setChecked(True)
             self.auto_rename_check.setChecked(True)
             self.store_in_uploaded_check.setChecked(True)
             self.store_in_central_check.setChecked(True)
@@ -1727,10 +1787,11 @@ class ComprehensiveSettingsDialog(QDialog):
         self.thumbnail_format_combo.setCurrentIndex(defaults.get('thumbnail_format', 2) - 1)
         self.max_retries_spin.setValue(defaults.get('max_retries', 3))
         self.batch_size_spin.setValue(defaults.get('parallel_batch_size', 4))
+        self.connect_timeout_spin.setValue(defaults.get('upload_connect_timeout', 30))
+        self.read_timeout_spin.setValue(defaults.get('upload_read_timeout', 120))
         
         # Reload general settings
         self.confirm_delete_check.setChecked(defaults.get('confirm_delete', True))
-        self.public_gallery_check.setChecked(defaults.get('public_gallery', 1) == 1)
         self.auto_rename_check.setChecked(defaults.get('auto_rename', True))
         
         # Reload storage settings
@@ -1775,6 +1836,9 @@ class ComprehensiveSettingsDialog(QDialog):
             
             if 'UPLOAD' not in config:
                 config.add_section('UPLOAD')
+            
+            if 'DEFAULTS' not in config:
+                config.add_section('DEFAULTS')
                 
             # Save thumbnail settings
             config.set('UPLOAD', 'thumbnail_size', str(self.thumbnail_size_combo.currentIndex() + 1))
@@ -1782,8 +1846,85 @@ class ComprehensiveSettingsDialog(QDialog):
             config.set('UPLOAD', 'max_retries', str(self.max_retries_spin.value()))
             config.set('UPLOAD', 'parallel_batch_size', str(self.batch_size_spin.value()))
             
-            with open(config_file, 'w') as f:
-                config.write(f)
+            # Save timeout settings
+            config.set('DEFAULTS', 'upload_connect_timeout', str(self.connect_timeout_spin.value()))
+            config.set('DEFAULTS', 'upload_read_timeout', str(self.read_timeout_spin.value()))
+            
+            # Save general settings
+            config.set('DEFAULTS', 'confirm_delete', str(self.confirm_delete_check.isChecked()))
+            config.set('DEFAULTS', 'auto_rename', str(self.auto_rename_check.isChecked()))
+            config.set('DEFAULTS', 'store_in_uploaded', str(self.store_in_uploaded_check.isChecked()))
+            config.set('DEFAULTS', 'store_in_central', str(self.store_in_central_check.isChecked()))
+            
+            # Determine storage mode and path
+            from imxup import get_central_store_base_path, get_default_central_store_base_path
+            
+            # Get the CURRENT active path (what's actually being used)
+            current_active_path = get_central_store_base_path()
+            
+            # Determine what the new path should be
+            new_path = None
+            storage_mode = 'home'
+            
+            if self.home_radio.isChecked():
+                storage_mode = 'home'
+                new_path = get_default_central_store_base_path()
+            elif self.portable_radio.isChecked():
+                storage_mode = 'portable'
+                app_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+                new_path = os.path.join(app_root, '.imxup')
+            elif self.custom_radio.isChecked():
+                storage_mode = 'custom'
+                new_path = self.path_edit.text().strip()
+            
+            # Check if path is actually changing
+            if new_path and os.path.normpath(new_path) != os.path.normpath(current_active_path):
+                # Path is changing - handle migration
+                if os.path.exists(current_active_path):
+                    # Ask about migration
+                    msg_box = QMessageBox(self)
+                    msg_box.setIcon(QMessageBox.Icon.Question)
+                    msg_box.setWindowTitle("Storage Location Change")
+                    msg_box.setText(f"You're changing the data location from:\n{current_active_path}\nto:\n{new_path}")
+                    msg_box.setInformativeText("Would you like to migrate your existing data?\n\nNote: The application will need to restart after migration.")
+                    
+                    yes_btn = msg_box.addButton("Yes - Migrate & Restart", QMessageBox.ButtonRole.YesRole)
+                    no_btn = msg_box.addButton("No - Fresh Start", QMessageBox.ButtonRole.NoRole)
+                    cancel_btn = msg_box.addButton("Cancel", QMessageBox.ButtonRole.RejectRole)
+                    
+                    msg_box.setDefaultButton(yes_btn)
+                    result = msg_box.exec()
+                    
+                    if msg_box.clickedButton() == cancel_btn:
+                        # Don't save changes
+                        return True
+                    
+                    # Save new settings
+                    config.set('DEFAULTS', 'storage_mode', storage_mode)
+                    config.set('DEFAULTS', 'central_store_path', new_path)
+                    with open(config_file, 'w') as f:
+                        config.write(f)
+                    
+                    if msg_box.clickedButton() == yes_btn:
+                        # Perform migration then restart
+                        self._perform_migration_and_restart(current_active_path, new_path)
+                    else:
+                        # Just restart with new location
+                        QMessageBox.information(self, "Restart Required", 
+                                              "Please restart the application to use the new storage location.")
+                else:
+                    # Old path doesn't exist, just save
+                    config.set('DEFAULTS', 'storage_mode', storage_mode)
+                    config.set('DEFAULTS', 'central_store_path', new_path)
+                    with open(config_file, 'w') as f:
+                        config.write(f)
+            else:
+                # Path not changing, just save other settings
+                config.set('DEFAULTS', 'storage_mode', storage_mode)
+                if new_path:
+                    config.set('DEFAULTS', 'central_store_path', new_path)
+                with open(config_file, 'w') as f:
+                    config.write(f)
             
             # Update parent GUI controls
             if self.parent:
@@ -1791,6 +1932,18 @@ class ComprehensiveSettingsDialog(QDialog):
                 self.parent.thumbnail_format_combo.setCurrentIndex(self.thumbnail_format_combo.currentIndex())
                 self.parent.max_retries_spin.setValue(self.max_retries_spin.value())
                 self.parent.batch_size_spin.setValue(self.batch_size_spin.value())
+                
+                # Update storage settings (only those that exist in parent)
+                if hasattr(self.parent, 'confirm_delete_check'):
+                    self.parent.confirm_delete_check.setChecked(self.confirm_delete_check.isChecked())
+                if hasattr(self.parent, 'auto_rename_check'):
+                    self.parent.auto_rename_check.setChecked(self.auto_rename_check.isChecked())
+                if hasattr(self.parent, 'store_in_uploaded_check'):
+                    self.parent.store_in_uploaded_check.setChecked(self.store_in_uploaded_check.isChecked())
+                if hasattr(self.parent, 'store_in_central_check'):
+                    self.parent.store_in_central_check.setChecked(self.store_in_central_check.isChecked())
+                if storage_mode == 'custom':
+                    self.parent.central_store_path_value = new_path
                 
                 # Save theme and font size to QSettings
                 if hasattr(self.parent, 'settings'):
@@ -1809,6 +1962,96 @@ class ComprehensiveSettingsDialog(QDialog):
         except Exception as e:
             print(f"Error saving general settings: {e}")
             return False
+    
+    def _perform_migration_and_restart(self, old_path, new_path):
+        """Perform migration of data and restart the application"""
+        import shutil
+        from PyQt6.QtWidgets import QProgressDialog
+        import subprocess
+        
+        progress = QProgressDialog("Migrating data...", None, 0, 5, self)
+        progress.setWindowModality(Qt.WindowModality.WindowModal)
+        progress.setMinimumDuration(0)
+        progress.setCancelButton(None)  # Can't cancel during migration
+        progress.setValue(0)
+        
+        try:
+            # Create new directory if needed
+            os.makedirs(new_path, exist_ok=True)
+            
+            # Close database connection if parent has one
+            if self.parent and hasattr(self.parent, 'queue_manager'):
+                progress.setLabelText("Closing database connection...")
+                try:
+                    self.parent.queue_manager.shutdown()
+                except:
+                    pass
+            
+            progress.setValue(1)
+            
+            # Migrate database files (all of them)
+            progress.setLabelText("Migrating database...")
+            for db_file in ['imxup.db', 'imxup.db-shm', 'imxup.db-wal']:
+                old_db = os.path.join(old_path, db_file)
+                new_db = os.path.join(new_path, db_file)
+                if os.path.exists(old_db):
+                    shutil.copy2(old_db, new_db)
+            
+            progress.setValue(2)
+            
+            # Migrate templates
+            progress.setLabelText("Migrating templates...")
+            old_templates = os.path.join(old_path, 'templates')
+            new_templates = os.path.join(new_path, 'templates')
+            if os.path.exists(old_templates):
+                if os.path.exists(new_templates):
+                    shutil.rmtree(new_templates)
+                shutil.copytree(old_templates, new_templates)
+            
+            progress.setValue(3)
+            
+            # Migrate galleries
+            progress.setLabelText("Migrating galleries...")
+            old_galleries = os.path.join(old_path, 'galleries')
+            new_galleries = os.path.join(new_path, 'galleries')
+            if os.path.exists(old_galleries):
+                if os.path.exists(new_galleries):
+                    shutil.rmtree(new_galleries)
+                shutil.copytree(old_galleries, new_galleries)
+            
+            progress.setValue(4)
+            
+            # Migrate logs
+            progress.setLabelText("Migrating logs...")
+            old_logs = os.path.join(old_path, 'logs')
+            new_logs = os.path.join(new_path, 'logs')
+            if os.path.exists(old_logs):
+                if os.path.exists(new_logs):
+                    shutil.rmtree(new_logs)
+                shutil.copytree(old_logs, new_logs)
+            
+            progress.setValue(5)
+            progress.close()
+            
+            # Show success and restart
+            msg = QMessageBox(self)
+            msg.setIcon(QMessageBox.Icon.Information)
+            msg.setWindowTitle("Migration Complete")
+            msg.setText(f"Data successfully migrated to:\n{new_path}")
+            msg.setInformativeText("The application will now restart to use the new location.")
+            msg.exec()
+            
+            # Restart the application
+            if self.parent:
+                self.parent.close()
+            python = sys.executable
+            subprocess.Popen([python, "imxup.py", "--gui"])
+            QApplication.quit()
+            
+        except Exception as e:
+            progress.close()
+            QMessageBox.critical(self, "Migration Failed", 
+                               f"Failed to migrate data: {str(e)}\n\nThe settings have been saved but data was not migrated.\nPlease manually copy your data or revert the settings.")
     
     def _save_upload_tab(self):
         """Save Upload/Credentials tab settings only"""

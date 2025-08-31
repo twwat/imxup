@@ -490,7 +490,6 @@ class UploadWorker(QThread):
                 thumbnail_size=defaults.get('thumbnail_size', 3),
                 thumbnail_format=defaults.get('thumbnail_format', 2),
                 max_retries=defaults.get('max_retries', 3),
-                public_gallery=defaults.get('public_gallery', 1),
                 parallel_batch_size=defaults.get('parallel_batch_size', 4),
                 template_name=item.template_name
             )
@@ -733,7 +732,6 @@ class CompletionWorker(QThread):
                         'started_at': datetime.fromtimestamp(gui_parent.queue_manager.items[path].start_time).strftime('%Y-%m-%d %H:%M:%S') if path in gui_parent.queue_manager.items and gui_parent.queue_manager.items[path].start_time else None,
                         'thumbnail_size': gui_parent.thumbnail_size_combo.currentIndex() + 1,
                         'thumbnail_format': gui_parent.thumbnail_format_combo.currentIndex() + 1,
-                        'public_gallery': defaults.get('public_gallery', 1),
                         'parallel_batch_size': gui_parent.batch_size_spin.value(),
                     },
                     template_name=template_name,
@@ -760,6 +758,8 @@ class DropEnabledTabBar(QTabBar):
     
     # Signal for when galleries are dropped on a tab
     galleries_dropped = pyqtSignal(str, list)  # tab_name, gallery_paths
+    # Signal for when tab order changes
+    tab_order_changed = pyqtSignal()
     
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -769,7 +769,7 @@ class DropEnabledTabBar(QTabBar):
         self.tabMoved.connect(self._on_tab_moved)
     
     def _on_tab_moved(self, from_index, to_index):
-        """Ensure 'All Tabs' stays at position 0"""
+        """Ensure 'All Tabs' stays at position 0 and save tab order"""
         # If "All Tabs" was moved from position 0, move it back
         if from_index == 0 and self.tabText(to_index).split(' (')[0] == "All Tabs":
             self.moveTab(to_index, 0)
@@ -780,6 +780,9 @@ class DropEnabledTabBar(QTabBar):
                 if self.tabText(i).split(' (')[0] == "All Tabs":
                     self.moveTab(i, 0)
                     break
+        
+        # Emit signal that tab order has changed
+        self.tab_order_changed.emit()
     
     def dragEnterEvent(self, event):
         """Handle drag enter events"""
@@ -941,6 +944,7 @@ class TabbedGalleryWidget(QWidget):
         """Setup signal connections"""
         self.tab_bar.currentChanged.connect(self._on_tab_changed)
         self.tab_bar.tabBarDoubleClicked.connect(self._on_tab_double_clicked)
+        self.tab_bar.tab_order_changed.connect(self._save_tab_order)
         # Connect tab bar signal to parent's handler (will be connected by parent)
         self.new_tab_btn.clicked.connect(self._add_new_tab)
         
@@ -978,6 +982,21 @@ class TabbedGalleryWidget(QWidget):
         # Get tabs from manager
         manager_tabs = self.tab_manager.get_visible_tab_names()
         print(f"Debug: TabManager returned {len(manager_tabs)} tabs: {manager_tabs}")
+        
+        # Restore saved tab order if available
+        settings = QSettings()
+        saved_order = settings.value("tabs/display_order", [])
+        if saved_order and isinstance(saved_order, list):
+            # Reorder manager_tabs to match saved order
+            ordered_tabs = []
+            for name in saved_order:
+                if name in manager_tabs:
+                    ordered_tabs.append(name)
+            # Add any new tabs not in saved order
+            for name in manager_tabs:
+                if name not in ordered_tabs:
+                    ordered_tabs.append(name)
+            manager_tabs = ordered_tabs
         
         # Add all tabs from manager after "All Tabs"
         for tab_name in manager_tabs:
@@ -1046,6 +1065,21 @@ class TabbedGalleryWidget(QWidget):
         # Log slow tab switches
         if switch_time > 16:
             print(f"Slow tab switch from '{old_tab}' to '{tab_name}': {switch_time:.1f}ms")
+        
+        # Save active tab to settings (excluding "All Tabs")
+        if self.tab_manager and tab_name != "All Tabs":
+            self.tab_manager.last_active_tab = tab_name
+    
+    def _save_tab_order(self):
+        """Save current tab bar order to QSettings"""
+        order = []
+        for i in range(1, self.tab_bar.count()):  # Skip "All Tabs" at position 0
+            tab_text = self.tab_bar.tabText(i)
+            # Extract base tab name (remove count if present)
+            tab_name = tab_text.split(' (')[0] if ' (' in tab_text else tab_text
+            order.append(tab_name)
+        settings = QSettings()
+        settings.setValue("tabs/display_order", order)
     
     def _on_galleries_dropped(self, tab_name, gallery_paths):
         """Handle galleries being dropped on a tab"""
@@ -4437,6 +4471,21 @@ class ImxUploadGUI(QMainWindow):
         settings_layout.setVerticalSpacing(3)
         settings_layout.setHorizontalSpacing(10)
         
+        # Set fixed row heights to prevent shifting when save button appears
+        settings_layout.setRowMinimumHeight(0, 28)  # Thumbnail Size row
+        settings_layout.setRowMinimumHeight(1, 28)  # Thumbnail Format row  
+        settings_layout.setRowMinimumHeight(2, 28)  # Max Retries row
+        settings_layout.setRowMinimumHeight(3, 28)  # Concurrent Uploads row
+        settings_layout.setRowMinimumHeight(4, 28)  # BBCode Template row
+        settings_layout.setRowMinimumHeight(5, 28)  # Checkboxes row
+        settings_layout.setRowMinimumHeight(6, 5)   # Small spacer before save button
+        # Row 7 is the Save Settings button - let it appear/disappear freely
+        # Row 8 is Comprehensive Settings
+        # Row 9 is Templates/Credentials
+        
+        # Add stretch to bottom so extra space goes there instead of compressing rows
+        settings_layout.setRowStretch(10, 1)
+        
         # Load defaults
         defaults = load_user_defaults()
         
@@ -7338,7 +7387,7 @@ class ImxUploadGUI(QMainWindow):
 
     def open_log_viewer(self):
         """Open comprehensive settings to logs tab"""
-        self.open_comprehensive_settings(tab_index=3)  # Logs tab
+        self.open_comprehensive_settings(tab_index=5)  # Logs tab
     
     def start_single_item(self, path: str):
         """Start a single item"""
@@ -7950,8 +7999,6 @@ class ImxUploadGUI(QMainWindow):
             max_retries = self.max_retries_spin.value()
             parallel_batch_size = self.batch_size_spin.value()
             template_name = self.template_combo.currentText()
-            # Public gallery setting is managed in comprehensive settings only
-            public_gallery = defaults.get('public_gallery', 1)
             confirm_delete = self.confirm_delete_check.isChecked()
             auto_rename = self.auto_rename_check.isChecked()
             store_in_uploaded = self.store_in_uploaded_check.isChecked()
@@ -7975,7 +8022,6 @@ class ImxUploadGUI(QMainWindow):
             config['DEFAULTS']['max_retries'] = str(max_retries)
             config['DEFAULTS']['parallel_batch_size'] = str(parallel_batch_size)
             config['DEFAULTS']['template_name'] = template_name
-            config['DEFAULTS']['public_gallery'] = str(public_gallery)
             config['DEFAULTS']['confirm_delete'] = str(confirm_delete)
             config['DEFAULTS']['auto_rename'] = str(auto_rename)
             config['DEFAULTS']['store_in_uploaded'] = str(store_in_uploaded)

@@ -350,7 +350,6 @@ def load_user_defaults():
             defaults['thumbnail_format'] = config.getint('DEFAULTS', 'thumbnail_format', fallback=2)
             defaults['max_retries'] = config.getint('DEFAULTS', 'max_retries', fallback=3)
             defaults['parallel_batch_size'] = config.getint('DEFAULTS', 'parallel_batch_size', fallback=4)
-            defaults['public_gallery'] = config.getint('DEFAULTS', 'public_gallery', fallback=1)
             defaults['template_name'] = config.get('DEFAULTS', 'template_name', fallback='default')
             defaults['confirm_delete'] = config.getboolean('DEFAULTS', 'confirm_delete', fallback=True)
             # Auto-rename unnamed galleries after successful login (GUI feature)
@@ -364,6 +363,9 @@ def load_user_defaults():
             except Exception:
                 # If any parsing issue occurs, use default base path
                 defaults['central_store_path'] = get_default_central_store_base_path()
+            # Upload request timeouts
+            defaults['upload_connect_timeout'] = config.getint('DEFAULTS', 'upload_connect_timeout', fallback=30)
+            defaults['upload_read_timeout'] = config.getint('DEFAULTS', 'upload_read_timeout', fallback=120)
         
         return defaults
     return {}
@@ -448,10 +450,21 @@ def get_central_store_base_path():
         config = configparser.ConfigParser()
         config_file = get_config_path()
         base_path = None
+        storage_mode = 'home'
+        
         if os.path.exists(config_file):
             config.read(config_file)
-            if 'DEFAULTS' in config and 'central_store_path' in config['DEFAULTS']:
-                base_path = config.get('DEFAULTS', 'central_store_path', fallback=None)
+            if 'DEFAULTS' in config:
+                storage_mode = config.get('DEFAULTS', 'storage_mode', fallback='home')
+                if storage_mode == 'portable':
+                    # Use portable path (app root/.imxup)
+                    app_root = os.path.dirname(os.path.abspath(__file__))
+                    base_path = os.path.join(app_root, '.imxup')
+                elif storage_mode == 'custom':
+                    # Use custom path from config
+                    base_path = config.get('DEFAULTS', 'central_store_path', fallback=None)
+                # else 'home' mode falls through to default
+        
         if not base_path:
             base_path = get_default_central_store_base_path()
     except Exception:
@@ -787,7 +800,6 @@ def save_gallery_artifacts(
         'settings': {
             'thumbnail_size': results.get('thumbnail_size'),
             'thumbnail_format': results.get('thumbnail_format'),
-            'public_gallery': results.get('public_gallery'),
             'template_name': template_name,
             'parallel_batch_size': results.get('parallel_batch_size'),
         },
@@ -887,6 +899,12 @@ class ImxToUploader:
         if not has_credentials:
             print(f"{timestamp()} Failed to get credentials. Please set up credentials in the GUI or run --setup-secure first.")
             sys.exit(1)
+        
+        # Load timeout settings
+        defaults = load_user_defaults()
+        self.upload_connect_timeout = defaults.get('upload_connect_timeout', 30)
+        self.upload_read_timeout = defaults.get('upload_read_timeout', 120)
+        print(f"{timestamp()} Timeout settings loaded: connect={self.upload_connect_timeout}s, read={self.upload_read_timeout}s")
         
         self.base_url = "https://api.imx.to/v1"
         self.web_url = "https://imx.to"
@@ -1154,7 +1172,7 @@ class ImxToUploader:
         except Exception:
             return False
     
-    def create_gallery_with_name(self, gallery_name, public_gallery=1, skip_login=False):
+    def create_gallery_with_name(self, gallery_name, skip_login=False):
         """Create a gallery with a specific name using web interface"""
         if not skip_login and not self.login():
             print(f"{timestamp()} Login failed - cannot create gallery with name")
@@ -1167,7 +1185,7 @@ class ImxToUploader:
             # Submit gallery creation form
             gallery_data = {
                 'gallery_name': gallery_name,
-                'public_gallery': str(public_gallery),
+                'public_gallery': '1',  # Always public for now
                 'submit_new_gallery': 'Add'
             }
             
@@ -1176,8 +1194,7 @@ class ImxToUploader:
             # Extract gallery ID from redirect URL
             if 'gallery/manage?id=' in response.url:
                 gallery_id = response.url.split('id=')[1]
-                visibility = "public" if public_gallery else "private"
-                print(f"{timestamp()} Created {visibility} gallery '{gallery_name}' with ID: {gallery_id}")
+                print(f"{timestamp()} Created gallery '{gallery_name}' with ID: {gallery_id}")
                 return gallery_id
             else:
                 print(f"{timestamp()} Failed to create gallery")
@@ -1289,7 +1306,7 @@ class ImxToUploader:
             print(f"{timestamp()} Error renaming gallery: {str(e)}")
             return False
     
-    def set_gallery_visibility(self, gallery_id, public_gallery=1):
+    def set_gallery_visibility(self, gallery_id):
         """Set gallery visibility (public/private)"""
         if not self.login():
             return False
@@ -1300,15 +1317,14 @@ class ImxToUploader:
             
             # Submit gallery visibility form
             visibility_data = {
-                'public_gallery': str(public_gallery),
+                'public_gallery': '1',  # Always public for now
                 'submit_new_gallery': 'Update Gallery'
             }
             
             response = self.session.post(f"{self.web_url}/user/gallery/edit?id={gallery_id}", data=visibility_data)
             
             if response.status_code == 200:
-                visibility = "public" if public_gallery else "private"
-                print(f"{timestamp()} Successfully set gallery {gallery_id} to {visibility}")
+                print(f"{timestamp()} Successfully set gallery {gallery_id} visibility")
                 return True
             else:
                 print(f"{timestamp()} Failed to update gallery visibility")
@@ -1352,11 +1368,14 @@ class ImxToUploader:
             data['thumbnail_format'] = str(thumbnail_format)
             
             try:
+                # Use configurable timeouts to prevent indefinite hangs
+                timeout_tuple = (self.upload_connect_timeout, self.upload_read_timeout)
                 response = requests.post(
                     self.upload_url,
                     headers=self.headers,
                     files=files,
-                    data=data
+                    data=data,
+                    timeout=timeout_tuple
                 )
                 
                 if response.status_code == 200:
@@ -1364,10 +1383,15 @@ class ImxToUploader:
                 else:
                     raise Exception(f"Upload failed with status code {response.status_code}: {response.text}")
                     
+            except requests.exceptions.Timeout as e:
+                # Include actual timeout values in error for debugging
+                raise Exception(f"Upload timeout (connect={self.upload_connect_timeout}s, read={self.upload_read_timeout}s): {str(e)}")
+            except requests.exceptions.ConnectionError as e:
+                raise Exception(f"Connection error during upload: {str(e)}")
             except requests.exceptions.RequestException as e:
                 raise Exception(f"Network error during upload: {str(e)}")
     
-    def upload_folder(self, folder_path, gallery_name=None, thumbnail_size=3, thumbnail_format=2, max_retries=3, public_gallery=1, parallel_batch_size=4, template_name="default"):
+    def upload_folder(self, folder_path, gallery_name=None, thumbnail_size=3, thumbnail_format=2, max_retries=3, parallel_batch_size=4, template_name="default"):
         """
         Upload all images in a folder as a gallery
         
@@ -1377,7 +1401,6 @@ class ImxToUploader:
             thumbnail_size (int): Thumbnail size setting
             thumbnail_format (int): Thumbnail format setting
             max_retries (int): Maximum retry attempts for failed uploads
-            public_gallery (int): Gallery visibility (0=private, 1=public)
             
         Returns:
             dict: Contains gallery URL and individual image URLs
@@ -1447,7 +1470,7 @@ class ImxToUploader:
         
         # Create gallery (skip login since it's already done). If creation fails, fall back to API-only
         create_start = time.time()
-        gallery_id = self.create_gallery_with_name(gallery_name, public_gallery, skip_login=True)
+        gallery_id = self.create_gallery_with_name(gallery_name, skip_login=True)
         create_duration = time.time() - create_start
         print(f"[TIMING] Gallery creation took {create_duration:.6f}s")
         initial_completed = 0
@@ -1699,7 +1722,6 @@ class ImxToUploader:
                     'failed_details': failed_images,
                     'thumbnail_size': thumbnail_size,
                     'thumbnail_format': thumbnail_format,
-                    'public_gallery': public_gallery,
                     'parallel_batch_size': parallel_batch_size,
                     'total_images': len(image_files),
                     'started_at': datetime.fromtimestamp(start_time).strftime('%Y-%m-%d %H:%M:%S'),
@@ -1813,7 +1835,6 @@ class ImxToUploader:
                 'settings': {
                     'thumbnail_size': thumbnail_size,
                     'thumbnail_format': thumbnail_format,
-                    'public_gallery': public_gallery,
                     'template_name': template_name,
                     'parallel_batch_size': parallel_batch_size
                 },
@@ -1873,15 +1894,15 @@ def main():
                        default=user_defaults.get('max_retries', 3), 
                        help='Maximum retry attempts for failed uploads (default: 3)')
     parser.add_argument('--public-gallery', type=int, choices=[0, 1], 
-                       default=user_defaults.get('public_gallery', 1),
-                       help='Gallery visibility: 0=private, 1=public (default: 1)')
+                       default=1,
+                       help='DEPRECATED: Gallery visibility (kept for compatibility)')
     parser.add_argument('--parallel', type=int, 
                        default=user_defaults.get('parallel_batch_size', 4),
                        help='Number of images to upload simultaneously (default: 4)')
     parser.add_argument('--private', action='store_true',
-                       help='Make galleries private (overrides --public-gallery)')
+                       help='DEPRECATED: Gallery visibility (kept for compatibility)')
     parser.add_argument('--public', action='store_true',
-                       help='Make galleries public (overrides --public-gallery)')
+                       help='DEPRECATED: Gallery visibility (kept for compatibility)')
     parser.add_argument('--setup-secure', action='store_true',
                        help='Set up secure password storage (interactive)')
     parser.add_argument('--rename-unnamed', action='store_true',
@@ -2024,11 +2045,8 @@ def main():
         return 1  # No valid folders
     
     # Determine public gallery setting
-    public_gallery = args.public_gallery
-    if args.private:
-        public_gallery = 0
-    elif args.public:
-        public_gallery = 1
+    # public_gallery is deprecated but kept for compatibility
+    # All galleries are public now
     
     try:
         uploader = ImxToUploader()
@@ -2055,7 +2073,6 @@ def main():
                     thumbnail_size=args.size,
                     thumbnail_format=args.format,
                     max_retries=args.max_retries,
-                    public_gallery=public_gallery,
                     parallel_batch_size=args.parallel,
                     template_name=args.template or "default",
                 )

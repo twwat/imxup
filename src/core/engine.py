@@ -31,7 +31,7 @@ class UploadEngine:
 
     The engine expects an `uploader` object that implements:
       - upload_image(image_path, create_gallery=False, gallery_id=None, thumbnail_size=..., thumbnail_format=...)
-      - create_gallery_with_name(gallery_name, public_gallery, skip_login=True)
+      - create_gallery_with_name(gallery_name, skip_login=True)
       - attributes: web_url (for links)
     """
 
@@ -45,7 +45,6 @@ class UploadEngine:
         thumbnail_size: int,
         thumbnail_format: int,
         max_retries: int,
-        public_gallery: int,
         parallel_batch_size: int,
         template_name: str,
         # Resume support from GUI; pass empty for CLI
@@ -239,7 +238,7 @@ class UploadEngine:
                     return image_file, response['data'], None
                 return image_file, None, f"API error: {response}"
             except Exception as e:
-                return image_file, None, f"Network error: {e}"
+                return image_file, None, f"Upload error: {e}"
 
         # Concurrency loop
         uploaded_images: List[Tuple[str, Dict[str, Any]]] = []
@@ -280,6 +279,9 @@ class UploadEngine:
                             on_image_uploaded(image_file, image_data, size_bytes)
                     else:
                         failed_images.append((image_file, error or "unknown error"))
+                        # Log the failure immediately with clear error indication
+                        if on_log:
+                            on_log(f"[uploads] ✗ Upload failed: {image_file} - {error or 'unknown error'}")
                     # Progress
                     completed_count = initial_completed + len(uploaded_images)
                     if on_progress:
@@ -326,7 +328,7 @@ class UploadEngine:
                         else:
                             retry_failed.append((image_file, error or "unknown error"))
                             if on_log:
-                                on_log(f"Retry failed: {image_file} - {error}")
+                                on_log(f"[uploads] ✗ Retry failed: {image_file} - {error or 'unknown error'}")
                         completed_count = initial_completed + len(uploaded_images)
                         if on_progress:
                             percent = int((completed_count / max(original_total_images, 1)) * 100)
@@ -464,7 +466,6 @@ class UploadEngine:
             # echo settings for artifact helper
             'thumbnail_size': thumbnail_size,
             'thumbnail_format': thumbnail_format,
-            'public_gallery': public_gallery,
             'parallel_batch_size': parallel_batch_size,
             'template_name': template_name,
             'total_images': original_total_images,
