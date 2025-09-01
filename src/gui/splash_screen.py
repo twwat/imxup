@@ -17,7 +17,7 @@ class SplashScreen(QSplashScreen):
     
     def __init__(self):
         # Create a base pixmap for the splash screen
-        pixmap = QPixmap(520, 400)  # Increased height for logo
+        pixmap = QPixmap(560, 430)  # Increased height for logo
         pixmap.fill(QColor(29, 22, 22))  # Dark blue-gray background
         super().__init__(pixmap, Qt.WindowType.WindowStaysOnTopHint)
         
@@ -124,29 +124,30 @@ class SplashScreen(QSplashScreen):
         y_offset += 33
         
         copyright_text = "Copyright © 2025 twat"
-        copyright_font = QFont("Courier", 11)
+        copyright_font = QFont("Courier", 12)
         painter.setFont(copyright_font)
         painter.setPen(QColor(200, 196, 177))
         copyright_rect = painter.fontMetrics().boundingRect(copyright_text)
         copyright_x = (self.width() - copyright_rect.width()) // 2
         painter.drawText(copyright_x, y_offset + 20, copyright_text)
-        y_offset += 46
+        y_offset += 65
         
         # Draw copyright and license info
-        painter.setPen(QColor(231, 216, 206))
-        license_font = QFont("Courier", 10)
+        painter.setPen(QColor(231, 226, 226))
+        license_font = QFont("Courier", 11)
         painter.setFont(license_font)
         
         license_lines = [
             "",
-            ""
             "Licensed under the Apache License, Version 2.0",
             "",
-            "Distributed on an \"as is\" basis without warranties or",
-            "conditions of any kind, either express or implied.",
             "",
-            "The \"IMX.to\" name and logo are property of IMX.to,",
-            "we are not affiliated with them in any way.",
+            "Distributed on an \"as is\" basis without",
+            "warranties or conditions of any kind,",
+            "either express or implied.",
+            "",
+            #"Not affiliated with, or endorsed by IMX.to.",
+            #"\"IMX.to\" name and logo are property of IMX.to."
         ]
         
         y_pos = y_offset
@@ -156,9 +157,9 @@ class SplashScreen(QSplashScreen):
                 line_x = (self.width() - line_rect.width()) // 2
                 painter.drawText(line_x, y_pos, line)
             if line == "":
-                y_pos += 12
+                y_pos += 10
             else:
-                y_pos += 15
+                y_pos += 16
         
         # Draw status text at bottom
         painter.setPen(QColor(207, 69, 2))

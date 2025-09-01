@@ -79,10 +79,20 @@ class UploadWorker(QThread):
             # Initialize uploader and perform initial login
             self._initialize_uploader()
             
+            # Initialize periodic bandwidth update timer
+            last_bandwidth_emit = time.time()
+            bandwidth_emit_interval = 0.5  # Emit bandwidth every 500ms
+            
             # Main processing loop
             while self.running:
                 # Handle any pending login retry requests
                 self._maybe_handle_login_retry()
+                
+                # Emit bandwidth updates periodically (independent of file completions)
+                now = time.time()
+                if now - last_bandwidth_emit >= bandwidth_emit_interval:
+                    self._emit_current_bandwidth()
+                    last_bandwidth_emit = now
                 
                 # Get next item from queue
                 item = self.queue_manager.get_next_item()
@@ -328,6 +338,66 @@ class UploadWorker(QThread):
                 self._stats_last_emit = now
             except Exception:
                 pass
+    
+    def _emit_current_bandwidth(self):
+        """Emit current bandwidth based on active uploads"""
+        try:
+            # Initialize bandwidth tracking if needed
+            if not hasattr(self, '_bandwidth_tracker'):
+                self._bandwidth_tracker = {}  # path -> {'last_bytes': 0, 'last_time': time, 'history': []}
+            
+            now = time.time()
+            total_rate = 0.0
+            
+            # Calculate current rate for all uploading items
+            for item in self.queue_manager.get_all_items():
+                if item.status == "uploading" and hasattr(item, 'start_time') and item.start_time:
+                    current_bytes = getattr(item, 'uploaded_bytes', 0)
+                    
+                    # Initialize tracker for this item
+                    if item.path not in self._bandwidth_tracker:
+                        self._bandwidth_tracker[item.path] = {
+                            'last_bytes': 0,
+                            'last_time': item.start_time,
+                            'history': []
+                        }
+                    
+                    tracker = self._bandwidth_tracker[item.path]
+                    
+                    # Calculate instantaneous rate
+                    bytes_diff = current_bytes - tracker['last_bytes']
+                    time_diff = now - tracker['last_time']
+                    
+                    if time_diff > 0.05:  # At least 50ms for accurate measurement
+                        if bytes_diff > 0:
+                            rate = bytes_diff / time_diff
+                            # Add to history for smoothing
+                            tracker['history'].append((now, rate))
+                            # Keep only last 3 seconds
+                            cutoff = now - 3.0
+                            tracker['history'] = [(t, r) for t, r in tracker['history'] if t > cutoff]
+                            
+                            # Update tracker
+                            tracker['last_bytes'] = current_bytes
+                            tracker['last_time'] = now
+                        
+                        # Calculate smoothed rate from history
+                        if tracker['history']:
+                            avg_rate = sum(r for t, r in tracker['history']) / len(tracker['history'])
+                            total_rate += avg_rate
+            
+            # Clean up trackers for items no longer uploading
+            active_paths = {item.path for item in self.queue_manager.get_all_items() 
+                          if item.status == "uploading"}
+            self._bandwidth_tracker = {path: tracker for path, tracker in self._bandwidth_tracker.items() 
+                                      if path in active_paths}
+            
+            # Emit bandwidth in KB/s
+            self.bandwidth_updated.emit(total_rate / 1024.0)
+            
+        except Exception:
+            # Fail silently to avoid disrupting uploads
+            pass
 
 
 class CompletionWorker(QThread):

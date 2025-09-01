@@ -35,8 +35,9 @@ class UploadEngine:
       - attributes: web_url (for links)
     """
 
-    def __init__(self, uploader: Any):
+    def __init__(self, uploader: Any, rename_worker: Any = None):
         self.uploader = uploader
+        self.rename_worker = rename_worker
 
     def run(
         self,
@@ -177,40 +178,27 @@ class UploadEngine:
                     on_image_uploaded(first_file, first_response['data'], initial_uploaded_size)
                 except Exception:
                     pass
-        # Attempt immediate rename if a web session exists; otherwise record for later auto-rename
-        try:
-            last_method = getattr(self.uploader, 'last_login_method', None)
-        except Exception:
-            last_method = None
-        if gallery_name and last_method in ('cookies', 'credentials'):
+        # Queue gallery rename for background processing to avoid blocking uploads
+        if gallery_name:
             try:
-                rename_ok = getattr(self.uploader, 'rename_gallery_with_session', lambda *_: False)(gallery_id, gallery_name)
-                if rename_ok:
-                    if on_log:
-                        on_log(f"Renamed gallery immediately using web session: '{gallery_name}'")
-                else:
-                    # Web session present but rename failed; queue for auto-rename later
-                    try:
-                        from imxup import save_unnamed_gallery  # type: ignore
-                        save_unnamed_gallery(gallery_id, gallery_name)
-                        if on_log:
-                            on_log(f"Queued gallery for auto-rename: '{gallery_name}'")
-                    except Exception:
-                        pass
+                last_method = getattr(self.uploader, 'last_login_method', None)
             except Exception:
-                # On error, also queue for later rename so it doesn't slip past
+                last_method = None
+                
+            if self.rename_worker:
+                # Always try RenameWorker first (it will fallback internally if needed)
+                if on_log:
+                    on_log(f"Queuing gallery rename via RenameWorker (login method: {last_method})")
+                self.rename_worker.queue_rename(gallery_id, gallery_name, on_log)
+            else:
+                # No rename worker; queue for later auto-rename
                 try:
                     from imxup import save_unnamed_gallery  # type: ignore
                     save_unnamed_gallery(gallery_id, gallery_name)
+                    if on_log:
+                        on_log(f"Queued gallery for auto-rename: '{gallery_name}' (no RenameWorker)")
                 except Exception:
                     pass
-        else:
-            # No web session; save for later auto-rename
-            try:
-                from imxup import save_unnamed_gallery  # type: ignore
-                save_unnamed_gallery(gallery_id, gallery_name)
-            except Exception:
-                pass
         # Emit an initial progress update
         if on_progress:
             percent_once = int((initial_completed / max(original_total_images, 1)) * 100)

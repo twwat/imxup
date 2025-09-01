@@ -47,16 +47,47 @@ class UploadWorker(QThread):
         
         # Bandwidth tracking
         self._bw_last_emit = 0
+        
+        # Background rename worker
+        self.rename_worker = None
         self._stats_last_emit = 0
         
         # Auto-rename preference
         self.auto_rename_enabled = False
+        
+        # Transfer rate now updated by GUI timer
+        
+        # Initialize background rename worker (do this in __init__ so it's available immediately)
+        print(f"DEBUG: UploadWorker.__init__ - Setting up RenameWorker attribute")
+        self._rename_worker_available = True
+        try:
+            from src.processing.rename_worker import RenameWorker
+            print(f"DEBUG: RenameWorker import successful")
+            # Import successful, will initialize with uploader in run()
+        except Exception as e:
+            print(f"DEBUG: RenameWorker import failed: {e}")
+            self._rename_worker_available = False
+        
+        self.rename_worker = None  # Will be set in run() if available
+        print(f"DEBUG: UploadWorker.__init__ - rename_worker attribute set to None")
     
     def run(self):
         """Main worker thread loop"""
         # Create uploader instance in the thread
         from src.network.client import GUIImxToUploader
         self.uploader = GUIImxToUploader(self)
+        
+        # Initialize background rename worker with uploader
+        if not self._rename_worker_available:
+            self.log_message.emit("RenameWorker not available (import failed in __init__)")
+        else:
+            try:
+                from src.processing.rename_worker import RenameWorker
+                self.rename_worker = RenameWorker(self.uploader)
+                self.log_message.emit("RenameWorker initialized successfully")
+            except Exception as e:
+                self.log_message.emit(f"Failed to initialize RenameWorker: {e}")
+                self.rename_worker = None
         
         # Initialize session
         self._init_session()

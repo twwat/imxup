@@ -197,11 +197,10 @@ class IconManager:
             # Manual light/dark pair
             # Logic: 
             # - Normal rows: light theme uses light icon, dark theme uses dark icon
-            # - Selected rows: always use opposite variant for contrast on selection background
+            # - Selected rows: always use dark icon for contrast against selection background
             if is_selected:
-                # Selected: use dark icon in light theme, light icon in dark theme
-                filename = config[1] if not is_dark_theme else config[0]
-                # Debug output (removed icon_key reference)
+                # Selected: always use dark icon for contrast against selection background
+                filename = config[1]  # Always use dark icon for selected rows
                 return filename
             else:
                 # Not selected: use light icon in light theme, dark icon in dark theme

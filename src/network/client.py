@@ -80,26 +80,55 @@ class GUIImxToUploader(ImxToUploader):
                 f"{timestamp()} Sanitized gallery name: '{original_name}' -> '{gallery_name}'"
             )
         
-        engine = UploadEngine(self)
+        # Get RenameWorker from worker thread if available
+        rename_worker = None
+        if self.worker_thread:
+            if hasattr(self.worker_thread, 'rename_worker'):
+                rename_worker = self.worker_thread.rename_worker
+                if rename_worker:
+                    self.worker_thread.log_message.emit(f"Using RenameWorker for background renaming")
+                else:
+                    self.worker_thread.log_message.emit(f"Worker thread has rename_worker attribute but it's None")
+            else:
+                self.worker_thread.log_message.emit(f"Worker thread missing rename_worker attribute")
+        else:
+            # This should not happen in GUI mode but let's log it
+            print(f"No worker_thread available for RenameWorker")
+        
+        engine = UploadEngine(self, rename_worker)
 
         def on_progress(completed: int, total: int, percent: int, current_image: str):
             if not self.worker_thread:
                 return
             self.worker_thread.progress_updated.emit(folder_path, completed, total, percent, current_image)
-            # Throttled bandwidth: approximate from uploaded_bytes
+            # Improved bandwidth tracking with sliding window
             try:
                 now_ts = time.time()
                 if now_ts - self.worker_thread._bw_last_emit >= 0.1:
-                    total_bytes = 0
-                    max_elapsed = 0.0
+                    # Simple sliding window bandwidth calculation
+                    if not hasattr(self.worker_thread, '_last_bytes'):
+                        self.worker_thread._last_bytes = {}
+                        self.worker_thread._last_check = now_ts
+                    
+                    total_current_bytes = 0
+                    total_last_bytes = 0
+                    
                     for it in self.worker_thread.queue_manager.get_all_items():
                         if it.status == QUEUE_STATE_UPLOADING and it.start_time:
-                            total_bytes += getattr(it, 'uploaded_bytes', 0)
-                            max_elapsed = max(max_elapsed, now_ts - it.start_time)
-                    if max_elapsed > 0:
-                        kbps = (total_bytes / max_elapsed) / 1024.0
+                            current = getattr(it, 'uploaded_bytes', 0)
+                            total_current_bytes += current
+                            total_last_bytes += self.worker_thread._last_bytes.get(it.path, 0)
+                            self.worker_thread._last_bytes[it.path] = current
+                    
+                    # Calculate rate based on bytes transferred since last check
+                    time_diff = now_ts - self.worker_thread._last_check
+                    if time_diff > 0:
+                        bytes_diff = total_current_bytes - total_last_bytes
+                        kbps = (bytes_diff / time_diff) / 1024.0
                         self.worker_thread.bandwidth_updated.emit(kbps)
-                        self.worker_thread._bw_last_emit = now_ts
+                    
+                    self.worker_thread._last_check = now_ts
+                    self.worker_thread._bw_last_emit = now_ts
                 # Also update this item's instantaneous rate for the Transfer column
                 try:
                     if self.worker_thread.current_item and self.worker_thread.current_item.path == folder_path:

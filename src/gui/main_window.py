@@ -34,7 +34,7 @@ from PyQt6.QtWidgets import (
     QGridLayout, QSizePolicy, QTabWidget, QTabBar, QFileDialog, QTableWidget,
     QTableWidgetItem, QHeaderView, QDialog, QDialogButtonBox, QPlainTextEdit,
     QLineEdit, QInputDialog, QSpacerItem, QStyle, QAbstractItemView,
-    QProgressDialog
+    QProgressDialog, QListView, QTreeView
 )
 from PyQt6.QtCore import (
     Qt, QThread, pyqtSignal, QTimer, QMimeData, QUrl, 
@@ -227,11 +227,8 @@ class UploadWorker(QThread):
     queue_stats = pyqtSignal(dict)  # aggregate status stats for GUI updates
     
     def __init__(self, queue_manager):
-        print(f"DEBUG: UploadWorker.__init__ called")
         super().__init__()
-        print(f"DEBUG: QThread.__init__ completed")
         self.queue_manager = queue_manager
-        print(f"DEBUG: queue_manager assigned")
         self.uploader = None
         self.running = True
         self.current_item = None
@@ -243,10 +240,26 @@ class UploadWorker(QThread):
         self._request_mutex = QMutex()
         self._retry_login_requested = False
         self._retry_credentials_only = False
-        print(f"DEBUG: UploadWorker.__init__ completed")
+        
+        # Initialize RenameWorker support
+        self.rename_worker = None
+        self._rename_worker_available = True
+        try:
+            from src.processing.rename_worker import RenameWorker
+        except Exception as e:
+            print(f"DEBUG: RenameWorker import failed in main_window UploadWorker.__init__: {e}")
+            self._rename_worker_available = False
         
     def stop(self):
         self.running = False
+        # Cleanup RenameWorker
+        if hasattr(self, 'rename_worker') and self.rename_worker:
+            try:
+                self.rename_worker.stop()
+            except Exception as e:
+                from imxup import timestamp
+                print(f"DEBUG: Error stopping RenameWorker: {e}")
+                self.log_message.emit(f"{timestamp()} [renaming] Error stopping RenameWorker: {e}")
         self.wait()
     
     def request_soft_stop_current(self):
@@ -256,21 +269,32 @@ class UploadWorker(QThread):
         
     def run(self):
         """Main worker thread loop"""
-        print(f"DEBUG: Worker thread starting")
         try:
             # Initialize custom GUI uploader with reference to this worker
-            print(f"DEBUG: Initializing uploader")
             self.uploader = GUIImxToUploader(worker_thread=self)
             
+            # Initialize RenameWorker with the uploader
+            if self._rename_worker_available:
+                try:
+                    from src.processing.rename_worker import RenameWorker
+                    from imxup import timestamp
+                    self.rename_worker = RenameWorker(self.uploader)
+                    self.log_message.emit(f"{timestamp()} [renaming] RenameWorker initialized successfully")
+                except Exception as e:
+                    from imxup import timestamp
+                    print(f"DEBUG: Failed to initialize RenameWorker in main_window: {e}")
+                    self.log_message.emit(f"{timestamp()} [renaming] Failed to initialize RenameWorker: {e}")
+                    self.rename_worker = None
+            else:
+                from imxup import timestamp
+                print(f"DEBUG: RenameWorker not available (import failed)")
+                self.log_message.emit(f"{timestamp()} [renaming] RenameWorker not available (import failed)")
+            
             # Login once for session reuse
-            print(f"DEBUG: Starting login process")
             self.log_message.emit(f"{timestamp()} [auth] Logging in...")
-            print(f"DEBUG: About to call uploader.login()")
             try:
                 login_success = self.uploader.login()
-                print(f"DEBUG: Login completed, success: {login_success}")
             except Exception as e:
-                print(f"DEBUG: Login failed with exception: {e}")
                 import traceback
                 traceback.print_exc()
                 login_success = False
@@ -3568,6 +3592,14 @@ class ImxUploadGUI(QMainWindow):
         self._background_update_timer.timeout.connect(self._process_background_tab_updates)
         self._background_update_timer.setSingleShot(True)
         
+        # Speed updates timer for regular refresh - COMPLETELY DISABLED
+        # There's a critical issue with _update_transfer_speed_display causing hangs
+        pass  # Removed timer completely
+        
+        # Sliding window for accurate bandwidth tracking
+        self._bandwidth_history = []  # List of (timestamp, bytes) tuples
+        self._bandwidth_window_size = 3.0  # 3 second sliding window
+        
         # Connect tab manager to the tabbed gallery widget  
         print(f"Debug: Setting TabManager in TabbedGalleryWidget: {self.tab_manager}")
         self.gallery_table.set_tab_manager(self.tab_manager)
@@ -3628,6 +3660,7 @@ class ImxUploadGUI(QMainWindow):
                     self._update_scan_status()
                 except Exception:
                     pass
+                
             except Exception as e:
                 print(f"Timer error: {e}")
         self.update_timer.timeout.connect(_tick)
@@ -3790,6 +3823,7 @@ class ImxUploadGUI(QMainWindow):
             if hasattr(self, '_table_update_queue'):
                 if hasattr(self._table_update_queue, '_timer'):
                     self._table_update_queue._timer.stop()
+            
                     
             # Clear icon cache
             if hasattr(self, '_icon_cache'):
@@ -3874,6 +3908,7 @@ class ImxUploadGUI(QMainWindow):
         except Exception:
             # Hide on error
             self.scan_status_label.setVisible(False)
+    
 
     def _load_status_icons_if_needed(self):
         try:
@@ -4012,8 +4047,9 @@ class ImxUploadGUI(QMainWindow):
             # Determine theme and selection state
             is_dark_theme = self._get_cached_theme()
             
-            # Check if this row is selected using existing pattern
-            selected_rows = {item.row() for item in self.gallery_table.selectedItems()}
+            # Check if this row is selected - use inner table for tabbed system consistency  
+            table_widget = getattr(self.gallery_table, 'gallery_table', self.gallery_table)
+            selected_rows = {item.row() for item in table_widget.selectedItems()}
             is_selected = row in selected_rows
 
             icon_mgr = get_icon_manager()
@@ -4784,8 +4820,6 @@ class ImxUploadGUI(QMainWindow):
         self.stats_total_galleries_value_label = QLabel("0")
         self.stats_total_images_text_label = QLabel("Images uploaded:")
         self.stats_total_images_value_label = QLabel("0")
-        #self.stats_current_speed_label = QLabel("Current speed: 0.0 KiB/s")
-        #self.stats_fastest_speed_label = QLabel("Fastest speed: 0.0 KiB/s")
         # Let styles.qss handle the colors for these labels
         for lbl in (
             self.stats_unnamed_value_label,
@@ -4814,7 +4848,7 @@ class ImxUploadGUI(QMainWindow):
         # Keep bottom short like the original progress box; fix width to avoid jitter
         stats_group.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         try:
-            stats_group.setFixedWidth(260)
+            stats_group.setFixedWidth(230)
         except Exception:
             pass
         stats_group.setMinimumWidth(160)
@@ -4871,7 +4905,7 @@ class ImxUploadGUI(QMainWindow):
         # Keep bottom short like the original progress box; fix width to avoid jitter
         speed_group.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         try:
-            speed_group.setFixedWidth(200)
+            speed_group.setFixedWidth(230)  # Increased from 200 to 240 to prevent digit truncation
         except Exception:
             pass
         speed_group.setProperty("class", "speed-group")
@@ -5553,6 +5587,113 @@ class ImxUploadGUI(QMainWindow):
     def on_bandwidth_updated(self, kbps: float):
         """Receive current aggregate bandwidth from worker (KB/s)."""
         self._current_transfer_kbps = kbps
+    
+    def _update_transfer_speed_display(self):
+        """Update transfer speed display based on sliding window of bytes transferred"""
+        # DISABLED: This method causes GUI hangs
+        return
+        try:
+            current_time = time.time()
+            
+            # Clean up old entries outside the window
+            cutoff_time = current_time - self._bandwidth_window_size
+            self._bandwidth_history = [(t, b) for t, b in self._bandwidth_history if t > cutoff_time]
+            
+            # Calculate current transfer rate from all uploading items
+            total_bytes_in_window = 0
+            current_uploading_items = []
+            
+            # Try to acquire mutex with timeout to prevent deadlock
+            mutex_acquired = self.queue_manager.mutex.tryLock(100)  # 100ms timeout
+            if not mutex_acquired:
+                # Mutex is locked, skip this update cycle
+                return
+            
+            try:
+                for item in self.queue_manager.get_all_items():
+                    if item.status == "uploading" and hasattr(item, 'start_time') and item.start_time:
+                        current_uploading_items.append(item)
+                        # Track uploaded bytes for this item
+                        uploaded_bytes = getattr(item, 'uploaded_bytes', 0)
+                        if uploaded_bytes > 0:
+                            # Add to history if not already tracked
+                            item_id = f"{item.path}_{item.start_time}"
+                            if not hasattr(self, '_tracked_items'):
+                                self._tracked_items = {}
+                            
+                            if item_id not in self._tracked_items:
+                                self._tracked_items[item_id] = {'last_bytes': 0, 'last_time': item.start_time}
+                            
+                            # Calculate bytes transferred since last check
+                            bytes_diff = uploaded_bytes - self._tracked_items[item_id]['last_bytes']
+                            if bytes_diff > 0:
+                                self._bandwidth_history.append((current_time, bytes_diff))
+                                self._tracked_items[item_id]['last_bytes'] = uploaded_bytes
+                                self._tracked_items[item_id]['last_time'] = current_time
+            finally:
+                if mutex_acquired:
+                    self.queue_manager.mutex.unlock()
+            
+            # Calculate rate from sliding window
+            if len(self._bandwidth_history) >= 2:
+                # Sum all bytes in the window
+                total_bytes = sum(b for t, b in self._bandwidth_history)
+                # Get time span of the window
+                if self._bandwidth_history:
+                    time_span = current_time - self._bandwidth_history[0][0]
+                    if time_span > 0.1:  # At least 100ms of data
+                        current_kbps = (total_bytes / time_span) / 1024.0
+                    else:
+                        current_kbps = 0
+                else:
+                    current_kbps = 0
+            else:
+                # Fall back to instant calculation if not enough history
+                current_kbps = 0
+                for item in current_uploading_items:
+                    if hasattr(item, 'start_time') and item.start_time:
+                        elapsed = max(current_time - item.start_time, 0.1)
+                        item_bytes = getattr(item, 'uploaded_bytes', 0)
+                        if item_bytes > 0 and elapsed > 0:
+                            item_kbps = (item_bytes / elapsed) / 1024.0
+                            current_kbps += item_kbps
+            
+            # Update the speed display
+            self._current_transfer_kbps = current_kbps
+            
+            # Update Speed box display
+            settings = QSettings("ImxUploader", "ImxUploadGUI")
+            fastest_kbps = settings.value("fastest_kbps", 0.0, type=float)
+            
+            # Format speeds
+            try:
+                from imxup import format_binary_rate
+                current_speed_str = format_binary_rate(current_kbps, precision=2) if current_kbps > 0 else "0.00 KiB/s"
+                fastest_speed_str = format_binary_rate(fastest_kbps, precision=2) if fastest_kbps > 0 else "0.00 KiB/s"
+            except Exception:
+                current_speed_str = self._format_rate_consistent(current_kbps)
+                fastest_speed_str = self._format_rate_consistent(fastest_kbps)
+            
+            self.speed_current_value_label.setText(current_speed_str)
+            self.speed_fastest_value_label.setText(fastest_speed_str)
+            
+            # Update transferred bytes display
+            total_transferred = sum(getattr(item, 'uploaded_bytes', 0) for item in current_uploading_items)
+            try:
+                from imxup import format_binary_size
+                transferred_str = format_binary_size(total_transferred, precision=1)
+            except Exception:
+                transferred_str = f"{total_transferred} B"
+            self.speed_transferred_value_label.setText(transferred_str)
+            
+            # Track fastest speed
+            if current_kbps > fastest_kbps and current_kbps < 10000:  # Sanity check - ignore > 10MB/s
+                settings.setValue("fastest_kbps", current_kbps)
+                settings.sync()
+                
+        except Exception as e:
+            # Fail silently to avoid disrupting UI
+            pass
 
     def on_queue_item_status_changed(self, path: str, old_status: str, new_status: str):
         """Handle individual queue item status changes"""
@@ -5609,16 +5750,32 @@ class ImxUploadGUI(QMainWindow):
             pass
     
     def browse_for_folders(self):
-        """Open folder browser to select galleries"""
-        folder_path = QFileDialog.getExistingDirectory(
-            self,
-            "Select Gallery Folder",
-            "",
-            QFileDialog.Option.ShowDirsOnly
-        )
+        """Open folder browser to select galleries (supports multiple selection)"""
+        # Create file dialog with multi-selection support
+        file_dialog = QFileDialog(self)
+        file_dialog.setWindowTitle("Select Gallery Folders")
+        file_dialog.setFileMode(QFileDialog.FileMode.Directory)
+        file_dialog.setOption(QFileDialog.Option.DontUseNativeDialog, True)
+        file_dialog.setOption(QFileDialog.Option.ShowDirsOnly, True)
         
-        if folder_path:
-            self.add_folders([folder_path])
+        # Enable proper multi-selection on internal views (Ctrl+click, Shift+click)
+        list_view = file_dialog.findChild(QListView, 'listView')
+        if list_view:
+            list_view.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+            # Apply the app's stylesheet to match theme selection colors
+            list_view.setStyleSheet(self.styleSheet())
+        
+        tree_view = file_dialog.findChild(QTreeView)
+        if tree_view:
+            tree_view.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+            # Apply the app's stylesheet to match theme selection colors
+            tree_view.setStyleSheet(self.styleSheet())
+        
+        # Execute dialog and add selected folders
+        if file_dialog.exec() == QFileDialog.DialogCode.Accepted:
+            folder_paths = file_dialog.selectedFiles()
+            if folder_paths:
+                self.add_folders(folder_paths)
     
     def add_folders(self, folder_paths: List[str]):
         """Add folders to the upload queue with duplicate detection"""
@@ -6875,18 +7032,15 @@ class ImxUploadGUI(QMainWindow):
             self.speed_transferred_value_label.setText(f"{total_size_str}")
         except Exception:
             pass
-        # Current transfer speed: calculate live from uploading items
+        # Current transfer speed: calculate from ALL uploading items (not tab-filtered)
+        all_items = self.queue_manager.get_all_items()
         current_kibps = 0.0
-        any_uploading = any(it.status == "uploading" for it in items)
-        if any_uploading:
-            # Calculate current speed from all uploading items
-            for item in items:
-                if item.status == "uploading":
-                    item_speed = float(getattr(item, 'current_kibps', 0.0) or 0.0)
-                    current_kibps += item_speed
-            # Also use the worker's reported speed if available
-            worker_speed = float(getattr(self, "_current_transfer_kbps", 0.0))
-            current_kibps = max(current_kibps, worker_speed)
+        uploading_count = 0
+        for item in all_items:
+            if item.status == "uploading":
+                item_speed = float(getattr(item, 'current_kibps', 0.0) or 0.0)
+                current_kibps += item_speed
+                uploading_count += 1
         
         # Format speeds with consistent binary units
         try:
@@ -7091,6 +7245,9 @@ class ImxUploadGUI(QMainWindow):
                     pass
                 self.gallery_table.setItem(matched_row, 9, xfer_item)
                 
+            # Update overall progress bar and info/speed displays after individual table updates
+            self.update_progress_display()
+                
         except Exception:
             pass  # Fail silently to prevent blocking
     
@@ -7205,6 +7362,7 @@ class ImxUploadGUI(QMainWindow):
             self.update_progress_display()
         except Exception:
             pass
+    
     
     def on_completion_processed(self, path: str):
         """Handle when background completion processing is done"""

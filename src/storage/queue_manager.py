@@ -66,6 +66,7 @@ class GalleryQueueItem:
     current_kibps: float = 0.0
     final_kibps: float = 0.0
     
+    
     # Tab organization
     tab_name: str = "Main"
 
@@ -922,6 +923,7 @@ class QueueManager(QObject):
         for i, item in enumerate(sorted_items, 1):
             item.insertion_order = i
         self._next_order = len(self.items) + 1
+    
     
     def shutdown(self):
         """Shutdown queue manager"""

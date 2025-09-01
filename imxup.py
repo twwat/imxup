@@ -6,6 +6,7 @@ Upload image folders to imx.to as galleries
 
 import os
 import requests
+from requests.adapters import HTTPAdapter
 import json
 #from dotenv import load_dotenv
 import argparse
@@ -27,6 +28,8 @@ import getpass
 #import tempfile
 import json
 #import zipfile
+
+
 #import urllib.request
 import platform
 import sqlite3
@@ -885,6 +888,22 @@ class ImxToUploader:
         
         return None, None, None
     
+    def _setup_resilient_session(self, parallel_batch_size=4):
+        """Create a session with connection pooling (no automatic retries to avoid timeout conflicts)"""
+        # Configure connection pooling - use at least parallel_batch_size connections
+        pool_size = max(10, parallel_batch_size)
+        adapter = HTTPAdapter(
+            pool_connections=pool_size,  # Number of connection pools to cache
+            pool_maxsize=pool_size       # Max connections per pool
+        )
+        
+        # Create session and mount adapters
+        session = requests.Session()
+        session.mount("http://", adapter)
+        session.mount("https://", adapter)
+        
+        return session
+    
     def __init__(self):
         # Get credentials from stored config
         self.username, self.password, self.api_key = self._get_credentials()
@@ -918,8 +937,9 @@ class ImxToUploader:
         else:
             self.headers = {}
         
-        # Session for web interface
-        self.session = requests.Session()
+        # Session for web interface with connection pooling
+        parallel_batch_size = defaults.get('parallel_batch_size', 4)
+        self.session = self._setup_resilient_session(parallel_batch_size)
         self.session.headers.update({
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:141.0) Gecko/20100101 Firefox/141.0',
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
@@ -1069,8 +1089,10 @@ class ImxToUploader:
                     
                     if all_cookies:
                         print(f"{timestamp()} Retrying with browser cookies...")
-                        # Clear session and try with cookies
-                        self.session = requests.Session()
+                        # Clear session and try with cookies (use resilient session)
+                        defaults = load_user_defaults()
+                        parallel_batch_size = defaults.get('parallel_batch_size', 4)
+                        self.session = self._setup_resilient_session(parallel_batch_size)
                         self.session.headers.update({
                             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:141.0) Gecko/20100101 Firefox/141.0',
                             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
@@ -1145,8 +1167,10 @@ class ImxToUploader:
         if not self.username or not self.password:
             return False
         try:
-            # Fresh session without any cookie loading
-            self.session = requests.Session()
+            # Fresh resilient session without any cookie loading
+            defaults = load_user_defaults()
+            parallel_batch_size = defaults.get('parallel_batch_size', 4)
+            self.session = self._setup_resilient_session(parallel_batch_size)
             self.session.headers.update({
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:141.0) Gecko/20100101 Firefox/141.0',
                 'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
@@ -2059,7 +2083,17 @@ def main():
 
         # Use shared UploadEngine for consistent behavior
         from src.core.engine import UploadEngine
-        engine = UploadEngine(uploader)
+        
+        # Create RenameWorker for background renaming
+        rename_worker = None
+        try:
+            from src.processing.rename_worker import RenameWorker
+            rename_worker = RenameWorker(uploader)
+            print(f"{timestamp()} Background RenameWorker initialized")
+        except Exception as e:
+            print(f"{timestamp()} Warning: Failed to initialize RenameWorker: {e}")
+            
+        engine = UploadEngine(uploader, rename_worker)
 
         # Process multiple galleries
         for folder_path in expanded_paths:
@@ -2091,6 +2125,10 @@ def main():
 
             except KeyboardInterrupt:
                 print(f"\n{timestamp()} Upload interrupted by user")
+                # Cleanup RenameWorker on interrupt
+                if rename_worker:
+                    rename_worker.stop()
+                    print(f"{timestamp()} Background RenameWorker stopped")
                 break
             except Exception as e:
                 print(f"Error uploading {folder_path}: {str(e)}", file=sys.stderr)
@@ -2142,13 +2180,30 @@ def main():
                 except Exception:
                     speed_str = f"{((results['transfer_speed'] or 0) / 1024.0):.1f} KiB/s"
                 print(f"  Speed: {speed_str}")
+            
+            # Cleanup RenameWorker
+            if rename_worker:
+                rename_worker.stop()
+                print(f"{timestamp()} Background RenameWorker stopped")
                 
             return 0  # Success
         else:
+            # Cleanup RenameWorker
+            if rename_worker:
+                rename_worker.stop()
+                print(f"{timestamp()} Background RenameWorker stopped")
+                
             print("No galleries were successfully uploaded.")
             return 1  # No galleries uploaded
             
     except Exception as e:
+        # Cleanup RenameWorker on exception
+        try:
+            if 'rename_worker' in locals() and rename_worker:
+                rename_worker.stop()
+                print(f"{timestamp()} Background RenameWorker stopped")
+        except Exception:
+            pass  # Ignore cleanup errors
         print(f"Error: {str(e)}", file=sys.stderr)
         return 1  # Error occurred
 
