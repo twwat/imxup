@@ -3641,6 +3641,12 @@ class ImxUploadGUI(QMainWindow):
                 selection_model = inner_table.selectionModel()
                 if selection_model:
                     selection_model.selectionChanged.connect(self._on_selection_changed)
+            
+            # Connect cell click handler for template column editing
+            inner_table.cellClicked.connect(self.on_gallery_cell_clicked)
+        elif hasattr(self.gallery_table, 'cellClicked'):
+            # Direct connection if it's not a tabbed widget
+            self.gallery_table.cellClicked.connect(self.on_gallery_cell_clicked)
         
         # Set reference to update queue in tabbed widget for cache invalidation
         if hasattr(self.gallery_table, '_update_queue'):
@@ -8361,6 +8367,211 @@ class ImxUploadGUI(QMainWindow):
         
         # Accept the close event to ensure app exits
         event.accept()
+
+    def on_gallery_cell_clicked(self, row, column):
+        """Handle clicks on gallery table cells, specifically for template editing."""
+        print(f"DEBUG: on_gallery_cell_clicked called with row={row}, column={column}")
+        
+        # Only handle clicks on template column (column 10)
+        if column != 10:
+            return
+        
+        # Get the table widget
+        if hasattr(self.gallery_table, 'gallery_table'):
+            table = self.gallery_table.gallery_table
+        else:
+            table = self.gallery_table
+            
+        print(f"DEBUG: Table has {table.rowCount()} visible rows")
+        print(f"DEBUG: Current tab: {getattr(self.gallery_table, 'current_tab', 'unknown')}")
+        print(f"DEBUG: Clicked on visible row {row} out of {table.rowCount()}")
+        
+        # Get gallery path the same way as context menu - from column 1 UserRole data
+        name_item = table.item(row, 1)  # Gallery name column
+        if not name_item:
+            print(f"DEBUG: No item found at row {row}, column 1")
+            return
+        
+        gallery_path = name_item.data(Qt.ItemDataRole.UserRole)
+        if not gallery_path:
+            print(f"DEBUG: No UserRole data in gallery name column")
+            return
+        
+        print(f"DEBUG: Got gallery path from table: '{gallery_path}'")
+        
+        # Get current template
+        template_item = table.item(row, 10)
+        current_template = template_item.text() if template_item else "default"
+        
+        # Show simple dialog instead of inline combo
+        from PyQt6.QtWidgets import QInputDialog
+        from imxup import load_templates
+        
+        try:
+            templates = load_templates()
+            template_list = list(templates.keys())
+            
+            new_template, ok = QInputDialog.getItem(
+                self, 
+                "Select Template", 
+                "Choose template for gallery:", 
+                template_list, 
+                template_list.index(current_template) if current_template in template_list else 0,
+                False
+            )
+            
+            if ok and new_template != current_template:
+                self.update_gallery_template(row, gallery_path, new_template, None)
+                
+        except Exception as e:
+            print(f"Error loading templates: {e}")
+
+    def update_gallery_template(self, row, gallery_path, new_template, combo_widget):
+        """Update template for a gallery and regenerate BBCode if needed."""
+        print(f"DEBUG: update_gallery_template called - row={row}, path={gallery_path}, new_template={new_template}")
+        try:
+            from imxup import timestamp
+            
+            # Get table reference
+            if hasattr(self.gallery_table, 'gallery_table'):
+                table = self.gallery_table.gallery_table
+            else:
+                table = self.gallery_table
+            
+            print(f"DEBUG: About to update database with path: '{gallery_path}' and template: '{new_template}'")
+            
+            # Check what's actually in the database
+            try:
+                all_db_items = self.queue_manager.get_all_items()
+                db_paths = [item.path for item in all_db_items[:5]]  # First 5 paths
+                print(f"DEBUG: Sample database paths: {db_paths}")
+                print(f"DEBUG: Does our path exist in DB? {gallery_path in [item.path for item in all_db_items]}")
+            except Exception as e:
+                print(f"DEBUG: Error checking database: {e}")
+            
+            # Update database
+            success = self.queue_manager.store.update_item_template(gallery_path, new_template)
+            print(f"DEBUG: Database update success: {success}")
+            
+            # Update the table cell display
+            template_item = table.item(row, 10)
+            if template_item:
+                print(f"DEBUG: Updating cell from '{template_item.text()}' to '{new_template}'")
+                template_item.setText(new_template)
+            else:
+                print(f"DEBUG: No template item found at row {row}, column 10")
+            
+            print(f"DEBUG: Template update completed")
+            
+            # Get the actual gallery item to check real status
+            gallery_item = self.queue_manager.get_item(gallery_path)
+            if not gallery_item:
+                print(f"DEBUG: Could not get gallery item from queue manager")
+                status = ""
+            else:
+                status = gallery_item.status
+            
+            print(f"DEBUG: Gallery status from queue manager: '{status}'")
+            
+            if status == "completed":
+                print(f"DEBUG: Gallery is completed, attempting BBCode regeneration")
+                # Try to regenerate BBCode from JSON artifact
+                try:
+                    self.regenerate_gallery_bbcode(gallery_path, new_template)
+                    self.add_log_message(f"{timestamp()} Template changed to '{new_template}' and BBCode regenerated for {os.path.basename(gallery_path)}")
+                    print(f"DEBUG: BBCode regeneration successful")
+                except Exception as e:
+                    print(f"DEBUG: BBCode regeneration failed: {e}")
+                    self.add_log_message(f"{timestamp()} Template changed to '{new_template}' for {os.path.basename(gallery_path)}, but BBCode regeneration failed: {e}")
+            else:
+                print(f"DEBUG: Gallery not completed, skipping BBCode regeneration")
+                self.add_log_message(f"{timestamp()} Template changed to '{new_template}' for {os.path.basename(gallery_path)}")
+            
+            # Remove combo box and update display
+            table.removeCellWidget(row, 10)
+            template_item = table.item(row, 10)
+            if template_item:
+                template_item.setText(new_template)
+            
+            # Force table refresh to ensure data is updated
+            # Note: refresh_gallery_display doesn't exist, removing this call
+            
+        except Exception as e:
+            print(f"Error updating gallery template: {e}")
+            # Remove combo box on error
+            try:
+                table = self.gallery_table.gallery_table
+                table.removeCellWidget(row, 10)
+            except:
+                pass
+
+    def regenerate_gallery_bbcode(self, gallery_path, new_template):
+        """Regenerate BBCode for an uploaded gallery using its JSON artifact."""
+        from imxup import get_central_storage_path, build_gallery_filenames, save_gallery_artifacts
+        import json
+        import glob
+        import os
+        
+        # Get gallery info
+        item = self.queue_manager.get_item(gallery_path)
+        if not item:
+            raise Exception("Gallery not found in database")
+        
+        # Find JSON artifact file
+        json_path_candidates = []
+        
+        # Try with known gallery name and ID
+        if getattr(item, 'gallery_id', None) and getattr(item, 'name', None):
+            _, json_filename, _ = build_gallery_filenames(item.name, item.gallery_id)
+            # Check .uploaded folder
+            uploaded_dir = os.path.join(gallery_path, ".uploaded")
+            json_path_candidates.append(os.path.join(uploaded_dir, json_filename))
+            # Check central storage
+            json_path_candidates.append(os.path.join(get_central_storage_path(), json_filename))
+        
+        # Fallback: find any JSON in .uploaded folder
+        uploaded_dir = os.path.join(gallery_path, ".uploaded")
+        if os.path.exists(uploaded_dir):
+            json_path_candidates.extend(glob.glob(os.path.join(uploaded_dir, "*.json")))
+        
+        # Find existing JSON file
+        json_path = None
+        for candidate in json_path_candidates:
+            if os.path.exists(candidate):
+                json_path = candidate
+                break
+        
+        if not json_path:
+            raise Exception("No JSON artifact file found for gallery")
+        
+        # Load JSON data
+        with open(json_path, 'r', encoding='utf-8') as f:
+            json_data = json.load(f)
+        
+        # Reuse existing save_gallery_artifacts function with the new template
+        # It will handle BBCode generation, file saving, and JSON updates
+        results = {
+            'gallery_id': json_data['meta']['gallery_id'],
+            'gallery_name': json_data['meta']['gallery_name'],
+            'images': json_data.get('images', []),
+            'total_size': json_data['stats']['total_size'],
+            'successful_count': json_data['stats']['successful_count'],
+            'failed_count': json_data['stats'].get('failed_count', 0),
+            'failed_details': [(img.get('filename', ''), 'Previous failure') for img in json_data.get('failures', [])],
+            'avg_width': json_data['stats']['avg_width'],
+            'avg_height': json_data['stats']['avg_height'],
+            'max_width': json_data['stats']['max_width'],
+            'max_height': json_data['stats']['max_height'],
+            'min_width': json_data['stats']['min_width'],
+            'min_height': json_data['stats']['min_height']
+        }
+        
+        # Use existing save_gallery_artifacts function to regenerate with new template
+        save_gallery_artifacts(
+            folder_path=gallery_path,
+            results=results,
+            template_name=new_template
+        )
 
 def check_single_instance(folder_path=None):
     """Check if another instance is running and send folder if needed"""

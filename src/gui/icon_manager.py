@@ -43,7 +43,7 @@ class IconManager:
         'main_window':          ['imxup.png', 'imxup.png'],
         'app_icon':             'imxup.ico',
         # Alternative sizes (optional)
-        'check_small':          'check16.png',
+        'check_small':          'check16.png',  
     }
     
     # Qt standard icon fallbacks (explicit, not hidden)

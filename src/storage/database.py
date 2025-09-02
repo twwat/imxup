@@ -1126,6 +1126,24 @@ class QueueStore:
                     raise sqlite3.IntegrityError(f"Tab name '{name}' already exists") from e
                 raise
 
+    def update_item_template(self, path: str, template_name: str) -> bool:
+        """Update the template name for a gallery item.
+        
+        Args:
+            path: Path to the gallery
+            template_name: New template name to set
+            
+        Returns:
+            True if update was successful, False otherwise
+        """
+        with _connect(self.db_path) as conn:
+            _ensure_schema(conn)
+            cursor = conn.execute(
+                "UPDATE galleries SET template = ? WHERE path = ?",
+                (template_name, path)
+            )
+            return cursor.rowcount > 0
+
     def delete_tab(self, tab_id: int, reassign_to: str = 'Main') -> Tuple[bool, int]:
         """Delete a tab and reassign its galleries to another tab.
         

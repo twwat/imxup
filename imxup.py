@@ -41,7 +41,7 @@ import winreg
 #load_dotenv()
 
 # Application version
-__version__ = "0.3.3"
+__version__ = "0.3.4"
 
 def timestamp():
     """Return current timestamp for logging"""
