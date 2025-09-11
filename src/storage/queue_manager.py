@@ -69,6 +69,12 @@ class GalleryQueueItem:
     
     # Tab organization
     tab_name: str = "Main"
+    
+    # Custom fields
+    custom1: str = ""
+    custom2: str = ""
+    custom3: str = ""
+    custom4: str = ""
 
 
 class QueueManager(QObject):
@@ -718,7 +724,7 @@ class QueueManager(QObject):
     
     def _item_to_dict(self, item: GalleryQueueItem) -> dict:
         """Convert item to dictionary for storage"""
-        print(f"DEBUG: _item_to_dict converting {item.path} with tab_name='{item.tab_name}'")
+        #print(f"DEBUG: _item_to_dict converting {item.path} with tab_name='{item.tab_name}'")
         return {
             'path': item.path,
             'name': item.name,
@@ -746,7 +752,11 @@ class QueueManager(QObject):
             'failed_files': item.failed_files,
             'error_message': item.error_message,
             'uploaded_files': list(item.uploaded_files),
-            'uploaded_images_data': item.uploaded_images_data
+            'uploaded_images_data': item.uploaded_images_data,
+            'custom1': item.custom1,
+            'custom2': item.custom2,
+            'custom3': item.custom3,
+            'custom4': item.custom4
         }
     
     def load_persistent_queue(self):
@@ -805,7 +815,11 @@ class QueueManager(QObject):
             insertion_order=data.get('insertion_order', self._next_order),
             added_time=data.get('added_time'),
             finished_time=data.get('finished_time'),
-            tab_name=data.get('tab_name', 'Main')
+            tab_name=data.get('tab_name', 'Main'),
+            custom1=data.get('custom1', ''),
+            custom2=data.get('custom2', ''),
+            custom3=data.get('custom3', ''),
+            custom4=data.get('custom4', '')
         )
         
         # Restore optional fields
@@ -892,6 +906,21 @@ class QueueManager(QObject):
         except queue.Empty:
             return None
     
+    def update_custom_field(self, path: str, field_name: str, value: str):
+        """Update a custom field for an item"""
+        with QMutexLocker(self.mutex):
+            if path in self.items and field_name in ['custom1', 'custom2', 'custom3', 'custom4']:
+                # Update in-memory item
+                old_value = getattr(self.items[path], field_name, '')
+                setattr(self.items[path], field_name, value)
+                
+                # Update in database
+                self.store.update_item_custom_field(path, field_name, value)
+                
+                self._inc_version()
+                return True
+        return False
+
     def update_item_status(self, path: str, status: str):
         """Update item status"""
         with QMutexLocker(self.mutex):
@@ -915,7 +944,8 @@ class QueueManager(QObject):
                 self._inc_version()
                 
                 if old_status != status:
-                    self.status_changed.emit(path, old_status, status)
+                    # Emit signal asynchronously to avoid timer conflicts
+                    QTimer.singleShot(0, lambda: self.status_changed.emit(path, old_status, status))
     
     def remove_item(self, path: str) -> bool:
         """Remove item from queue"""

@@ -64,14 +64,14 @@ class SplashScreen(QSplashScreen):
         # Get version info
         try:
             from imxup import __version__
-            self.version = f"{__version__}"
+            self.version = f"IMXup {__version__} "
         except:
             self.version = "v69"
         
         # Auto-cycling timer for random status updates
-        self.random_timer = QTimer()
-        self.random_timer.timeout.connect(self.update_random_status)
-        self.random_timer.start(random.randint(300, 700))  # Random interval
+        #self.random_timer = QTimer()
+        #self.random_timer.timeout.connect(self.update_random_status)
+        #self.random_timer.start(random.randint(300, 700))  # Random interval
         
         # Set rounded window shape
         self.setWindowShape()
@@ -79,7 +79,7 @@ class SplashScreen(QSplashScreen):
     def setWindowShape(self):
         """Set the window to have rounded corners"""
         path = QPainterPath()
-        path.addRoundedRect(QRectF(self.rect()), 60, 60)
+        path.addRoundedRect(QRectF(self.rect()), 75, 75)
         region = QRegion(path.toFillPolygon().toPolygon())
         self.setMask(region)
     
@@ -92,7 +92,7 @@ class SplashScreen(QSplashScreen):
         
         # Draw rounded border with 2px thickness, 20px radius
         painter.setPen(QPen(QColor(207, 69, 2), 3))
-        painter.drawRoundedRect(2, 2, self.width() - 3, self.height() - 3, 60, 60)
+        painter.drawRoundedRect(2, 2, self.width() - 3, self.height() - 3, 75, 75)
         
         # Draw logo at top if available
         y_offset = 16
@@ -115,9 +115,9 @@ class SplashScreen(QSplashScreen):
         #y_offset += 40
         
         # Draw version
-        version_font = QFont("Courier", 15, QFont.Weight.Bold)
+        version_font = QFont("Courier", 14)
         painter.setFont(version_font)
-        painter.setPen(QColor(207, 69, 2))
+        painter.setPen(QColor(253, 69, 32))
         version_rect = painter.fontMetrics().boundingRect(self.version)
         version_x = (self.width() - version_rect.width()) // 2
         painter.drawText(version_x, y_offset + 13, self.version)
@@ -126,30 +126,36 @@ class SplashScreen(QSplashScreen):
         copyright_text = "Copyright © 2025 twat"
         copyright_font = QFont("Courier", 12)
         painter.setFont(copyright_font)
-        painter.setPen(QColor(200, 196, 177))
+        painter.setPen(QColor(123, 123, 123))
         copyright_rect = painter.fontMetrics().boundingRect(copyright_text)
         copyright_x = (self.width() - copyright_rect.width()) // 2
         painter.drawText(copyright_x, y_offset + 20, copyright_text)
-        y_offset += 65
+        y_offset += 40
+        
+        apache_text = "Licensed under the Apache License, Version 2.0"
+        apache_font = QFont("Courier", 11)
+        painter.setFont(apache_font)
+        painter.setPen(QColor(219, 219, 219))
+        apache_rect = painter.fontMetrics().boundingRect(apache_text)
+        apache_x = (self.width() - apache_rect.width()) // 2
+        painter.drawText(apache_x, y_offset + 20, apache_text)
+        y_offset += 60
         
         # Draw copyright and license info
-        painter.setPen(QColor(231, 226, 226))
-        license_font = QFont("Courier", 11)
+        painter.setPen(QColor(219, 219, 219))
+        license_font = QFont("Courier", 9)
         painter.setFont(license_font)
         
         license_lines = [
+            "Distributed on an \"as is\" basis without warranties or",
+            "conditions of any kind, express or implied.",
             "",
-            "Licensed under the Apache License, Version 2.0",
             "",
-            "",
-            "Distributed on an \"as is\" basis without",
-            "warranties or conditions of any kind,",
-            "either express or implied.",
-            "",
-            #"Not affiliated with, or endorsed by IMX.to.",
-            #"\"IMX.to\" name and logo are property of IMX.to."
+            "Use of the software to interact with IMX.to is subject",
+            "to their terms of use and privacy policy. We are",
+            "not affiliated with them in any way."
         ]
-        
+
         y_pos = y_offset
         for line in license_lines:
             if line:
@@ -157,13 +163,13 @@ class SplashScreen(QSplashScreen):
                 line_x = (self.width() - line_rect.width()) // 2
                 painter.drawText(line_x, y_pos, line)
             if line == "":
-                y_pos += 10
+                y_pos += 7
             else:
-                y_pos += 16
+                y_pos += 15
         
         # Draw status text at bottom
-        painter.setPen(QColor(207, 69, 2))
-        status_font = QFont("Courier", 11, QFont.Weight.Bold)
+        painter.setPen(QColor(239, 70, 73))
+        status_font = QFont("Courier", 10, QFont.Weight.Bold)
         painter.setFont(status_font)
         
         status_rect = painter.fontMetrics().boundingRect(self.status_text)
@@ -171,14 +177,14 @@ class SplashScreen(QSplashScreen):
         painter.drawText(status_x, self.height() - 38, self.status_text)
         
         # Draw progress dots in fixed position (left-aligned within centered area)
-        dots_font = QFont("Courier", 16)
+        dots_font = QFont("Courier", 14)
         painter.setFont(dots_font)
-        painter.setPen(QColor(224, 221, 219))
+        painter.setPen(QColor(170, 185, 207))
         
         # Create a fixed-width area for dots (centered, but dots are left-aligned within it)
-        dots_area_width = 200
+        dots_area_width = 280
         dots_area_x = (self.width() - dots_area_width) // 2
-        painter.drawText(dots_area_x, self.height() - 12, self.progress_dots)
+        painter.drawText(dots_area_x, self.height() - 10, self.progress_dots)
         
         painter.end()
     
@@ -195,18 +201,18 @@ class SplashScreen(QSplashScreen):
         obj = random.choice(self.objects)
         
         # Add some variety to the format
-        formats = [
-            f"{action} {obj}",
-            f"{action} {obj}",
-            f"{action} {random.randint(1, 999)} {obj}",
-            f"{action} the {obj}",
-        ]
+        #formats = [
+        #    f"{action} {obj}",
+        #    f"{action} {obj}",
+        #    f"{action} {random.randint(1, 999)} {obj}",
+        #    f"{action} the {obj}",
+        #]
         
-        status = random.choice(formats)
-        self.update_status(status)
+        #status = random.choice(formats)
+        #self.update_status(status)
         
         # Randomize next update interval
-        self.random_timer.setInterval(random.randint(200, 600))
+        #self.random_timer.setInterval(random.randint(200, 600))
     
     def set_status(self, text):
         """Set status text with random action word and add progress dot"""
@@ -219,6 +225,6 @@ class SplashScreen(QSplashScreen):
     
     def finish_and_hide(self):
         """Clean shutdown of splash screen"""
-        if self.random_timer:
-            self.random_timer.stop()
+        #if self.random_timer:
+        #    self.random_timer.stop()
         self.hide()

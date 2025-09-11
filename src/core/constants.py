@@ -123,7 +123,11 @@ TEMPLATE_PLACEHOLDERS = [
     "#extension#",
     "#folderSize#",
     "#galleryLink#",
-    "#allImages#"
+    "#allImages#",
+    "#custom1#",
+    "#custom2#",
+    "#custom3#",
+    "#custom4#"
 ]
 
 # Encryption

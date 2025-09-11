@@ -26,7 +26,7 @@ class PlaceholderHighlighter(QSyntaxHighlighter):
         self.placeholders = [
             "#folderName#", "#width#", "#height#", "#longest#", 
             "#extension#", "#pictureCount#", "#folderSize#", 
-            "#galleryLink#", "#allImages#"
+            "#galleryLink#", "#allImages#", "#custom1#", "#custom2#", "#custom3#", "#custom4#"
         ]
     
     def highlightBlock(self, text):
@@ -114,7 +114,11 @@ class TemplateManagerDialog(QDialog):
             ("#pictureCount#", "Picture Count"),
             ("#folderSize#", "Folder Size"),
             ("#galleryLink#", "Gallery Link"),
-            ("#allImages#", "All Images")
+            ("#allImages#", "All Images"),
+            ("#custom1#", "Custom 1"),
+            ("#custom2#", "Custom 2"),
+            ("#custom3#", "Custom 3"),
+            ("#custom4#", "Custom 4")
         ]
         
         for placeholder, label in placeholders:

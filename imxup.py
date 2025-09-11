@@ -41,7 +41,7 @@ import winreg
 #load_dotenv()
 
 # Application version
-__version__ = "0.3.4"
+__version__ = "0.3.6"
 
 def timestamp():
     """Return current timestamp for logging"""
@@ -100,7 +100,7 @@ def migrate_legacy_storage() -> None:
             for root, _dirs, files in os.walk(legacy_dir):
                 for filename in files:
                     src_path = os.path.join(root, filename)
-                    if filename.startswith(".template"):
+                    if filename.startswith(".template") or filename.endswith('.template.txt'):
                         dest_dir = new_templates
                     else:
                         dest_dir = new_galleries
@@ -618,6 +618,18 @@ def rename_all_unnamed_with_session(uploader: 'ImxToUploader') -> int:
             # Keep it in unnamed list for future attempts
     return success_count
 
+def check_gallery_renamed(gallery_id):
+    """Check if a gallery has been renamed (not in unnamed galleries list)"""
+    try:
+        from src.storage.database import QueueStore
+        store = QueueStore()
+        unnamed_galleries = store.get_unnamed_galleries()
+        return gallery_id not in unnamed_galleries
+    except Exception:
+        # Fallback to config file if database fails
+        unnamed_galleries = get_unnamed_galleries()
+        return gallery_id not in unnamed_galleries
+
 def remove_unnamed_gallery(gallery_id):
     """Remove gallery from unnamed list after successful renaming (now uses database)"""
     try:
@@ -666,18 +678,21 @@ def load_templates():
     # Load custom templates
     if os.path.exists(template_path):
         for filename in os.listdir(template_path):
-            if filename.startswith(".template"):
-                template_name = filename[10:]  # Remove ".template " prefix
-                # Remove .txt extension if present
-                if template_name.endswith('.txt'):
-                    template_name = template_name[:-4]
-                if template_name:  # Skip empty names
-                    template_file = os.path.join(template_path, filename)
-                    try:
-                        with open(template_file, 'r', encoding='utf-8') as f:
-                            templates[template_name] = f.read()
-                    except Exception as e:
-                        print(f"{timestamp()} Warning: Could not load template '{template_name}': {e}")
+            template_name = filename
+            if template_name.startswith(".template"):
+                template_name = template_name[10:]  # Remove ".template " prefix
+            # Remove .txt extension if present
+            if template_name.endswith('.template.txt'):
+                template_name = template_name[:-13]
+            if template_name.endswith('.txt'):
+                template_name = template_name[:-4]
+            if template_name:  # Skip empty names
+                template_file = os.path.join(template_path, filename)
+                try:
+                    with open(template_file, 'r', encoding='utf-8') as f:
+                        templates[template_name] = f.read()
+                except Exception as e:
+                    print(f"{timestamp()} Warning: Could not load template '{template_name}': {e}")
     
     return templates
 
@@ -695,7 +710,11 @@ def apply_template(template_content, data):
         '#pictureCount#': str(data.get('picture_count', 0)),
         '#folderSize#': data.get('folder_size', ''),
         '#galleryLink#': data.get('gallery_link', ''),
-        '#allImages#': data.get('all_images', '')
+        '#allImages#': data.get('all_images', ''),
+        '#custom1#': data.get('custom1', ''),
+        '#custom2#': data.get('custom2', ''),
+        '#custom3#': data.get('custom3', ''),
+        '#custom4#': data.get('custom4', '')
     }
     
     for placeholder, value in replacements.items():

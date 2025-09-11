@@ -37,13 +37,16 @@ class IconManager:
         'action_cancel':        ['action_cancel-light.png',     'action_cancel-dark.png'],
         'action_resume':        ['action_resume-light.png',     'action_resume-dark.png'],
         
+        # Rename status icons
+        'renamed_true':         ['renamed_true-light.png',      'renamed_true-dark.png'],
+        'renamed_false':        ['renamed_false-light.png',     'renamed_false-dark.png'],
+        
         # UI element icons
         'templates':            ['templates-light.png',         'templates-dark.png'],
         'credentials':          ['credentials-light.png',       'credentials-dark.png'],
         'main_window':          ['imxup.png', 'imxup.png'],
         'app_icon':             'imxup.ico',
         # Alternative sizes (optional)
-        'check_small':          'check16.png',  
     }
     
     # Qt standard icon fallbacks (explicit, not hidden)
@@ -66,6 +69,9 @@ class IconManager:
         'action_view_error': QStyle.StandardPixmap.SP_MessageBoxWarning,
         'action_cancel': QStyle.StandardPixmap.SP_DialogCancelButton,
         'action_resume': QStyle.StandardPixmap.SP_MediaPlay,
+        
+        'renamed_true': QStyle.StandardPixmap.SP_DialogApplyButton,
+        'renamed_false': QStyle.StandardPixmap.SP_ComputerIcon,
     }
     
     def __init__(self, assets_dir: str):
@@ -101,10 +107,10 @@ class IconManager:
         #        self.ICON_MAP[key] = config
         
         # Debug: show final config state
-        print(f"DEBUG: Icon configs after auto-generation:")
-        for key, config in self.ICON_MAP.items():
-            if key.startswith('status_'):
-                print(f"  {key}: {type(config)} = {config}")
+        #print(f"DEBUG: Icon configs after auto-generation:")
+        #for key, config in self.ICON_MAP.items():
+        #    if key.startswith('status_'):
+        #        print(f"  {key}: {type(config)} = {config}")
         
     def get_icon(self, icon_key: str, style_instance=None, is_dark_theme: bool = False, is_selected: bool = False, requested_size: int = 32) -> QIcon:
         """
@@ -151,10 +157,6 @@ class IconManager:
         filename = self._get_themed_filename(config, is_dark_theme, is_selected)
         if not filename:
             return QIcon()
-            
-        # Debug output for templates icon
-        if icon_key == 'templates':
-            print(f"DEBUG: templates icon - is_dark_theme: {is_dark_theme}, config: {config}, filename: {filename}")
             
         icon_path = os.path.join(self.assets_dir, filename)
         

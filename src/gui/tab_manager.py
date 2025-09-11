@@ -517,7 +517,7 @@ class TabManager(QObject):
         """Load galleries for specific tab - CACHING DISABLED FOR DEBUGGING"""
         # CACHING DISABLED - always load fresh from database
         galleries = self._store.load_items_by_tab(tab_name)
-        print(f"DEBUG: TabManager loaded {len(galleries)} galleries for tab '{tab_name}' directly from DB (NO CACHE)")
+        #   print(f"DEBUG: TabManager loaded {len(galleries)} galleries for tab '{tab_name}' directly from DB (NO CACHE)")
         return galleries
         
     def _update_gallery_cache(self, tab_name: str, galleries: List[Dict[str, Any]], timestamp: float) -> None:

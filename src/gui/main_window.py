@@ -64,6 +64,7 @@ from src.processing.auto_archive import AutoArchiveEngine
 
 # Import widget classes from module - starting with just TableProgressWidget
 from src.gui.widgets.custom_widgets import TableProgressWidget
+from src.gui.widgets.context_menu_helper import GalleryContextMenuHelper
 
 # Import queue manager classes - adding one at a time
 from src.storage.queue_manager import GalleryQueueItem, QueueManager
@@ -156,9 +157,11 @@ def get_icon(icon_type: str, fallback_std: Optional[QStyle.StandardPixmap] = Non
             'templates': 'templates',
             'credentials': 'credentials',
             'main_window': 'main_window',
+            'renamed_true': 'renamed_true',
+            'renamed_false': 'renamed_false',
         }
         icon_key = icon_key_map.get(icon_type, icon_type)
-        return icon_mgr.get_icon(icon_key, style_instance)
+        return icon_mgr.get_icon(icon_key, style_instance, is_dark_theme=False, is_selected=False)
     
     # Fallback to old method if IconManager not initialized
     if icon_type not in ICON_CONFIG:
@@ -725,6 +728,10 @@ class CompletionWorker(QThread):
                             extensions.append(ext)
             extension = max(set(extensions), key=extensions.count) if extensions else "JPG"
 
+            # Get template name and custom fields from the item
+            item = gui_parent.queue_manager.get_item(path)
+            template_name = item.template_name if item else "default"
+            
             # Prepare template data
             template_data = {
                 'folder_name': gallery_name,
@@ -736,12 +743,12 @@ class CompletionWorker(QThread):
                 'picture_count': len(results.get('images', [])),
                 'folder_size': folder_size,
                 'gallery_link': f"https://imx.to/g/{gallery_id}",
-                'all_images': (all_images_bbcode.strip() + ("\n\n" + failed_summary if failed_summary else "")).strip()
+                'all_images': (all_images_bbcode.strip() + ("\n\n" + failed_summary if failed_summary else "")).strip(),
+                'custom1': item.custom1 if item else '',
+                'custom2': item.custom2 if item else '',
+                'custom3': item.custom3 if item else '',
+                'custom4': item.custom4 if item else ''
             }
-            
-            # Get template name from the item
-            item = gui_parent.queue_manager.get_item(path)
-            template_name = item.template_name if item else "default"
             
             # Generate bbcode using the item's template
             bbcode_content = generate_bbcode_from_template(template_name, template_data)
@@ -1153,29 +1160,29 @@ class TabbedGalleryWidget(QWidget):
                 print(f"DEBUG: DRAG-DROP PATH - Moved {moved_count} {gallery_word} to '{tab_name}' tab")
                 
         except Exception as e:
-            print(f"Error moving galleries to tab '{tab_name}': {e}")
+            print(f"DEBUG: Error moving galleries to tab '{tab_name}': {e}")
     
     def _apply_filter(self, tab_name):
         """Apply filtering to show only rows belonging to the specified tab with intelligent caching"""
         if not self.tab_manager:
             # No filtering if no tab manager
-            print("Warning: No tab manager available for filtering")
+            print("DEBUG: ERROR: No tab manager available for filtering")
             for row in range(self.gallery_table.rowCount()):
                 self.gallery_table.setRowHidden(row, False)
             return
         
         if not tab_name:
-            print("Warning: No tab name specified for filtering")
+            print("DEBUG: WARNING: No tab name specified for filtering")
             return
         
-        print(f"Debug: Applying filter for tab: {tab_name}")
+        #print(f"Debug: Applying filter for tab: {tab_name}")
         
         start_time = time.time()
         row_count = self.gallery_table.rowCount()
-        print(f"DEBUG _apply_filter: rowCount() returned {row_count}")
+        #print(f"DEBUG _apply_filter: rowCount() returned {row_count}")
         
         if row_count == 0:
-            print("Debug: Table is empty, no filtering needed")
+            print("DEBUG: Table is empty, no filtering needed")
             return
         
         # Check if we have a valid cached result
@@ -1231,26 +1238,23 @@ class TabbedGalleryWidget(QWidget):
                     if not should_show:
                         # Try to get queue_manager from parent window
                         parent_window = self.window()
-                        print(f"DEBUG _apply_filter: Checking for unsaved item, path={path}, tab_name={tab_name}")
-                        print(f"DEBUG _apply_filter: parent_window type = {type(parent_window).__name__}")
-                        print(f"DEBUG _apply_filter: hasattr(parent_window, 'queue_manager') = {hasattr(parent_window, 'queue_manager')}")
+                        #print(f"DEBUG _apply_filter: Checking for unsaved item, path={path}, tab_name={tab_name}")
+                        #print(f"DEBUG _apply_filter: parent_window type = {type(parent_window).__name__}")
+                        #print(f"DEBUG _apply_filter: hasattr(parent_window, 'queue_manager') = {hasattr(parent_window, 'queue_manager')}")
                         
                         if hasattr(parent_window, 'queue_manager'):
                             # Also check in-memory items that haven't been saved yet
                             qm = parent_window.queue_manager
-                            print(f"DEBUG _apply_filter: queue_manager exists, type = {type(qm).__name__}")
-                            print(f"DEBUG _apply_filter: queue_manager has {len(qm.items)} items")
+                            #print(f"DEBUG _apply_filter: queue_manager exists, type = {type(qm).__name__}")
+                            #print(f"DEBUG _apply_filter: queue_manager has {len(qm.items)} items")
                             
                             item = qm.get_item(path)
-                            print(f"DEBUG _apply_filter: get_item({path}) returned: {item}")
+                            #print(f"DEBUG _apply_filter: get_item({path}) returned: {item}")
                             if item:
-                                print(f"DEBUG _apply_filter: item.tab_name = '{item.tab_name}', comparing to '{tab_name}'")
-                                print(f"DEBUG _apply_filter: item.status = '{item.status}'")
+                                #print(f"DEBUG _apply_filter: item.tab_name = '{item.tab_name}', comparing to '{tab_name}'")
+                                #print(f"DEBUG _apply_filter: item.status = '{item.status}'")
                                 if item.tab_name == tab_name:
                                     should_show = True
-                                    print(f"DEBUG _apply_filter: MATCH! Showing item in filter")
-                                else:
-                                    print(f"DEBUG _apply_filter: Tab name mismatch: '{item.tab_name}' != '{tab_name}'")
                         else:
                             print(f"DEBUG _apply_filter: parent_window has no queue_manager attribute")
                     
@@ -1313,16 +1317,16 @@ class TabbedGalleryWidget(QWidget):
             return set()
         
         if not self.tab_manager:
-            print("Warning: No tab manager available for loading tab galleries")
+            print("WARNING: No tab manager available for loading tab galleries")
             return set()
         
         # CACHING DISABLED - always load fresh from database
         try:
             tab_galleries = self.tab_manager.load_tab_galleries(tab_name)
             tab_paths_set = {gallery.get('path') for gallery in tab_galleries if gallery.get('path')}
-            print(f"Debug: Loaded {len(tab_paths_set)} galleries for tab '{tab_name}' (NO CACHE)")
+            #print(f"Debug: Loaded {len(tab_paths_set)} galleries for tab '{tab_name}' (NO CACHE)")
         except Exception as e:
-            print(f"Error loading galleries for tab '{tab_name}': {e}")
+            print(f"DEBUG: ERROR: Error loading galleries for tab '{tab_name}': {e}")
             tab_paths_set = set()
         
         return tab_paths_set
@@ -1841,7 +1845,7 @@ class TabbedGalleryWidget(QWidget):
                     if self.tab_manager and base_name != "All Tabs":
                         galleries = self.tab_manager.load_tab_galleries(base_name)
                         gallery_count = len(galleries)
-                        print(f"DEBUG: Tab '{base_name}' load_tab_galleries returned {gallery_count} galleries", flush=True)
+                        #print(f"DEBUG: Tab '{base_name}' load_tab_galleries returned {gallery_count} galleries", flush=True)
                         # Count active uploads (simplified status check)
                         active_count = sum(1 for g in galleries if g.get('status') in ['uploading', 'pending'])
                     
@@ -1849,9 +1853,8 @@ class TabbedGalleryWidget(QWidget):
                     old_text = self.tab_bar.tabText(i)
                     new_text = f"{base_name} ({gallery_count})"
                     if old_text != new_text:  # Only update if changed
-                        print(f"DEBUG: About to update tab {i} text: '{old_text}' -> '{new_text}'", flush=True)
                         self.tab_bar.setTabText(i, new_text)
-                        print(f"DEBUG: Updated tab {i} text", flush=True)
+                        print(f"DEBUG: Updated tab {i} text '{old_text}' -> '{new_text}'", flush=True)
                 
                     status_text = ""
                     if active_count > 0:
@@ -2122,15 +2125,15 @@ class GalleryTableWidget(QTableWidget):
         
         # Setup table
         # Columns: 0 #, 1 gallery name, 2 uploaded, 3 progress, 4 status, 5 added, 6 finished, 7 action,
-        #          8 size, 9 transfer, 10 template, 11 title
-        self.setColumnCount(12)
+        #          8 size, 9 transfer, 10 template, 11 renamed, 12 custom1, 13 custom2, 14 custom3, 15 custom4
+        self.setColumnCount(16)
         self.setHorizontalHeaderLabels([
             "#", "gallery name", "uploaded", "progress", "status", "added", "finished", "action",
-            "size", "transfer", "template", "title"
+            "size", "transfer", "template", "renamed", "Custom1", "Custom2", "Custom3", "Custom4"
         ])
         
         # Set icon size for Status column icons
-        self.setIconSize(QSize(16, 16))
+        self.setIconSize(QSize(18, 18))
         try:
             # Left-align the 'gallery name' header specifically
             hn = self.horizontalHeaderItem(1)
@@ -2138,6 +2141,12 @@ class GalleryTableWidget(QTableWidget):
                 hn.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
                 # Gallery name column gets slightly larger font
                 hn.setFont(QFont(hn.font().family(), 9))
+            
+            # Left-align the Custom column headers (Custom1, Custom2, Custom3, Custom4)
+            for custom_col in [12, 13, 14, 15]:  # Custom1=12, Custom2=13, Custom3=14, Custom4=15
+                custom_header = self.horizontalHeaderItem(custom_col)
+                if custom_header:
+                    custom_header.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         except Exception:
             pass
         
@@ -2431,10 +2440,6 @@ class GalleryTableWidget(QTableWidget):
     
     def show_context_menu(self, position):
         """Show context menu for table items"""
-        from PyQt6.QtWidgets import QMenu
-        
-        menu = QMenu()
-
         # Position is already in viewport coordinates
         viewport_pos = position
         global_pos = self.viewport().mapToGlobal(position)
@@ -2459,177 +2464,20 @@ class GalleryTableWidget(QTableWidget):
                     if path:
                         selected_paths.append(path)
 
-        if selected_paths:
-            # Start Selected (ready/paused/incomplete -> queued) in display order
-            # Determine if any selected items are startable; disable if none are
+        # Use context menu helper to create the menu
+        if hasattr(self, 'context_menu_helper'):
+            # Find the main window reference
             widget = self
             while widget and not hasattr(widget, 'queue_manager'):
                 widget = widget.parent()
-            can_start_any = False
-            if widget and hasattr(widget, 'queue_manager'):
-                for path in selected_paths:
-                    item = widget.queue_manager.get_item(path)
-                    if item and item.status in ("ready", "paused", "incomplete"):
-                        can_start_any = True
-                        break
-            start_action = menu.addAction("Start Selected")
-            start_action.setEnabled(can_start_any)
-            start_action.triggered.connect(self.start_selected_via_menu)
-
-            # Delete
-            delete_action = menu.addAction("Delete Selected")
-            delete_action.triggered.connect(self.delete_selected_via_menu)
-
-            # Open Folder (always available for selected items)
-            open_action = menu.addAction("Open Folder")
-            open_action.triggered.connect(lambda: self.open_folders_via_menu(selected_paths))
             
-            # Manage Files (available for single selection)
-            if len(selected_paths) == 1:
-                manage_files_action = menu.addAction("Manage Files...")
-                manage_files_action.triggered.connect(lambda: self.manage_gallery_files(selected_paths[0]))
-
-            # Cancel (for queued items)
-            queued_paths = []
-            # widget is already resolved above; if not, resolve now
-            if not (widget and hasattr(widget, 'queue_manager')):
-                widget = self
-                while widget and not hasattr(widget, 'queue_manager'):
-                    widget = widget.parent()
-            if widget and hasattr(widget, 'queue_manager'):
-                for path in selected_paths:
-                    item = widget.queue_manager.get_item(path)
-                    if item and item.status == "queued":
-                        queued_paths.append(path)
-            if queued_paths:
-                cancel_action = menu.addAction("Cancel Upload")
-                cancel_action.triggered.connect(lambda: self.cancel_selected_via_menu(queued_paths))
-
-            # Retry/Rescan actions for failed items
-            scan_failed_paths = []
-            upload_failed_paths = []
-            generic_failed_paths = []
-            
-            if widget and hasattr(widget, 'queue_manager'):
-                for path in selected_paths:
-                    item = widget.queue_manager.get_item(path)
-                    if item:
-                        if item.status == "scan_failed":
-                            scan_failed_paths.append(path)
-                        elif item.status == "upload_failed":
-                            upload_failed_paths.append(path)
-                        elif item.status == "failed":
-                            generic_failed_paths.append(path)
-            
-            # Rescan/Reset actions - available for various states
-            rescannable_paths = []
-            rescan_all_paths = []
-            resetable_paths = []
-            
-            if widget and hasattr(widget, 'queue_manager'):
-                for path in selected_paths:
-                    item = widget.queue_manager.get_item(path)
-                    if item:
-                        # These statuses can benefit from additive rescan
-                        # Include "scanning" status for reset galleries that are stuck
-                        if item.status in ["scan_failed", "completed", "incomplete", "upload_failed", "failed", "scanning", "ready"]:
-                            rescannable_paths.append(path)
-                        
-                        # Rescan all items - only for galleries that aren't 100% complete
-                        # Check if gallery is 100% complete
-                        total_images = getattr(item, 'total_images', 0) or 0
-                        uploaded_images = getattr(item, 'uploaded_images', 0) or 0
-                        is_100_percent_complete = (item.status == "completed" and 
-                                                 total_images > 0 and 
-                                                 uploaded_images >= total_images)
-                        
-                        # Allow rescan all for stuck scanning galleries (0 images counted)
-                        is_stuck_scanning = (item.status == "scanning" and total_images == 0)
-                        
-                        if not is_100_percent_complete and (item.status in ["scan_failed", "completed", "incomplete", "upload_failed", "failed", "ready"] or is_stuck_scanning):
-                            rescan_all_paths.append(path)
-                        
-                        # Any item can be completely reset
-                        resetable_paths.append(path)
-            
-            # Smart rescan option (additive)
-            if rescannable_paths:
-                rescan_action = menu.addAction("🔍 Rescan for New Images")
-                rescan_action.setToolTip("Scan for new images added to folder (preserves existing uploads)")
-                rescan_action.triggered.connect(lambda: self.rescan_additive_via_menu(rescannable_paths))
-            
-            # Rescan all items in gallery option - only for non-100% complete galleries
-            if rescan_all_paths:
-                rescan_all_action = menu.addAction("🔄 Rescan All Items")
-                rescan_all_action.setToolTip("Rescan all items in gallery (preserves successful uploads)")
-                rescan_all_action.triggered.connect(lambda: self.rescan_all_items_via_menu(rescan_all_paths))
-            
-            # Complete reset option  
-            if resetable_paths:
-                reset_action = menu.addAction("🗑️ Reset Gallery")
-                reset_action.setToolTip("Completely reset gallery and rescan from scratch")
-                reset_action.triggered.connect(lambda: self.reset_gallery_via_menu(resetable_paths))
-            
-            # Retry action for upload failures  
-            if upload_failed_paths:
-                retry_action = menu.addAction("🔄 Retry Upload")
-                retry_action.setToolTip("Retry failed upload")
-                retry_action.triggered.connect(lambda: self.retry_selected_via_menu(upload_failed_paths))
-            
-            # Generic retry for old-style failures
-            if generic_failed_paths:
-                retry_generic_action = menu.addAction("🔄 Retry")
-                retry_generic_action.setToolTip("Retry failed operation")
-                retry_generic_action.triggered.connect(lambda: self.retry_selected_via_menu(generic_failed_paths))
-
-            # Copy BBCode (for completed items)
-            completed_paths = []
-            if widget and hasattr(widget, 'queue_manager'):
-                for path in selected_paths:
-                    item = widget.queue_manager.get_item(path)
-                    if item and item.status == "completed":
-                        completed_paths.append(path)
-            if completed_paths:
-                copy_action = menu.addAction("Copy BBCode")
-                copy_action.triggered.connect(lambda: self.copy_bbcode_via_menu_multi(completed_paths))
-                # Open gallery link(s) for completed items
-                open_link_action = menu.addAction("Open Gallery Link")
-                open_link_action.triggered.connect(lambda: self.open_gallery_links_via_menu(completed_paths))
-            
-            # Add "Move to" submenu for all selected galleries
-            # Find the tabbed gallery widget to get available tabs
-            tabbed_widget = self
-            while tabbed_widget and not hasattr(tabbed_widget, 'tab_manager'):
-                tabbed_widget = tabbed_widget.parent()
-            
-            if tabbed_widget and hasattr(tabbed_widget, 'tab_manager') and tabbed_widget.tab_manager:
-                available_tabs = tabbed_widget.tab_manager.get_visible_tab_names()
-                current_tab = getattr(tabbed_widget, 'current_tab', 'Main')
+            if widget:
+                self.context_menu_helper.main_window = widget
+                menu = self.context_menu_helper.create_context_menu(position, selected_paths)
                 
-                # Create "Move to" submenu with tabs other than the current one and excluding "All Tabs"
-                other_tabs = [tab for tab in available_tabs if tab != current_tab and tab != "All Tabs"]
-                if other_tabs:
-                    move_menu = menu.addMenu("Move to...")
-                    for tab_name in other_tabs:
-                        move_action = move_menu.addAction(tab_name)
-                        move_action.triggered.connect(
-                            lambda checked, target_tab=tab_name: self._move_selected_to_tab(selected_paths, target_tab)
-                        )
-        
-        else:
-            # No selection: offer Add Folders via the same dialog as the toolbar button
-            add_action = menu.addAction("Add Folders...")
-            def _add_from_menu():
-                widget = self
-                while widget and not hasattr(widget, 'browse_for_folders'):
-                    widget = widget.parent()
-                if widget and hasattr(widget, 'browse_for_folders'):
-                    widget.browse_for_folders()
-            add_action.triggered.connect(_add_from_menu)
-
-        # Only show menu if there are actions
-        if menu.actions():
-            menu.exec(global_pos)
+                # Only show menu if there are actions
+                if menu.actions():
+                    menu.exec(global_pos)
     
     def _move_selected_to_tab(self, gallery_paths, target_tab):
         """Move selected galleries to the specified tab"""
@@ -3585,6 +3433,30 @@ class ImxUploadGUI(QMainWindow):
         if self.splash:
             self.splash.set_status("UI")
         self.setup_ui()
+        
+        # Initialize context menu helper and connect to the actual table widget
+        if self.splash:
+            self.splash.set_status("context menu helper")
+        self.context_menu_helper = GalleryContextMenuHelper(self)
+        self.context_menu_helper.set_main_window(self)
+        self.context_menu_helper.template_change_requested.connect(
+            self.context_menu_helper.set_template_for_galleries
+        )
+        
+        # Connect context menu helper to the actual table widget used by the tabbed interface
+        try:
+            if hasattr(self.gallery_table, 'gallery_table'):
+                # Replace the existing context menu implementation with our helper
+                actual_table = self.gallery_table.gallery_table
+                if hasattr(actual_table, 'show_context_menu'):
+                    # Override the show_context_menu method to use our helper
+                    original_show_context_menu = actual_table.show_context_menu
+                    def new_show_context_menu(position):
+                        self.context_menu_helper.show_context_menu_for_table(actual_table, position)
+                    actual_table.show_context_menu = new_show_context_menu
+        except Exception as e:
+            print(f"Warning: Could not connect context menu helper: {e}")
+        
         if self.splash:
             self.splash.set_status("menu bar")
         self.setup_menu_bar()
@@ -3644,9 +3516,15 @@ class ImxUploadGUI(QMainWindow):
             
             # Connect cell click handler for template column editing
             inner_table.cellClicked.connect(self.on_gallery_cell_clicked)
+            
+            # Connect itemChanged for custom columns persistence
+            inner_table.itemChanged.connect(self._on_table_item_changed)
         elif hasattr(self.gallery_table, 'cellClicked'):
             # Direct connection if it's not a tabbed widget
             self.gallery_table.cellClicked.connect(self.on_gallery_cell_clicked)
+            
+            # Connect itemChanged for custom columns persistence
+            self.gallery_table.itemChanged.connect(self._on_table_item_changed)
         
         # Set reference to update queue in tabbed widget for cache invalidation
         if hasattr(self.gallery_table, '_update_queue'):
@@ -4185,7 +4063,7 @@ class ImxUploadGUI(QMainWindow):
                 print("All status icons refreshed successfully")
         except Exception as e:
             print(f"Error refreshing status icons: {e}")
-        
+    
     def _apply_icon_to_cell(self, row: int, col: int, icon, tooltip: str, status: str):
         """Apply icon to table cell - runs on main thread"""
         try:
@@ -4260,7 +4138,7 @@ class ImxUploadGUI(QMainWindow):
         import traceback
         stack = traceback.extract_stack()
         caller_chain = " -> ".join([frame.name for frame in stack[-4:-1]])
-        print(f"DEBUG: _set_renamed_cell_icon: {caller_chain}: row={row}, is_renamed={is_renamed}")
+        #print(f"DEBUG: _set_renamed_cell_icon: {caller_chain}: row={row}, is_renamed={is_renamed}")
         try:
             col = 11
             
@@ -4271,21 +4149,27 @@ class ImxUploadGUI(QMainWindow):
             
             # Determine icon and tooltip based on rename status
             if is_renamed is True:
-                icon = get_icon('completed', QStyle.StandardPixmap.SP_DialogApplyButton, self.style())
+                icon = get_icon('renamed_true', QStyle.StandardPixmap.SP_DialogApplyButton, self.style())
                 tooltip = "Renamed"
+                #print(f"DEBUG: renamed_true icon - isNull: {icon.isNull() if icon else 'None'}")
                 if icon is not None and not icon.isNull():
                     item.setIcon(icon)
                     item.setText("")
+                    #print(f"DEBUG: Set renamed_true icon successfully")
                 else:
-                    item.setText("OK")
+                    item.setText("✓")
+                    print(f"DEBUG: Using fallback text for renamed_true")
             elif is_renamed is False:
-                icon = get_icon('pending', QStyle.StandardPixmap.SP_ComputerIcon, self.style())
+                icon = get_icon('renamed_false', QStyle.StandardPixmap.SP_ComputerIcon, self.style())
                 tooltip = "Pending rename"
+                #print(f"DEBUG: renamed_false icon - isNull: {icon.isNull() if icon else 'None'}")
                 if icon is not None and not icon.isNull():
                     item.setIcon(icon)
                     item.setText("")
+                    #print(f"DEBUG: Set renamed_false icon successfully")
                 else:
-                    item.setText("...")
+                    item.setText("⏳")
+                    print(f"DEBUG: Using fallback text for renamed_false")
             else:
                 # None/blank - no icon or text
                 item.setIcon(QIcon())
@@ -4448,23 +4332,6 @@ class ImxUploadGUI(QMainWindow):
             self.start_all_btn.setText(" " + self.start_all_btn.text())
         self.start_all_btn.clicked.connect(self.start_all_uploads)
         self.start_all_btn.setProperty("class", "main-action-btn")
-        #self.start_all_btn.setStyleSheet("""
-        #    QPushButton {
-        #        background-color: #bee6cf;
-        #        border: 1px solid #5f7367;
-        #        border-radius: 3px;
-
-        #    }
-        #    QPushButton:hover {
-        #        background-color: #abcfba;
-        #        border: 1px solid #5f7367;
-                
-        #    }
-        #    QPushButton:pressed {
-        #        background-color: #6495ed;
-        #        border: 1px solid #1e2c47;
-        #    }
-        #""")
         controls_layout.addWidget(self.start_all_btn)
         
         self.pause_all_btn = QPushButton("Pause All")
@@ -4649,21 +4516,7 @@ class ImxUploadGUI(QMainWindow):
         self.comprehensive_settings_btn.clicked.connect(self.open_comprehensive_settings)
         self.comprehensive_settings_btn.setMinimumHeight(30)
         self.comprehensive_settings_btn.setMaximumHeight(34)
-        self.comprehensive_settings_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #9b59b6;
-                color: white;
-                border: 1px solid #8e44ad;
-                border-radius: 3px;
-                font-weight: bold;
-            }
-            QPushButton:hover {
-                background-color: #8e44ad;
-            }
-            QPushButton:pressed {
-                background-color: #7d3c98;
-            }
-        """)
+        self.comprehensive_settings_btn.setProperty("class", "comprehensive-settings")
         settings_layout.addWidget(self.comprehensive_settings_btn, 8, 0, 1, 2)
         
         # Save settings button
@@ -4674,27 +4527,7 @@ class ImxUploadGUI(QMainWindow):
         self.save_settings_btn.setProperty("class", "settings-btn")
         self.save_settings_btn.setEnabled(False)  # Initially disabled
         self.save_settings_btn.setVisible(False)  # Initially hidden
-        #self.save_settings_btn.setStyleSheet("""
-        #    QPushButton {
-        #        background-color: #ffe4b2;
-        #        color: black;
-        #        border: 1px solid #e67e22;
-        #        border-radius: 3px;
-        #    }
-        #    QPushButton:hover {
-        #        background-color: #ffdb99;
-        #    }
-        #    QPushButton:pressed {
-        #        background-color: #ffdb99;
-        #    }
-        #    QPushButton:disabled {
-        #        background-color: #f0f0f0;
-        #        color: #999999;
-        #        border-color: #bdc3c7;
-        #        font-weight: normal;
-        #        opacity: 0.2;
-        #    }
-        #""")
+
         settings_layout.addWidget(self.save_settings_btn, 7, 0, 1, 2)
 
         # Manage templates and credentials buttons (same row)
@@ -5108,17 +4941,17 @@ class ImxUploadGUI(QMainWindow):
 
     def check_credentials(self):
         """Prompt to set credentials only if API key is not set."""
-        print(f"DEBUG: check_credentials() called")
         if not api_key_is_set():
             print(f"DEBUG: No API key, showing credential dialog")
+            self.add_log_message(f"{timestamp()} [auth] No API key, showing credential dialog")
             dialog = CredentialSetupDialog(self)
             # Use non-blocking show() instead of blocking exec() to prevent GUI freezing
             dialog.show()
             dialog.finished.connect(lambda result: self._handle_credential_dialog_result(result))
         else:
             print(f"DEBUG: API key found, skipping dialog")
-            self.add_log_message(f"{timestamp()} [auth] API key found; skipping credential setup dialog")
-        print(f"DEBUG: check_credentials() completed")
+            self.add_log_message(f"{timestamp()} [auth] API key found")
+        
     
     def _handle_credential_dialog_result(self, result):
         """Handle credential dialog result without blocking GUI"""
@@ -5154,10 +4987,8 @@ class ImxUploadGUI(QMainWindow):
                 self.add_log_message(f"{timestamp()} [system] Failed to install Windows context menu")
         except Exception as e:
             QMessageBox.warning(self, "Context Menu", f"Error installing context menu: {e}")
-            try:
-                self.add_log_message(f"{timestamp()} [system] Error installing context menu: {e}")
-            except Exception:
-                pass
+            self.add_log_message(f"{timestamp()} [system] Error installing context menu: {e}")
+            pass
 
     def remove_context_menu(self):
         """Remove Windows Explorer context menu integration."""
@@ -5598,9 +5429,7 @@ class ImxUploadGUI(QMainWindow):
             self.worker.queue_stats.connect(self.on_queue_stats)
             print(f"DEBUG: Starting worker thread")
             self.worker.start()
-            print(f"DEBUG: Worker.start() called")
             print(f"DEBUG: Worker.isRunning():", self.worker.isRunning())
-            print(f"DEBUG: Worker thread started successfully")
             self.add_log_message(f"{timestamp()} [general] Worker thread started")
             # Propagate auto-rename preference to worker
             try:
@@ -5732,16 +5561,14 @@ class ImxUploadGUI(QMainWindow):
         
         # Debug the item data before updating table
         item = self.queue_manager.get_item(path)
-        if item:
-            print(f"DEBUG: Item data - total_images: {getattr(item, 'total_images', 'NOT SET')}")
-            print(f"DEBUG: Item data - progress: {getattr(item, 'progress', 'NOT SET')}")
-            print(f"DEBUG: Item data - status: {getattr(item, 'status', 'NOT SET')}")
-            print(f"DEBUG: Item data - added_time: {getattr(item, 'added_time', 'NOT SET')}")
+        #if item:
+        #    #print(f"DEBUG: Item data - total_images: {getattr(item, 'total_images', 'NOT SET')}")
+        #    #print(f"DEBUG: Item data - progress: {getattr(item, 'progress', 'NOT SET')}")
+        #    #print(f"DEBUG: Item data - status: {getattr(item, 'status', 'NOT SET')}")
+        #    #print(f"DEBUG: Item data - added_time: {getattr(item, 'added_time', 'NOT SET')}")
         
         # Update table display for this specific item
-        print(f"DEBUG: About to call _update_specific_gallery_display")
         self._update_specific_gallery_display(path)
-        print(f"DEBUG: _update_specific_gallery_display completed")
     
     def on_queue_stats(self, stats: dict):
         """Render aggregate queue stats beneath the overall progress bar.
@@ -6298,7 +6125,7 @@ class ImxUploadGUI(QMainWindow):
             uploaded_item.setFont(font)
             self.gallery_table.setItem(row, 2, uploaded_item)
         else:
-            print(f"DEBUG: No uploaded column set because total_images={total_images} <= 0")
+                        print(f"DEBUG: No uploaded column set because total_images={total_images} <= 0")
         
         # Progress bar
         progress_widget = self.gallery_table.cellWidget(row, 3)
@@ -6396,8 +6223,31 @@ class ImxUploadGUI(QMainWindow):
         tmpl_item.setFont(font)
         self.gallery_table.setItem(row, 10, tmpl_item)
         
-        # Renamed status: handled by _populate_table_row() and on_gallery_renamed() signal
-        # No need to duplicate the logic here
+        # Renamed status: Set icon based on whether gallery has been renamed
+        is_renamed = item.gallery_id is not None and bool(item.gallery_id)
+        self._set_renamed_cell_icon(row, is_renamed)
+        
+        # Custom columns (12-15): Load from database and make editable
+        # Get the actual table object (same logic as in _on_table_item_changed)
+        actual_table = getattr(self.gallery_table, 'gallery_table', self.gallery_table)
+        
+        # Temporarily block signals to prevent itemChanged during initialization
+        signals_blocked = actual_table.signalsBlocked()
+        actual_table.blockSignals(True)
+        try:
+            for col_idx, field_name in enumerate(['custom1', 'custom2', 'custom3', 'custom4'], start=12):
+                value = getattr(item, field_name, '') or ''
+                custom_item = QTableWidgetItem(str(value))
+                # Make custom columns editable
+                custom_item.setFlags(custom_item.flags() | Qt.ItemFlag.ItemIsEditable)
+                custom_item.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+                font = custom_item.font()
+                font.setPointSize(table_font_size)
+                custom_item.setFont(font)
+                self.gallery_table.setItem(row, col_idx, custom_item)
+        finally:
+            # Restore original signal state
+            actual_table.blockSignals(signals_blocked)
         
         # Action buttons - CREATE MISSING ACTION BUTTONS FOR NEW ITEMS
         try:
@@ -8369,10 +8219,20 @@ class ImxUploadGUI(QMainWindow):
         event.accept()
 
     def on_gallery_cell_clicked(self, row, column):
-        """Handle clicks on gallery table cells, specifically for template editing."""
+        """Handle clicks on gallery table cells for template editing and custom column editing."""
         print(f"DEBUG: on_gallery_cell_clicked called with row={row}, column={column}")
         
-        # Only handle clicks on template column (column 10)
+        # Handle custom columns (12-15) with single-click editing
+        if 12 <= column <= 15:
+            # Get the correct table and trigger edit mode
+            table = getattr(self.gallery_table, 'gallery_table', self.gallery_table)
+            if table:
+                item = table.item(row, column)
+                if item:
+                    table.editItem(item)
+            return
+            
+        # Only handle clicks on template column (column 10) for template editing
         if column != 10:
             return
         
@@ -8572,6 +8432,47 @@ class ImxUploadGUI(QMainWindow):
             results=results,
             template_name=new_template
         )
+    
+    def _on_table_item_changed(self, item):
+        """Handle table item changes to persist custom columns"""
+        try:
+            # Only handle custom columns (12-15: Custom1, Custom2, Custom3, Custom4)
+            column = item.column()
+            if column < 12 or column > 15:
+                return
+            
+            # Skip if this is just table population/refresh (signals should be blocked during those operations)
+            table = getattr(self.gallery_table, 'gallery_table', self.gallery_table)
+            if not table:
+                return
+                
+            # Skip if table signals are blocked (indicates programmatic update)
+            if table.signalsBlocked():
+                return
+            
+            # Get the gallery path from the name column (UserRole data)
+            row = item.row()
+            name_item = table.item(row, 1)  # Name column
+            if not name_item:
+                return
+                
+            path = name_item.data(Qt.ItemDataRole.UserRole)
+            if not path:
+                return
+            
+            # Map column to field name
+            field_names = {12: 'custom1', 13: 'custom2', 14: 'custom3', 15: 'custom4'}
+            field_name = field_names.get(column)
+            if not field_name:
+                return
+                
+            # Get the new value and update the database
+            new_value = item.text() or ''
+            if self.queue_manager:
+                self.queue_manager.update_custom_field(path, field_name, new_value)
+            
+        except Exception as e:
+            print(f"Error handling table item change: {e}")
 
 def check_single_instance(folder_path=None):
     """Check if another instance is running and send folder if needed"""

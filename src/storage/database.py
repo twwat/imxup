@@ -180,6 +180,16 @@ def _run_migrations(conn: sqlite3.Connection) -> None:
         
         # Migration 4: Initialize default tabs
         _initialize_default_tabs(conn)
+        
+        # Migration 5: Add custom fields columns
+        cursor = conn.execute("PRAGMA table_info(galleries)")
+        columns = [column[1] for column in cursor.fetchall()]
+        
+        for custom_field in ['custom1', 'custom2', 'custom3', 'custom4']:
+            if custom_field not in columns:
+                print(f"Adding {custom_field} column to galleries table...")
+                conn.execute(f"ALTER TABLE galleries ADD COLUMN {custom_field} TEXT")
+                print(f"+ Added {custom_field} column")
             
     except Exception as e:
         print(f"Warning: Migration failed: {e}")
@@ -215,7 +225,7 @@ def _initialize_default_tabs(conn: sqlite3.Connection) -> None:
         print(f"+ Initialized {len(default_tabs)} default system tabs")
         
     except Exception as e:
-        print(f"Warning: Could not initialize default tabs: {e}")
+        print(f"DEBUG: WARNING: Could not initialize default tabs: {e}")
         # Continue anyway - not critical for app function
 
 
@@ -379,7 +389,10 @@ class QueueStore:
         insertion_order = int(item.get('insertion_order', 0) or 0)
         failed_files = json.dumps(item.get('failed_files', []))
         tab_name = item.get('tab_name', 'Main')
-        print(f"DEBUG: _upsert_gallery_row called with tab_name='{tab_name}' for path='{path}' status='{status}'", flush=True)
+        custom1 = item.get('custom1', '')
+        custom2 = item.get('custom2', '')
+        custom3 = item.get('custom3', '')
+        custom4 = item.get('custom4', '')
         
         # Get tab_id for the tab_name
         cursor = conn.execute("SELECT id FROM tabs WHERE name = ? AND is_active = 1", (tab_name,))
@@ -397,81 +410,156 @@ class QueueStore:
             tab_id = row[0] if row else 1  # Fallback to ID 1
             print(f"DEBUG: FALLBACK - Changing tab from '{tab_name}' to 'Main' (id={tab_id}) for {path}")
             tab_name = 'Main'
-        else:
-            print(f"DEBUG: Successfully found tab '{tab_name}' with id={tab_id} for {path}")
 
-        # Check if tab_id column exists
+
+        # Check if tab_id and custom field columns exist
         cursor = conn.execute("PRAGMA table_info(galleries)")
         columns = [column[1] for column in cursor.fetchall()]
         has_tab_id = 'tab_id' in columns
+        has_custom_fields = all(field in columns for field in ['custom1', 'custom2', 'custom3', 'custom4'])
         
         if has_tab_id:
             # New schema with tab_id column
-            conn.execute(
-                """
-                INSERT INTO galleries(
-                    path, name, status, added_ts, finished_ts, template, total_images, uploaded_images,
-                    total_size, scan_complete, uploaded_bytes, final_kibps, gallery_id, gallery_url, insertion_order, failed_files, tab_name, tab_id
-                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-                ON CONFLICT(path) DO UPDATE SET
-                    name=excluded.name,
-                    status=excluded.status,
-                    added_ts=excluded.added_ts,
-                    finished_ts=excluded.finished_ts,
-                    template=excluded.template,
-                    total_images=excluded.total_images,
-                    uploaded_images=excluded.uploaded_images,
-                    total_size=excluded.total_size,
-                    scan_complete=excluded.scan_complete,
-                    uploaded_bytes=excluded.uploaded_bytes,
-                    final_kibps=excluded.final_kibps,
-                    gallery_id=excluded.gallery_id,
-                    gallery_url=excluded.gallery_url,
-                    insertion_order=excluded.insertion_order,
-                    failed_files=excluded.failed_files,
-                    tab_name=excluded.tab_name,
-                    tab_id=excluded.tab_id
-                """,
-                (
-                    path, name, status, added_ts, finished_ts, template, total_images, uploaded_images,
-                    total_size, scan_complete, uploaded_bytes, final_kibps, gallery_id, gallery_url, insertion_order, failed_files, tab_name, tab_id
-                ),
-            )
+            if has_custom_fields:
+                # Full schema with custom fields
+                conn.execute(
+                    """
+                    INSERT INTO galleries(
+                        path, name, status, added_ts, finished_ts, template, total_images, uploaded_images,
+                        total_size, scan_complete, uploaded_bytes, final_kibps, gallery_id, gallery_url, insertion_order, failed_files, tab_name, tab_id, custom1, custom2, custom3, custom4
+                    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                    ON CONFLICT(path) DO UPDATE SET
+                        name=excluded.name,
+                        status=excluded.status,
+                        added_ts=excluded.added_ts,
+                        finished_ts=excluded.finished_ts,
+                        template=excluded.template,
+                        total_images=excluded.total_images,
+                        uploaded_images=excluded.uploaded_images,
+                        total_size=excluded.total_size,
+                        scan_complete=excluded.scan_complete,
+                        uploaded_bytes=excluded.uploaded_bytes,
+                        final_kibps=excluded.final_kibps,
+                        gallery_id=excluded.gallery_id,
+                        gallery_url=excluded.gallery_url,
+                        insertion_order=excluded.insertion_order,
+                        failed_files=excluded.failed_files,
+                        tab_name=excluded.tab_name,
+                        tab_id=excluded.tab_id,
+                        custom1=excluded.custom1,
+                        custom2=excluded.custom2,
+                        custom3=excluded.custom3,
+                        custom4=excluded.custom4
+                    """,
+                    (
+                        path, name, status, added_ts, finished_ts, template, total_images, uploaded_images,
+                        total_size, scan_complete, uploaded_bytes, final_kibps, gallery_id, gallery_url, insertion_order, failed_files, tab_name, tab_id, custom1, custom2, custom3, custom4
+                    ),
+                )
+            else:
+                # Schema without custom fields
+                conn.execute(
+                    """
+                    INSERT INTO galleries(
+                        path, name, status, added_ts, finished_ts, template, total_images, uploaded_images,
+                        total_size, scan_complete, uploaded_bytes, final_kibps, gallery_id, gallery_url, insertion_order, failed_files, tab_name, tab_id
+                    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                    ON CONFLICT(path) DO UPDATE SET
+                        name=excluded.name,
+                        status=excluded.status,
+                        added_ts=excluded.added_ts,
+                        finished_ts=excluded.finished_ts,
+                        template=excluded.template,
+                        total_images=excluded.total_images,
+                        uploaded_images=excluded.uploaded_images,
+                        total_size=excluded.total_size,
+                        scan_complete=excluded.scan_complete,
+                        uploaded_bytes=excluded.uploaded_bytes,
+                        final_kibps=excluded.final_kibps,
+                        gallery_id=excluded.gallery_id,
+                        gallery_url=excluded.gallery_url,
+                        insertion_order=excluded.insertion_order,
+                        failed_files=excluded.failed_files,
+                        tab_name=excluded.tab_name,
+                        tab_id=excluded.tab_id
+                    """,
+                    (
+                        path, name, status, added_ts, finished_ts, template, total_images, uploaded_images,
+                        total_size, scan_complete, uploaded_bytes, final_kibps, gallery_id, gallery_url, insertion_order, failed_files, tab_name, tab_id
+                    ),
+                )
         else:
             # Old schema without tab_id column
-            conn.execute(
-                """
-                INSERT INTO galleries(
-                    path, name, status, added_ts, finished_ts, template, total_images, uploaded_images,
-                    total_size, scan_complete, uploaded_bytes, final_kibps, gallery_id, gallery_url, insertion_order, failed_files, tab_name
-                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-                ON CONFLICT(path) DO UPDATE SET
-                    name=excluded.name,
-                    status=excluded.status,
-                    added_ts=excluded.added_ts,
-                    finished_ts=excluded.finished_ts,
-                    template=excluded.template,
-                    total_images=excluded.total_images,
-                    uploaded_images=excluded.uploaded_images,
-                    total_size=excluded.total_size,
-                    scan_complete=excluded.scan_complete,
-                    uploaded_bytes=excluded.uploaded_bytes,
-                    final_kibps=excluded.final_kibps,
-                    gallery_id=excluded.gallery_id,
-                    gallery_url=excluded.gallery_url,
-                    insertion_order=excluded.insertion_order,
-                    failed_files=excluded.failed_files,
-                    tab_name=excluded.tab_name
-                """,
-                (
-                    path, name, status, added_ts, finished_ts, template, total_images, uploaded_images,
-                    total_size, scan_complete, uploaded_bytes, final_kibps, gallery_id, gallery_url, insertion_order, failed_files, tab_name
-                ),
-            )
+            if has_custom_fields:
+                # Schema with custom fields but no tab_id
+                conn.execute(
+                    """
+                    INSERT INTO galleries(
+                        path, name, status, added_ts, finished_ts, template, total_images, uploaded_images,
+                        total_size, scan_complete, uploaded_bytes, final_kibps, gallery_id, gallery_url, insertion_order, failed_files, tab_name, custom1, custom2, custom3, custom4
+                    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                    ON CONFLICT(path) DO UPDATE SET
+                        name=excluded.name,
+                        status=excluded.status,
+                        added_ts=excluded.added_ts,
+                        finished_ts=excluded.finished_ts,
+                        template=excluded.template,
+                        total_images=excluded.total_images,
+                        uploaded_images=excluded.uploaded_images,
+                        total_size=excluded.total_size,
+                        scan_complete=excluded.scan_complete,
+                        uploaded_bytes=excluded.uploaded_bytes,
+                        final_kibps=excluded.final_kibps,
+                        gallery_id=excluded.gallery_id,
+                        gallery_url=excluded.gallery_url,
+                        insertion_order=excluded.insertion_order,
+                        failed_files=excluded.failed_files,
+                        tab_name=excluded.tab_name,
+                        custom1=excluded.custom1,
+                        custom2=excluded.custom2,
+                        custom3=excluded.custom3,
+                        custom4=excluded.custom4
+                    """,
+                    (
+                        path, name, status, added_ts, finished_ts, template, total_images, uploaded_images,
+                        total_size, scan_complete, uploaded_bytes, final_kibps, gallery_id, gallery_url, insertion_order, failed_files, tab_name, custom1, custom2, custom3, custom4
+                    ),
+                )
+            else:
+                # Original schema without custom fields or tab_id
+                conn.execute(
+                    """
+                    INSERT INTO galleries(
+                        path, name, status, added_ts, finished_ts, template, total_images, uploaded_images,
+                        total_size, scan_complete, uploaded_bytes, final_kibps, gallery_id, gallery_url, insertion_order, failed_files, tab_name
+                    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                    ON CONFLICT(path) DO UPDATE SET
+                        name=excluded.name,
+                        status=excluded.status,
+                        added_ts=excluded.added_ts,
+                        finished_ts=excluded.finished_ts,
+                        template=excluded.template,
+                        total_images=excluded.total_images,
+                        uploaded_images=excluded.uploaded_images,
+                        total_size=excluded.total_size,
+                        scan_complete=excluded.scan_complete,
+                        uploaded_bytes=excluded.uploaded_bytes,
+                        final_kibps=excluded.final_kibps,
+                        gallery_id=excluded.gallery_id,
+                        gallery_url=excluded.gallery_url,
+                        insertion_order=excluded.insertion_order,
+                        failed_files=excluded.failed_files,
+                        tab_name=excluded.tab_name
+                    """,
+                    (
+                        path, name, status, added_ts, finished_ts, template, total_images, uploaded_images,
+                        total_size, scan_complete, uploaded_bytes, final_kibps, gallery_id, gallery_url, insertion_order, failed_files, tab_name
+                    ),
+                )
 
     def bulk_upsert(self, items: Iterable[Dict[str, Any]]) -> None:
         items_list = list(items)  # Convert to list to avoid consuming iterator
-        print(f"DEBUG: bulk_upsert called with {len(items_list)} items")
+        #print(f"DEBUG: bulk_upsert called with {len(items_list)} items")
         try:
             with _connect(self.db_path) as conn:
                 _ensure_schema(conn)
@@ -479,7 +567,7 @@ class QueueStore:
                 try:
                     for it in items_list:
                         try:
-                            print(f"DEBUG: Processing item: path={it.get('path')}, tab_name={it.get('tab_name', 'Main')}, status={it.get('status')}")
+                            #print(f"DEBUG: Processing item: path={it.get('path')}, tab_name={it.get('tab_name', 'Main')}, status={it.get('status')}")
                             self._upsert_gallery_row(conn, it)
                             # Optionally persist per-image resume info when provided
                             uploaded_files = it.get('uploaded_files') or []
@@ -517,13 +605,13 @@ class QueueStore:
                                         ),
                                     )
                         except Exception as item_error:
-                            print(f"Warning: Failed to upsert item {it.get('path', 'unknown')}: {item_error}")
+                            print(f"DEBUG: WARNING: Failed to upsert item {it.get('path', 'unknown')}: {item_error}")
                             # Continue with other items instead of failing completely
                             continue
                     conn.execute("COMMIT")
                 except Exception as tx_error:
                     conn.execute("ROLLBACK")
-                    print(f"Transaction failed: {tx_error}")
+                    print(f"ERROR: Transaction failed: {tx_error}")
                     raise
         except Exception as e:
             # Log via print to avoid importing logging from GUI thread
@@ -557,6 +645,7 @@ class QueueStore:
                             g.total_images, g.uploaded_images, g.total_size, g.scan_complete, 
                             g.uploaded_bytes, g.final_kibps, g.gallery_id, g.gallery_url, 
                             g.insertion_order, g.failed_files, g.tab_name, g.tab_id,
+                            g.custom1, g.custom2, g.custom3, g.custom4,
                             GROUP_CONCAT(i.filename) as image_files
                         FROM galleries g
                         LEFT JOIN images i ON g.id = i.gallery_fk
@@ -573,6 +662,7 @@ class QueueStore:
                             g.total_images, g.uploaded_images, g.total_size, g.scan_complete, 
                             g.uploaded_bytes, g.final_kibps, g.gallery_id, g.gallery_url, 
                             g.insertion_order, g.failed_files, g.tab_name,
+                            g.custom1, g.custom2, g.custom3, g.custom4,
                             GROUP_CONCAT(i.filename) as image_files
                         FROM galleries g
                         LEFT JOIN images i ON g.id = i.gallery_fk
@@ -590,6 +680,7 @@ class QueueStore:
                             g.total_images, g.uploaded_images, g.total_size, g.scan_complete, 
                             g.uploaded_bytes, g.final_kibps, g.gallery_id, g.gallery_url, 
                             g.insertion_order, g.tab_name, g.tab_id,
+                            g.custom1, g.custom2, g.custom3, g.custom4,
                             GROUP_CONCAT(i.filename) as image_files
                         FROM galleries g
                         LEFT JOIN images i ON g.id = i.gallery_fk
@@ -606,6 +697,7 @@ class QueueStore:
                             g.total_images, g.uploaded_images, g.total_size, g.scan_complete, 
                             g.uploaded_bytes, g.final_kibps, g.gallery_id, g.gallery_url, 
                             g.insertion_order,
+                            g.custom1, g.custom2, g.custom3, g.custom4,
                             GROUP_CONCAT(i.filename) as image_files
                         FROM galleries g
                         LEFT JOIN images i ON g.id = i.gallery_fk
@@ -619,7 +711,7 @@ class QueueStore:
             for r in rows:
                 if has_failed_files:
                     if has_tab_id:
-                        # New schema with tab_id - 20 columns (id at index 0, image_files at index 19)
+                        # New schema with tab_id - 24 columns (id at index 0, custom1-4 at 18-21, image_files at index 23)
                         item: Dict[str, Any] = {
                             'path': r[1],
                             'name': r[2],
@@ -639,10 +731,14 @@ class QueueStore:
                             'failed_files': json.loads(r[16]) if r[16] else [],
                             'tab_name': r[17] or 'Main',
                             'tab_id': int(r[18] or 1),
-                            'uploaded_files': r[19].split(',') if r[19] else [],
+                            'custom1': r[19] or '',
+                            'custom2': r[20] or '',
+                            'custom3': r[21] or '',
+                            'custom4': r[22] or '',
+                            'uploaded_files': r[23].split(',') if r[23] else [],
                         }
                     else:
-                        # New schema without tab_id - 19 columns (id at index 0, image_files at index 18)
+                        # New schema without tab_id - 22 columns (id at index 0, custom1-4 at 17-20, image_files at index 21)
                         item: Dict[str, Any] = {
                             'path': r[1],
                             'name': r[2],
@@ -661,12 +757,16 @@ class QueueStore:
                             'insertion_order': int(r[15] or 0),
                             'failed_files': json.loads(r[16]) if r[16] else [],
                             'tab_name': r[17] or 'Main',
+                            'custom1': r[18] or '',
+                            'custom2': r[19] or '',
+                            'custom3': r[20] or '',
+                            'custom4': r[21] or '',
                             'tab_id': 1,  # Default to Main tab
-                            'uploaded_files': r[18].split(',') if r[18] else [],
+                            'uploaded_files': r[22].split(',') if r[22] else [],
                         }
                 else:
                     if has_tab_id:
-                        # Old schema with tab_id - 18 columns (id at index 0, image_files at index 17)
+                        # Old schema with tab_id - 21 columns (id at index 0, custom1-4 at 16-19, image_files at index 20)
                         item: Dict[str, Any] = {
                             'path': r[1],
                             'name': r[2],
@@ -685,11 +785,15 @@ class QueueStore:
                             'insertion_order': int(r[15] or 0),
                             'failed_files': [],  # Default empty list for old schema
                             'tab_name': r[16] or 'Main',
-                            'tab_id': int(r[17] or 1),
-                            'uploaded_files': r[18].split(',') if r[18] else [],
+                            'custom1': r[17] or '',
+                            'custom2': r[18] or '',
+                            'custom3': r[19] or '',
+                            'custom4': r[20] or '',
+                            'tab_id': int(r[21] or 1),
+                            'uploaded_files': r[22].split(',') if r[22] else [],
                         }
                     else:
-                        # Old schema without tab_id - 17 columns (id at index 0, image_files at index 16)
+                        # Old schema without tab_id - 20 columns (id at index 0, custom1-4 at 15-18, image_files at index 19)
                         item: Dict[str, Any] = {
                             'path': r[1],
                             'name': r[2],
@@ -707,9 +811,13 @@ class QueueStore:
                             'gallery_url': r[14] or "",
                             'insertion_order': int(r[15] or 0),
                             'failed_files': [],  # Default empty list for old schema
+                            'custom1': r[16] or '',
+                            'custom2': r[17] or '',
+                            'custom3': r[18] or '',
+                            'custom4': r[19] or '',
                             'tab_name': 'Main',  # Default tab for old schema
                             'tab_id': 1,  # Default to Main tab
-                            'uploaded_files': r[16].split(',') if r[16] else [],
+                            'uploaded_files': r[20].split(',') if r[20] else [],
                         }
                 
                 items.append(item)
@@ -879,6 +987,7 @@ class QueueStore:
                             g.total_images, g.uploaded_images, g.total_size, g.scan_complete,
                             g.uploaded_bytes, g.final_kibps, g.gallery_id, g.gallery_url,
                             g.insertion_order, g.failed_files, g.tab_name,
+                            g.custom1, g.custom2, g.custom3, g.custom4,
                             GROUP_CONCAT(i.filename) as image_files
                         FROM galleries g
                         LEFT JOIN images i ON g.id = i.gallery_fk
@@ -897,6 +1006,7 @@ class QueueStore:
                             g.total_images, g.uploaded_images, g.total_size, g.scan_complete,
                             g.uploaded_bytes, g.final_kibps, g.gallery_id, g.gallery_url,
                             g.insertion_order, g.failed_files, g.tab_name,
+                            g.custom1, g.custom2, g.custom3, g.custom4,
                             GROUP_CONCAT(i.filename) as image_files
                         FROM galleries g
                         LEFT JOIN images i ON g.id = i.gallery_fk
@@ -935,6 +1045,7 @@ class QueueStore:
                             g.total_images, g.uploaded_images, g.total_size, g.scan_complete,
                             g.uploaded_bytes, g.final_kibps, g.gallery_id, g.gallery_url,
                             g.insertion_order,
+                            g.custom1, g.custom2, g.custom3, g.custom4,
                             GROUP_CONCAT(i.filename) as image_files
                         FROM galleries g
                         LEFT JOIN images i ON g.id = i.gallery_fk
@@ -949,7 +1060,7 @@ class QueueStore:
             items: List[Dict[str, Any]] = []
             for r in rows:
                 if has_failed_files:
-                    # New schema - 19 columns (id at index 0, image_files at index 18)
+                    # New schema - 23 columns (id at index 0, custom1-4 at 17-20, image_files at index 22)
                     item: Dict[str, Any] = {
                         'path': r[1],
                         'name': r[2],
@@ -968,10 +1079,14 @@ class QueueStore:
                         'insertion_order': int(r[15] or 0),
                         'failed_files': json.loads(r[16]) if r[16] else [],
                         'tab_name': r[17] or 'Main',
-                        'uploaded_files': r[18].split(',') if r[18] else [],
+                        'custom1': r[18] or '',
+                        'custom2': r[19] or '',
+                        'custom3': r[20] or '',
+                        'custom4': r[21] or '',
+                        'uploaded_files': r[22].split(',') if r[22] else [],
                     }
                 else:
-                    # Old schema - 16 columns (id at index 0, image_files at index 15)
+                    # Old schema - 20 columns (id at index 0, custom1-4 at 15-18, image_files at index 19)
                     item: Dict[str, Any] = {
                         'path': r[1],
                         'name': r[2],
@@ -990,7 +1105,11 @@ class QueueStore:
                         'insertion_order': int(r[15] or 0),
                         'failed_files': [],  # Default empty list for old schema
                         'tab_name': tab_name,  # Use the filtered tab name
-                        'uploaded_files': r[16].split(',') if r[16] else [],
+                        'custom1': r[16] or '',
+                        'custom2': r[17] or '',
+                        'custom3': r[18] or '',
+                        'custom4': r[19] or '',
+                        'uploaded_files': r[20].split(',') if r[20] else [],
                     }
                 
                 items.append(item)
@@ -1125,6 +1244,43 @@ class QueueStore:
                 if "UNIQUE constraint failed" in str(e):
                     raise sqlite3.IntegrityError(f"Tab name '{name}' already exists") from e
                 raise
+
+    def update_item_custom_field(self, path: str, field_name: str, value: str) -> bool:
+        """Update a custom field for a gallery item.
+        
+        Args:
+            path: Path to the gallery
+            field_name: Name of the custom field (custom1, custom2, custom3, custom4)
+            value: New value to set
+            
+        Returns:
+            True if update was successful, False otherwise
+        """
+        if field_name not in ['custom1', 'custom2', 'custom3', 'custom4']:
+            print(f"DEBUG DB: Invalid field name: {field_name}")
+            return False
+            
+        with _connect(self.db_path) as conn:
+            _ensure_schema(conn)
+            try:
+                #print(f"DEBUG DB: Executing UPDATE galleries SET {field_name} = '{value}' WHERE path = '{path}'")
+                cursor = conn.execute(f"UPDATE galleries SET {field_name} = ? WHERE path = ?", (value, path))
+                rows_affected = cursor.rowcount
+                total_changes = conn.total_changes
+                #print(f"DEBUG DB: rows_affected={rows_affected}, total_changes={total_changes}")
+                
+                # Verify the update by reading back the value
+                verification_cursor = conn.execute(f"SELECT {field_name} FROM galleries WHERE path = ?", (path,))
+                result = verification_cursor.fetchone()
+                if result:
+                    print(f"DEBUG DB: Verification read: {field_name} = '{result[0]}'")
+                else:
+                    print(f"DEBUG DB: No gallery found with path '{path}'")
+                
+                return rows_affected > 0
+            except Exception as e:
+                print(f"DEBUG: Error updating {field_name} for {path}: {e}")
+                return False
 
     def update_item_template(self, path: str, template_name: str) -> bool:
         """Update the template name for a gallery item.

@@ -1841,10 +1841,10 @@ class ComprehensiveSettingsDialog(QDialog):
                 config.add_section('DEFAULTS')
                 
             # Save thumbnail settings
-            config.set('UPLOAD', 'thumbnail_size', str(self.thumbnail_size_combo.currentIndex() + 1))
-            config.set('UPLOAD', 'thumbnail_format', str(self.thumbnail_format_combo.currentIndex() + 1))
-            config.set('UPLOAD', 'max_retries', str(self.max_retries_spin.value()))
-            config.set('UPLOAD', 'parallel_batch_size', str(self.batch_size_spin.value()))
+            config.set('DEFAULTS', 'thumbnail_size', str(self.thumbnail_size_combo.currentIndex() + 1))
+            config.set('DEFAULTS', 'thumbnail_format', str(self.thumbnail_format_combo.currentIndex() + 1))
+            config.set('DEFAULTS', 'max_retries', str(self.max_retries_spin.value()))
+            config.set('DEFAULTS', 'parallel_batch_size', str(self.batch_size_spin.value()))
             
             # Save timeout settings
             config.set('DEFAULTS', 'upload_connect_timeout', str(self.connect_timeout_spin.value()))
@@ -2926,7 +2926,7 @@ class PlaceholderHighlighter(QSyntaxHighlighter):
         self.placeholders = [
             "#folderName#", "#width#", "#height#", "#longest#", 
             "#extension#", "#pictureCount#", "#folderSize#", 
-            "#galleryLink#", "#allImages#"
+            "#galleryLink#", "#allImages#", "#custom1#", "#custom2#", "#custom3#", "#custom4#"
         ]
     
     def highlightBlock(self, text):
@@ -3757,7 +3757,11 @@ class TemplateManagerDialog(QDialog):
             ("#pictureCount#", "Picture Count"),
             ("#folderSize#", "Folder Size"),
             ("#galleryLink#", "Gallery Link"),
-            ("#allImages#", "All Images")
+            ("#allImages#", "All Images"),
+            ("#custom1#", "Custom 1"),
+            ("#custom2#", "Custom 2"),
+            ("#custom3#", "Custom 3"),
+            ("#custom4#", "Custom 4")
         ]
         
         for placeholder, label in placeholders:
