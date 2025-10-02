@@ -927,7 +927,7 @@ class QueueStore:
             
             # Single optimized query using LEFT JOIN - much faster than UNION
             cursor = conn.execute("""
-                SELECT 
+                SELECT
                     t.name as tab_name,
                     COUNT(g.path) as gallery_count
                 FROM tabs t

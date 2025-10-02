@@ -883,11 +883,12 @@ class TabbedGalleryWidget(QWidget):
     
     def __init__(self, parent=None):
         super().__init__(parent)
-        
+
         # Initialize tab manager reference
         self.tab_manager = None
         self.current_tab = "Main"
-        
+        self._restoring_tabs = False  # Flag to prevent saving during tab restoration
+
         # Enhanced filter result caching system
         self._filter_cache = {}  # Cache filtered row visibility per tab
         self._filter_cache_timestamps = {}  # Track cache freshness per tab
@@ -983,7 +984,10 @@ class TabbedGalleryWidget(QWidget):
         if not self.tab_manager:
             print("Warning: No tab manager available for TabbedGalleryWidget")
             return
-        
+
+        # Block tab change signals from saving during restoration
+        self._restoring_tabs = True
+
         # Clear existing tabs first
         while self.tab_bar.count() > 0:
             self.tab_bar.removeTab(0)
@@ -1036,9 +1040,12 @@ class TabbedGalleryWidget(QWidget):
             # Extract base tab name (remove count if present)
             base_tab_name = tab_text.split(' (')[0] if ' (' in tab_text else tab_text
             self.current_tab = base_tab_name
-        
+
         # Update tooltips after refreshing tabs
         self._update_tab_tooltips()
+
+        # Re-enable tab change signal saving after restoration is complete
+        self._restoring_tabs = False
     
     def _on_tab_changed(self, index):
         """Handle tab change with performance tracking"""
@@ -1074,9 +1081,10 @@ class TabbedGalleryWidget(QWidget):
         # Log slow tab switches
         #if switch_time > 16:
         #    print(f"Slow tab switch from '{old_tab}' to '{tab_name}': {switch_time:.1f}ms")
-        
+
         # Save active tab to settings (excluding "All Tabs")
-        if self.tab_manager and tab_name != "All Tabs":
+        # Don't save during tab restoration to prevent overwriting the saved preference
+        if self.tab_manager and tab_name != "All Tabs" and not self._restoring_tabs:
             self.tab_manager.last_active_tab = tab_name
     
     def _save_tab_order(self):
@@ -1815,10 +1823,25 @@ class TabbedGalleryWidget(QWidget):
                     gallery_count = 0
                     active_count = 0
                     if self.tab_manager and base_name != "All Tabs":
-                        galleries = self.tab_manager.load_tab_galleries(base_name)
-                        gallery_count = len(galleries)
-                        # Count active uploads (simplified status check)
-                        active_count = sum(1 for g in galleries if g.get('status') in ['uploading', 'pending'])
+                        # Count from in-memory queue_manager instead of database
+                        # This ensures counts match what's actually displayed in the table
+                        parent_window = self.parent()
+                        while parent_window and not hasattr(parent_window, 'queue_manager'):
+                            parent_window = parent_window.parent()
+
+                        if parent_window and hasattr(parent_window, 'queue_manager'):
+                            # Count items in memory that belong to this tab
+                            all_items = parent_window.queue_manager.get_all_items()
+                            gallery_count = sum(1 for item in all_items if item.tab_name == base_name)
+                            # Count active uploads
+                            active_count = sum(1 for item in all_items
+                                             if item.tab_name == base_name
+                                             and item.status in ['uploading', 'pending'])
+                        else:
+                            # Fallback to database if queue_manager not accessible
+                            galleries = self.tab_manager.load_tab_galleries(base_name)
+                            gallery_count = len(galleries)
+                            active_count = sum(1 for g in galleries if g.get('status') in ['uploading', 'pending'])
                     
                     # Update tab text with count
                     old_text = self.tab_bar.tabText(i)

@@ -5,7 +5,7 @@ All magic numbers, configuration values, and constant strings.
 
 # Application Info
 APP_NAME = "ImxUp"
-APP_VERSION = "0.3.9"
+APP_VERSION = "0.3.10"
 APP_AUTHOR = "ImxUploader"
 
 # Network Configuration
@@ -97,7 +97,7 @@ TABLE_UPDATE_INTERVAL = 100  # milliseconds
 ICON_SIZE = 16
 
 # Performance Settings
-MAX_CONCURRENT_UPLOADS = 10
+MAX_CONCURRENT_UPLOADS = 8
 DEFAULT_CHUNK_SIZE = 8192
 MAX_QUEUE_SIZE = 1000
 
