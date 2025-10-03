@@ -2381,8 +2381,9 @@ class GalleryTableWidget(QTableWidget):
     def _create_drag_pixmap(self, gallery_names):
         """Create a pixmap for drag visual feedback"""
         from PyQt6.QtGui import QPainter, QFont, QFontMetrics
-        
-        # Calculate pixmap size
+
+        # Create font for text measurement
+        font = QFont()
         metrics = QFontMetrics(font)
         
         if len(gallery_names) == 1:

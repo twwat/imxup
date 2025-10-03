@@ -26,7 +26,7 @@ import sqlite3
 import glob
 import winreg
 
-__version__ = "0.3.10"  # Application version number
+__version__ = "0.3.11"  # Application version number
 
 def timestamp():
     """Return current timestamp for logging"""

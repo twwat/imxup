@@ -5,7 +5,7 @@ All magic numbers, configuration values, and constant strings.
 
 # Application Info
 APP_NAME = "ImxUp"
-APP_VERSION = "0.3.10"
+APP_VERSION = "0.3.11"
 APP_AUTHOR = "ImxUploader"
 
 # Network Configuration
