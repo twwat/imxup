@@ -5,7 +5,7 @@ All magic numbers, configuration values, and constant strings.
 
 # Application Info
 APP_NAME = "ImxUp"
-APP_VERSION = "0.4.01"
+APP_VERSION = "0.4.10"
 APP_AUTHOR = "twat"
 
 # Network Configuration

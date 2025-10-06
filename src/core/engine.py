@@ -156,6 +156,11 @@ class UploadEngine:
             initial_uploaded_size = 0
         else:
             # Create new gallery via API by uploading the first image (faster, avoids web login delays)
+            # CRITICAL: Clear session cookies to prevent gallery_id reuse from previous uploads
+            if hasattr(self.uploader, 'session') and hasattr(self.uploader.session, 'cookies'):
+                #print(f"DEBUG COOKIE CLEARING: Clearing session cookies before new gallery creation, folder={os.path.basename(folder_path)}")
+                self.uploader.session.cookies.clear()
+
             first_file = image_files[0]
             first_image_path = os.path.join(folder_path, first_file)
             if on_log:

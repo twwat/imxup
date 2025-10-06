@@ -26,7 +26,7 @@ import sqlite3
 import glob
 import winreg
 
-__version__ = "0.4.01"  # Application version number
+__version__ = "0.4.10"  # Application version number
 
 # Build User-Agent string once at module load
 _system = platform.system()
@@ -1454,6 +1454,7 @@ class ImxToUploader:
 
             # Use configurable timeouts to prevent indefinite hangs
             timeout_tuple = (self.upload_connect_timeout, self.upload_read_timeout)
+            #print(f"DEBUG REQUEST HEADERS BEING SENT: {self.headers}")
             response = session.post(
                 self.upload_url,
                 headers=self.headers,
@@ -1463,7 +1464,10 @@ class ImxToUploader:
             )
 
             if response.status_code == 200:
-                return response.json()
+                json_response = response.json()
+                # DEBUG: Log response headers to find session state
+                #print(f"DEBUG API RESPONSE HEADERS: {dict(response.headers)}")
+                return json_response
             else:
                 raise Exception(f"Upload failed with status code {response.status_code}: {response.text}")
 

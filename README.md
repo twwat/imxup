@@ -54,6 +54,10 @@ The system generates bbcode files using templates. You can create custom templat
 - `#folderSize#` - Total size of gallery (e.g. "52.9 MB")
 - `#galleryLink#` - URL for gallery (e.g. https://imx.to/g/gallery_id)
 - `#allImages#` - BBCode for all images
+- `#custom1#` - Custom data provided by user (1 of 4)
+- `#custom2#` - Custom data provided by user (2 of 4)
+- `#custom3#` - Custom data provided by user (3 of 4)
+- `#custom4#` - Custom data provided by user (4 of 4)
 
 ### Default Template
 
