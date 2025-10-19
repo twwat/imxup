@@ -17,11 +17,12 @@ from imxup import (
 from src.network.client import GUIImxToUploader
 from src.utils.logger import log
 from src.storage.queue_manager import GalleryQueueItem
+from src.core.engine import AtomicCounter
 
 
 class UploadWorker(QThread):
     """Worker thread for uploading galleries"""
-    
+
     # Signals for communication with GUI
     progress_updated = pyqtSignal(str, int, int, int, str)  # path, completed, total, progress%, current_image
     gallery_started = pyqtSignal(str, int)  # path, total_images
@@ -30,9 +31,9 @@ class UploadWorker(QThread):
     gallery_exists = pyqtSignal(str, list)  # gallery_name, existing_files
     gallery_renamed = pyqtSignal(str)  # gallery_id
     log_message = pyqtSignal(str)
-    bandwidth_updated = pyqtSignal(float)  # current KB/s across active uploads
     queue_stats = pyqtSignal(dict)  # aggregate status stats for GUI updates
-    
+    bandwidth_updated = pyqtSignal(float)  # Instantaneous KB/s from pycurl progress callbacks
+
     def __init__(self, queue_manager):
         """Initialize upload worker with queue manager"""
         super().__init__()
@@ -42,8 +43,16 @@ class UploadWorker(QThread):
         self.current_item = None
         self._soft_stop_requested_for = None
         self.auto_rename_enabled = True
-        self._bw_last_emit = 0.0
         self._stats_last_emit = 0.0
+
+        # Bandwidth tracking counters
+        self.global_byte_counter = AtomicCounter()  # Persistent across ALL galleries (Speed box)
+        self.current_gallery_counter: Optional[AtomicCounter] = None  # Per-gallery running average
+
+        # Bandwidth calculation state
+        self._bw_last_bytes = 0
+        self._bw_last_time = time.time()
+        self._bw_last_emit = 0.0
 
         # Initialize RenameWorker support
         self.rename_worker = None
@@ -53,6 +62,7 @@ class UploadWorker(QThread):
         except Exception as e:
             log(f"RenameWorker import failed: {e}", level="error", category="renaming")
             self._rename_worker_available = False
+
 
     def stop(self):
         """Stop the worker thread"""
@@ -64,39 +74,29 @@ class UploadWorker(QThread):
             except Exception as e:
                 log(f"Error stopping RenameWorker: {e}", level="error", category="renaming")
         self.wait()
-    
+
     def request_soft_stop_current(self):
         """Request to stop the current item after in-flight uploads finish"""
         if self.current_item:
             self._soft_stop_requested_for = self.current_item.path
-    
+
     def run(self):
         """Main worker thread loop"""
         try:
             # Initialize uploader and perform initial login
             self._initialize_uploader()
-            
-            # Initialize periodic bandwidth update timer
-            last_bandwidth_emit = time.time()
-            bandwidth_emit_interval = 0.5  # Emit bandwidth every 500ms
-            
+
             # Main processing loop
             while self.running:
-                # Emit bandwidth updates periodically (independent of file completions)
-                now = time.time()
-                if now - last_bandwidth_emit >= bandwidth_emit_interval:
-                    self._emit_current_bandwidth()
-                    last_bandwidth_emit = now
-                
                 # Get next item from queue
                 item = self.queue_manager.get_next_item()
-                
+
                 if item is None:
                     # No items to process, emit stats and wait
                     self._emit_queue_stats()
                     time.sleep(0.1)
                     continue
-                
+
                 # Process items based on status
                 if item.status == "queued":
                     self.current_item = item
@@ -109,14 +109,14 @@ class UploadWorker(QThread):
                     # Unexpected status, skip
                     self._emit_queue_stats()
                     time.sleep(0.1)
-                    
+
         except Exception as e:
             import traceback
             error_trace = traceback.format_exc()
             log(f"CRITICAL: Worker thread crashed: {error_trace}", level="critical", category="uploads")
             # Also print directly to ensure it's visible
             print(f"\n{'='*70}\nWORKER THREAD CRASH:\n{error_trace}\n{'='*70}\n", flush=True)
-    
+
     def _initialize_uploader(self):
         """Initialize uploader with API-only mode and separate RenameWorker"""
         # Initialize custom GUI uploader with reference to this worker
@@ -137,32 +137,65 @@ class UploadWorker(QThread):
         # Uploader uses API ONLY - no login needed
         # RenameWorker handles its own login independently
         log("Uploader using API-only mode (no web login)", level="debug", category="auth")
-    
-    
+
+
     def upload_gallery(self, item: GalleryQueueItem):
         """Upload a single gallery"""
+        # Start bandwidth polling thread for real-time updates
+        import threading
+        stop_polling = threading.Event()
+
+        def poll_bandwidth():
+            """Background thread that polls byte counter and emits bandwidth updates"""
+            poll_last_bytes = 0
+            poll_last_time = time.time()
+
+            while not stop_polling.is_set():
+                time.sleep(0.2)  # Poll every 200ms
+
+                try:
+                    current_bytes = self.global_byte_counter.get()
+                    current_time = time.time()
+
+                    if current_bytes > poll_last_bytes:
+                        time_diff = current_time - poll_last_time
+                        if time_diff > 0:
+                            instant_kbps = ((current_bytes - poll_last_bytes) / time_diff) / 1024.0
+                            self.bandwidth_updated.emit(instant_kbps)
+                            poll_last_bytes = current_bytes
+                            poll_last_time = current_time
+                except Exception:
+                    pass
+
+        polling_thread = threading.Thread(target=poll_bandwidth, daemon=True, name="BandwidthPoller")
+        polling_thread.start()
+
         try:
             # Clear previous soft-stop request
             self._soft_stop_requested_for = None
+
+            # Create per-gallery counter for running average
+            self.current_gallery_counter = AtomicCounter()
+
             log(f"Starting upload: {item.name or os.path.basename(item.path)}", category="uploads")
-            
+
             # Update status to uploading
             self.queue_manager.update_item_status(item.path, "uploading")
             item.start_time = time.time()
-            
+
             # Emit start signal
             self.gallery_started.emit(item.path, item.total_images or 0)
             self._emit_queue_stats(force=True)
-            
+
             # Check for early soft stop request
             if getattr(self, '_soft_stop_requested_for', None) == item.path:
                 self.queue_manager.update_item_status(item.path, "incomplete")
                 return
-            
+
             # Get upload settings
             defaults = load_user_defaults()
-            
-            # Perform upload
+
+            # Perform upload with both global and per-gallery counters
             results = self.uploader.upload_folder(
                 item.path,
                 gallery_name=item.name,
@@ -170,17 +203,19 @@ class UploadWorker(QThread):
                 thumbnail_format=defaults.get('thumbnail_format', 2),
                 max_retries=defaults.get('max_retries', 3),
                 parallel_batch_size=defaults.get('parallel_batch_size', 4),
-                template_name=item.template_name
+                template_name=item.template_name,
+                global_byte_counter=self.global_byte_counter,
+                gallery_byte_counter=self.current_gallery_counter
             )
-            
+
             # Handle paused state
             if item.status == "paused":
                 log(f"Upload paused: {item.name}", level="info", category="uploads")
                 return
-            
+
             # Process results
             self._process_upload_results(item, results)
-            
+
         except Exception as e:
             import traceback
             error_msg = str(e)
@@ -189,7 +224,14 @@ class UploadWorker(QThread):
             item.error_message = error_msg
             self.queue_manager.mark_upload_failed(item.path, error_msg)
             self.gallery_failed.emit(item.path, error_msg)
-    
+        finally:
+            # Stop bandwidth polling thread
+            stop_polling.set()
+            polling_thread.join(timeout=0.5)
+
+            # Clear gallery counter
+            self.current_gallery_counter = None
+
     def _process_upload_results(self, item: GalleryQueueItem, results: Optional[Dict[str, Any]]):
         """Process upload results and update item status"""
         if not results:
@@ -201,15 +243,15 @@ class UploadWorker(QThread):
             else:
                 self.queue_manager.mark_upload_failed(item.path, "Upload failed")
                 self.gallery_failed.emit(item.path, "Upload failed")
-            
+
             self._emit_queue_stats(force=True)
             return
-        
+
         # Update item with results
         item.end_time = time.time()
         item.gallery_url = results.get('gallery_url', '')
         item.gallery_id = results.get('gallery_id', '')
-        
+
         # Check for incomplete upload due to soft stop
         if (self._soft_stop_requested_for == item.path and
             results.get('successful_count', 0) < (item.total_images or 0)):
@@ -217,10 +259,10 @@ class UploadWorker(QThread):
             item.status = "incomplete"
             log(f"Marked incomplete: {item.name}", level="info", category="uploads")
             return
-        
+
         # Save artifacts
         self._save_artifacts_for_result(item, results)
-        
+
         # Determine final status
         failed_count = results.get('failed_count', 0)
         if failed_count and results.get('successful_count', 0) > 0:
@@ -230,11 +272,11 @@ class UploadWorker(QThread):
         else:
             # Complete success
             self.queue_manager.update_item_status(item.path, "completed")
-        
+
         # Notify GUI
         self.gallery_completed.emit(item.path, results)
         self._emit_queue_stats(force=True)
-    
+
     def _save_artifacts_for_result(self, item: GalleryQueueItem, results: dict):
         """Save gallery artifacts (BBCode, JSON) in worker thread"""
         try:
@@ -246,7 +288,7 @@ class UploadWorker(QThread):
             # Artifact save successful, no need to log details here
         except Exception as e:
             log(f"Artifact save error: {e}", level="error", category="fileio")
-    
+
     def _emit_queue_stats(self, force: bool = False):
         """Emit queue statistics if needed"""
         now = time.time()
@@ -257,84 +299,49 @@ class UploadWorker(QThread):
                 self._stats_last_emit = now
             except Exception:
                 pass
-    
-    def _emit_current_bandwidth(self):
-        """Emit current bandwidth based on active uploads"""
-        try:
-            # Initialize bandwidth tracking if needed
-            if not hasattr(self, '_bandwidth_tracker'):
-                self._bandwidth_tracker = {}  # path -> {'last_bytes': 0, 'last_time': time, 'history': []}
-            
-            now = time.time()
-            total_rate = 0.0
-            
-            # Calculate current rate for all uploading items
-            for item in self.queue_manager.get_all_items():
-                if item.status == "uploading" and hasattr(item, 'start_time') and item.start_time:
-                    current_bytes = getattr(item, 'uploaded_bytes', 0)
-                    
-                    # Initialize tracker for this item
-                    if item.path not in self._bandwidth_tracker:
-                        self._bandwidth_tracker[item.path] = {
-                            'last_bytes': 0,
-                            'last_time': item.start_time,
-                            'history': []
-                        }
-                    
-                    tracker = self._bandwidth_tracker[item.path]
-                    
-                    # Calculate instantaneous rate
-                    bytes_diff = current_bytes - tracker['last_bytes']
-                    time_diff = now - tracker['last_time']
-                    
-                    if time_diff > 0.05:  # At least 50ms for accurate measurement
-                        if bytes_diff > 0:
-                            rate = bytes_diff / time_diff
-                            # Add to history for smoothing
-                            tracker['history'].append((now, rate))
-                            # Keep only last 3 seconds
-                            cutoff = now - 3.0
-                            tracker['history'] = [(t, r) for t, r in tracker['history'] if t > cutoff]
-                            
-                            # Update tracker
-                            tracker['last_bytes'] = current_bytes
-                            tracker['last_time'] = now
-                        
-                        # Calculate smoothed rate from history
-                        if tracker['history']:
-                            avg_rate = sum(r for t, r in tracker['history']) / len(tracker['history'])
-                            total_rate += avg_rate
-            
-            # Clean up trackers for items no longer uploading
-            active_paths = {item.path for item in self.queue_manager.get_all_items() 
-                          if item.status == "uploading"}
-            self._bandwidth_tracker = {path: tracker for path, tracker in self._bandwidth_tracker.items() 
-                                      if path in active_paths}
-            
-            # Emit bandwidth in KB/s
-            self.bandwidth_updated.emit(total_rate / 1024.0)
 
-        except Exception as e:
-            # Log bandwidth errors in debug mode
-            import traceback
-            log(f"Bandwidth tracking error: {traceback.format_exc()}", level="debug", category="uploads")
+    def _emit_current_bandwidth(self):
+        """Calculate and emit current bandwidth from byte counter deltas"""
+        try:
+            current_time = time.time()
+            current_bytes = self.global_byte_counter.get()
+
+            # Throttle emissions to every 200ms minimum
+            if (current_time - self._bw_last_emit) < 0.2:
+                return
+
+            # Calculate instantaneous bandwidth
+            time_diff = current_time - self._bw_last_time
+            if time_diff > 0:
+                bytes_diff = current_bytes - self._bw_last_bytes
+                if bytes_diff > 0:
+                    instant_kbps = (bytes_diff / time_diff) / 1024.0
+                    self.bandwidth_updated.emit(instant_kbps)
+                    self._bw_last_emit = current_time
+
+            # Update tracking
+            self._bw_last_bytes = current_bytes
+            self._bw_last_time = current_time
+        except Exception:
+            pass
+
 
 
 class CompletionWorker(QThread):
     """Worker thread for handling gallery completion tasks"""
-    
+
     # Signals for GUI communication
     bbcode_generated = pyqtSignal(str, str)  # path, bbcode
     log_message = pyqtSignal(str)
     artifact_written = pyqtSignal(str, dict)  # path, written_files
-    
+
     def __init__(self):
         """Initialize completion worker"""
         super().__init__()
         self.queue = []
         self.running = True
         self._mutex = QMutex()
-    
+
     def add_completion_task(self, item: GalleryQueueItem, results: dict):
         """Add a completion task to the queue"""
         try:
@@ -342,17 +349,17 @@ class CompletionWorker(QThread):
             self.queue.append((item, results))
         finally:
             self._mutex.unlock()
-    
+
     def stop(self):
         """Stop the worker thread"""
         self.running = False
         self.wait()
-    
+
     def run(self):
         """Main worker loop for processing completion tasks"""
         while self.running:
             task = None
-            
+
             # Get next task from queue
             try:
                 self._mutex.lock()
@@ -360,13 +367,13 @@ class CompletionWorker(QThread):
                     task = self.queue.pop(0)
             finally:
                 self._mutex.unlock()
-            
+
             if task:
                 item, results = task
                 self._process_completion(item, results)
             else:
                 time.sleep(0.1)
-    
+
     def _process_completion(self, item: GalleryQueueItem, results: dict):
         """Process a single completion task"""
         try:
@@ -376,23 +383,23 @@ class CompletionWorker(QThread):
                 results,
                 template_name=item.template_name or "default"
             )
-            
+
             if bbcode:
                 self.bbcode_generated.emit(item.path, bbcode)
-            
+
             # Log artifact locations if available
             self._log_artifact_locations(results)
 
         except Exception as e:
             log(f"Completion processing error: {e}", level="error", category="uploads")
-    
+
     def _log_artifact_locations(self, results: dict):
         """Log artifact save locations from results"""
         try:
             written = results.get('written_artifacts', {})
             if not written:
                 return
-            
+
             parts = []
             if written.get('central'):
                 central_dir = os.path.dirname(list(written['central'].values())[0])
@@ -400,7 +407,7 @@ class CompletionWorker(QThread):
             if written.get('uploaded'):
                 uploaded_dir = os.path.dirname(list(written['uploaded'].values())[0])
                 parts.append(f"folder: {uploaded_dir}")
-            
+
             if parts:
                 log(f"Saved to {', '.join(parts)}", level="debug", category="fileio")
 
@@ -410,9 +417,9 @@ class CompletionWorker(QThread):
 
 class BandwidthTracker(QThread):
     """Background thread for tracking upload bandwidth"""
-    
+
     bandwidth_updated = pyqtSignal(float)  # KB/s
-    
+
     def __init__(self, upload_worker: Optional[UploadWorker] = None):
         """Initialize bandwidth tracker"""
         super().__init__()
@@ -420,12 +427,12 @@ class BandwidthTracker(QThread):
         self.running = True
         self._last_bytes = 0
         self._last_time = time.time()
-    
+
     def stop(self):
         """Stop the bandwidth tracker"""
         self.running = False
         self.wait()
-    
+
     def run(self):
         """Main loop for tracking bandwidth"""
         while self.running:
@@ -433,19 +440,19 @@ class BandwidthTracker(QThread):
                 if self.upload_worker and self.upload_worker.uploader:
                     current_bytes = getattr(self.upload_worker.uploader, 'total_bytes_uploaded', 0)
                     current_time = time.time()
-                    
+
                     if self._last_bytes > 0:
                         time_diff = current_time - self._last_time
                         bytes_diff = current_bytes - self._last_bytes
-                        
+
                         if time_diff > 0:
                             kb_per_sec = (bytes_diff / 1024) / time_diff
                             self.bandwidth_updated.emit(kb_per_sec)
-                    
+
                     self._last_bytes = current_bytes
                     self._last_time = current_time
-                
+
                 time.sleep(1.0)  # Update every second
-                
+
             except Exception:
                 pass

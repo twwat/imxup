@@ -15,6 +15,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 import re
 import sys
+import threading
 from functools import cmp_to_key
 import ctypes
 from typing import Callable, Iterable, Optional, Tuple, List, Dict, Any, Set
@@ -23,6 +24,54 @@ from src.utils.format_utils import format_binary_size, format_binary_rate
 from src.utils.logger import log
 
 
+class AtomicCounter:
+    """Thread-safe byte counter for tracking upload progress across multiple threads."""
+
+    def __init__(self):
+        self._value = 0
+        self._lock = threading.Lock()
+
+    def add(self, amount: int) -> None:
+        """Add bytes to counter (thread-safe)."""
+        with self._lock:
+            self._value += amount
+
+    def get(self) -> int:
+        """Get current value (thread-safe)."""
+        with self._lock:
+            return self._value
+
+    def reset(self) -> None:
+        """Reset counter to zero (thread-safe)."""
+        with self._lock:
+            self._value = 0
+
+
+class ByteCountingCallback:
+    """Callback wrapper that tracks upload progress deltas and updates global counter."""
+
+    def __init__(self, global_counter: Optional[AtomicCounter] = None,
+                 gallery_counter: Optional[AtomicCounter] = None,
+                 worker_thread: Optional[Any] = None):
+        """Initialize with optional global counter.
+
+        Args:
+            global_counter: Tracks bytes across ALL galleries (used by Speed box)
+            gallery_counter: Ignored (per-gallery tracking removed)
+            worker_thread: Ignored (not needed)
+        """
+        self.global_counter = global_counter
+        self.last_bytes = 0
+
+    def __call__(self, bytes_read: int, total_size: int) -> None:
+        """Called by pycurl during upload transmission."""
+        delta = bytes_read - self.last_bytes
+        if delta > 0 and self.global_counter:
+            self.global_counter.add(delta)
+            self.last_bytes = bytes_read
+
+
+# Type aliases for callbacks
 ProgressCallback = Callable[[int, int, int, str], None]
 SoftStopCallback = Callable[[], bool]
 ImageUploadedCallback = Callable[[str, Dict[str, Any], int], None]
@@ -37,10 +86,25 @@ class UploadEngine:
       - attributes: web_url (for links)
     """
 
-    def __init__(self, uploader: Any, rename_worker: Any = None):
+    def __init__(self, uploader: Any, rename_worker: Any = None,
+                 global_byte_counter: Optional[AtomicCounter] = None,
+                 gallery_byte_counter: Optional[AtomicCounter] = None,
+                 worker_thread: Optional[Any] = None):
+        """Initialize upload engine with counters.
+
+        Args:
+            uploader: Uploader instance
+            rename_worker: Optional rename worker
+            global_byte_counter: Persistent counter tracking ALL galleries
+            gallery_byte_counter: Per-gallery counter (reset after each gallery)
+            worker_thread: Optional worker thread reference for bandwidth emission
+        """
         self.uploader = uploader
         self.rename_worker = rename_worker
-    
+        self.global_byte_counter = global_byte_counter or AtomicCounter()
+        self.gallery_byte_counter = gallery_byte_counter  # Can be None
+        self.worker_thread = worker_thread
+
     def _is_gallery_unnamed(self, gallery_id: str) -> bool:
         """Check if gallery is in the unnamed galleries list."""
         try:
@@ -87,7 +151,7 @@ class UploadEngine:
                 else:
                     key.append(p.lower())
             return tuple(key)
-        
+
         def _explorer_sort(names: List[str]) -> List[str]:
             """Windows Explorer (StrCmpLogicalW) ordering; fallback to natural sort on non-Windows."""
             if sys.platform != "win32":
@@ -144,7 +208,7 @@ class UploadEngine:
         initial_uploaded_size = 0
         preseed_images: List[Dict[str, Any]] = []
         files_to_upload: List[str]
-        
+
         if gallery_id:
             # Resume/append to existing gallery - no need to create new one
             log(f"Resuming/appending to existing gallery: {gallery_id}", level="info", category="uploads")
@@ -168,6 +232,7 @@ class UploadEngine:
                 create_gallery=True,
                 thumbnail_size=thumbnail_size,
                 thumbnail_format=thumbnail_format,
+                progress_callback=ByteCountingCallback(self.global_byte_counter, self.gallery_byte_counter, self.worker_thread),
             )
             if first_response.get('status') != 'success':
                 raise Exception(f"Failed to create gallery: {first_response}")
@@ -198,7 +263,7 @@ class UploadEngine:
                 last_method = getattr(self.uploader, 'last_login_method', None)
             except Exception:
                 last_method = None
-                
+
             if self.rename_worker:
                 # Always try RenameWorker first (it will fallback internally if needed)
                 log(f"Queuing gallery rename via RenameWorker (login method: {last_method})", level="debug", category="renaming")
@@ -260,9 +325,10 @@ class UploadEngine:
                     thumbnail_size=thumbnail_size,
                     thumbnail_format=thumbnail_format,
                     thread_session=thread_session,
+                    progress_callback=ByteCountingCallback(self.global_byte_counter, self.gallery_byte_counter, self.worker_thread),
                 )
                 upload_duration = time.time() - upload_start
-                log(f"Uploaded in {upload_duration:.4f}s: {image_file} ({image_path})",category="uploads:file")
+                log(f"{image_file}: Uploaded in {upload_duration:.3f}s:  ({image_path})",category="uploads:file")
                 if response.get('status') == 'success':
                     return image_file, response['data'], None
                 return image_file, None, f"API error: {response}"
@@ -549,7 +615,7 @@ class UploadEngine:
                 time_per_file = upload_time / results['successful_count'] if results['successful_count'] > 0 else 0
 
                 log(
-                    f"[uploads:gallery] ✓ {gallery_id}: {results['successful_count']} images ({size_str}) in {upload_time:.1f}s ({rate_str}, {time_per_file:.2f}s/file) {gname}",
+                    f"[uploads:gallery] ✓ Gallery '{gallery_id}' uploaded in {upload_time:.3f}s ({results['successful_count']} images, {size_str}) [{rate_str}, {time_per_file:.3f}s/file] - {gname}",
                     level="info",
                     category="uploads:gallery"
                 )
@@ -557,5 +623,3 @@ class UploadEngine:
             pass
 
         return results
-
-

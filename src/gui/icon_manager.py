@@ -240,14 +240,9 @@ class IconManager:
         elif isinstance(config, list) and len(config) >= 2:
             # Manual light/dark pair
             # Logic:
-            # - Normal rows: light theme uses light icon [0], dark theme uses dark icon [1]
-            # - Selected rows: always use dark icon [1] for contrast against selection background
-            if is_selected:
-                # Selected: always use dark icon for contrast
-                return config[1]
-            else:
-                # Not selected: use light icon in light theme, dark icon in dark theme
-                return config[0] if theme_mode == 'light' else config[1]
+            # - Always use icon matching the current theme (light icon for light theme, dark icon for dark theme)
+            # - Selection state does not change icon choice
+            return config[0] if theme_mode == 'light' else config[1]
         else:
             print(f"Warning: Invalid icon configuration: {config}")
             return None

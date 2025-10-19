@@ -14,7 +14,7 @@ from functools import cmp_to_key
 from PyQt6.QtCore import QThread, pyqtSignal
 
 from imxup import ImxToUploader, timestamp, sanitize_gallery_name
-from src.core.engine import UploadEngine
+from src.core.engine import UploadEngine, AtomicCounter
 from src.utils.logger import log
 from src.core.constants import (
     COMMUNICATION_PORT,
@@ -24,16 +24,30 @@ from src.core.constants import (
 
 class GUIImxToUploader(ImxToUploader):
     """Custom uploader for GUI that doesn't block on user input"""
-    
+
     def __init__(self, worker_thread=None):
         super().__init__()
         self.gui_mode = True
         self.worker_thread = worker_thread
-    
-    def upload_folder(self, folder_path, gallery_name=None, thumbnail_size=3, 
-                     thumbnail_format=2, max_retries=3, 
-                     parallel_batch_size=4, template_name="default"):
-        """GUI-friendly upload delegating to the shared UploadEngine."""
+
+    def upload_folder(self, folder_path, gallery_name=None, thumbnail_size=3,
+                     thumbnail_format=2, max_retries=3,
+                     parallel_batch_size=4, template_name="default",
+                     global_byte_counter: Optional[AtomicCounter] = None,
+                     gallery_byte_counter: Optional[AtomicCounter] = None):
+        """GUI-friendly upload delegating to the shared UploadEngine.
+
+        Args:
+            folder_path: Path to folder containing images
+            gallery_name: Name for the gallery
+            thumbnail_size: Thumbnail size setting
+            thumbnail_format: Thumbnail format setting
+            max_retries: Maximum retry attempts
+            parallel_batch_size: Number of concurrent uploads
+            template_name: BBCode template name
+            global_byte_counter: Persistent counter across ALL galleries
+            gallery_byte_counter: Per-gallery counter (reset for each gallery)
+        """
         # Non-blocking signals and resume support
         current_item = self.worker_thread.current_item if self.worker_thread else None
         already_uploaded = set(getattr(current_item, 'uploaded_files', set())) if current_item else set()
@@ -49,7 +63,7 @@ class GUIImxToUploader(ImxToUploader):
                 for p in parts:
                     out.append(int(p) if p.isdigit() else p.lower())
                 return tuple(out)
-            
+
             def _explorer_sort(names):
                 if sys.platform != 'win32':
                     return sorted(names, key=_natural_key)
@@ -60,7 +74,7 @@ class GUIImxToUploader(ImxToUploader):
                     return sorted(names, key=cmp_to_key(lambda a, b: _cmp(a, b)))
                 except Exception:
                     return sorted(names, key=_natural_key)
-            
+
             names = [
                 f for f in os.listdir(folder_path)
                 if f.lower().endswith(image_extensions) and os.path.isfile(os.path.join(folder_path, f))
@@ -76,7 +90,7 @@ class GUIImxToUploader(ImxToUploader):
             gallery_name = os.path.basename(folder_path)
         original_name = gallery_name
         # No sanitization - only rename worker should sanitize
-        
+
         # Get RenameWorker from worker thread if available
         rename_worker = None
         if self.worker_thread:
@@ -91,52 +105,23 @@ class GUIImxToUploader(ImxToUploader):
         else:
             # This should not happen in GUI mode but let's log it
             log("No worker_thread available for RenameWorker", level="warning", category="renaming")
-        
-        engine = UploadEngine(self, rename_worker)
+
+        # Create engine with both counters and worker_thread reference
+        engine = UploadEngine(
+            self,
+            rename_worker,
+            global_byte_counter=global_byte_counter,
+            gallery_byte_counter=gallery_byte_counter,
+            worker_thread=self.worker_thread
+        )
 
         def on_progress(completed: int, total: int, percent: int, current_image: str):
             if not self.worker_thread:
                 return
             self.worker_thread.progress_updated.emit(folder_path, completed, total, percent, current_image)
-            # Improved bandwidth tracking with sliding window
+            # Trigger bandwidth update (main loop blocked during uploads)
             try:
-                now_ts = time.time()
-                if now_ts - self.worker_thread._bw_last_emit >= 0.1:
-                    # Simple sliding window bandwidth calculation
-                    if not hasattr(self.worker_thread, '_last_bytes'):
-                        self.worker_thread._last_bytes = {}
-                        self.worker_thread._last_check = now_ts
-                    
-                    total_current_bytes = 0
-                    total_last_bytes = 0
-                    
-                    for it in self.worker_thread.queue_manager.get_all_items():
-                        if it.status == QUEUE_STATE_UPLOADING and it.start_time:
-                            current = getattr(it, 'uploaded_bytes', 0)
-                            total_current_bytes += current
-                            total_last_bytes += self.worker_thread._last_bytes.get(it.path, 0)
-                            self.worker_thread._last_bytes[it.path] = current
-                    
-                    # Calculate rate based on bytes transferred since last check
-                    time_diff = now_ts - self.worker_thread._last_check
-                    if time_diff > 0:
-                        bytes_diff = total_current_bytes - total_last_bytes
-                        kbps = (bytes_diff / time_diff) / 1024.0
-                        self.worker_thread.bandwidth_updated.emit(kbps)
-                    
-                    self.worker_thread._last_check = now_ts
-                    self.worker_thread._bw_last_emit = now_ts
-                # Also update this item's instantaneous rate for the Transfer column
-                try:
-                    if self.worker_thread.current_item and self.worker_thread.current_item.path == folder_path:
-                        elapsed = max(now_ts - float(self.worker_thread.current_item.start_time or now_ts), 0.001)
-                        item_bytes = float(getattr(self.worker_thread.current_item, 'uploaded_bytes', 0) or 0)
-                        self.worker_thread.current_item.current_kibps = (item_bytes / elapsed) / 1024.0
-                except Exception:
-                    pass
-                if now_ts - self.worker_thread._stats_last_emit >= 0.5:
-                    self.worker_thread._emit_queue_stats()
-                    self.worker_thread._stats_last_emit = now_ts
+                self.worker_thread._emit_current_bandwidth()
             except Exception:
                 pass
 
@@ -176,7 +161,7 @@ class GUIImxToUploader(ImxToUploader):
             should_soft_stop=should_soft_stop,
             on_image_uploaded=on_image_uploaded,
         )
-        
+
         # Merge previously uploaded images (from earlier partial runs) with this run's results
         try:
             if self.worker_thread and self.worker_thread.current_item:
@@ -184,7 +169,7 @@ class GUIImxToUploader(ImxToUploader):
                     item = self.worker_thread.current_item
                     # Build ordering map based on Explorer order (match engine)
                     image_extensions = ('.jpg', '.jpeg', '.png', '.gif')
-                    
+
                     def _natural_key(n: str):
                         import re as _re
                         parts = _re.split(r"(\d+)", n)
@@ -192,7 +177,7 @@ class GUIImxToUploader(ImxToUploader):
                         for p in parts:
                             out.append(int(p) if p.isdigit() else p.lower())
                         return tuple(out)
-                    
+
                     def _explorer_sort(names):
                         if sys.platform != 'win32':
                             return sorted(names, key=_natural_key)
@@ -203,13 +188,13 @@ class GUIImxToUploader(ImxToUploader):
                             return sorted(names, key=cmp_to_key(lambda a, b: _cmp(a, b)))
                         except Exception:
                             return sorted(names, key=_natural_key)
-                    
+
                     all_image_files = _explorer_sort([
                         f for f in os.listdir(folder_path)
                         if f.lower().endswith(image_extensions) and os.path.isfile(os.path.join(folder_path, f))
                     ])
                     file_position = {fname: idx for idx, fname in enumerate(all_image_files)}
-                    
+
                     # Collect enriched image data from accumulated uploads across runs
                     combined_by_name = {}
                     for fname, data in getattr(item, 'uploaded_images_data', []):
@@ -234,17 +219,17 @@ class GUIImxToUploader(ImxToUploader):
                                 pass
                         # Size bytes
                         try:
-                            enriched.setdefault('size_bytes', 
+                            enriched.setdefault('size_bytes',
                                               os.path.getsize(os.path.join(folder_path, fname)))
                         except Exception:
                             enriched.setdefault('size_bytes', 0)
                         combined_by_name[fname] = enriched
-                    
+
                     # Order by original folder order (Explorer sort)
-                    ordered = sorted(combined_by_name.items(), 
+                    ordered = sorted(combined_by_name.items(),
                                    key=lambda kv: file_position.get(kv[0], 10**9))
                     merged_images = [data for _fname, data in ordered]
-                    
+
                     if merged_images:
                         # Replace images in results so downstream BBCode includes all
                         results = dict(results)  # shallow copy
@@ -267,14 +252,14 @@ class GUIImxToUploader(ImxToUploader):
 
 class SingleInstanceServer(QThread):
     """Server for single instance communication"""
-    
+
     folder_received = pyqtSignal(str)
-    
+
     def __init__(self, port=COMMUNICATION_PORT):
         super().__init__()
         self.port = port
         self.running = True
-        
+
     def run(self):
         """Run the single instance server"""
         try:
@@ -283,7 +268,7 @@ class SingleInstanceServer(QThread):
             server_socket.bind(('localhost', self.port))
             server_socket.listen(1)
             server_socket.settimeout(1.0)  # Timeout for checking self.running
-            
+
             while self.running:
                 try:
                     client_socket, _ = server_socket.accept()
@@ -300,7 +285,7 @@ class SingleInstanceServer(QThread):
             server_socket.close()
         except Exception as e:
             log(f"Failed to start server: {e}", level="error", category="network")
-    
+
     def stop(self):
         """Stop the server"""
         self.running = False

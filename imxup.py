@@ -37,6 +37,8 @@ def debug_print(msg):
 
 import requests
 from requests.adapters import HTTPAdapter
+import pycurl
+import io
 import json
 import argparse
 import sys
@@ -47,6 +49,7 @@ from typing import Optional, Any
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import concurrent.futures
 import time
+import threading
 from tqdm import tqdm
 from src.utils.format_utils import format_binary_size, format_binary_rate
 from src.utils.logger import log
@@ -57,8 +60,9 @@ import platform
 import sqlite3
 import glob
 import winreg
+import mimetypes
 
-__version__ = "0.5.03"  # Application version number
+__version__ = "0.5.05"  # Application version number
 
 # Build User-Agent string (defer debug_print until after console allocation)
 _system = platform.system()
@@ -931,6 +935,102 @@ def save_gallery_artifacts(
 
     return written_paths
 
+
+class UploadProgressWrapper:
+    """File-like wrapper that tracks bytes during network transmission.
+
+    When requests.post() uploads multipart form data, it calls read() on this
+    wrapper repeatedly during HTTP transmission. This allows accurate tracking
+    of actual network bytes sent (not disk reads).
+    """
+
+    def __init__(self, file_data: bytes, callback=None):
+        """Initialize wrapper with file data and optional progress callback.
+
+        Args:
+            file_data: Raw bytes to upload
+            callback: Optional callable(bytes_sent, total_bytes) invoked on each read()
+        """
+        import io
+        self._bytesio = io.BytesIO(file_data)
+        self.callback = callback
+        self.total_size = len(file_data)
+
+    def read(self, size=-1):
+        """Read chunk from buffer and invoke callback. Called by requests during upload."""
+        print(f"[BANDWIDTH DEBUG] read() called: size={size}, position={self._bytesio.tell()}/{self.total_size}", flush=True)
+        chunk = self._bytesio.read(size)
+        print(f"[BANDWIDTH DEBUG] read {len(chunk) if chunk else 0} bytes, new pos={self._bytesio.tell()}", flush=True)
+        if chunk and self.callback:
+            try:
+                # Report cumulative bytes sent
+                self.callback(self._bytesio.tell(), self.total_size)
+                print(f"[BANDWIDTH DEBUG] callback invoked successfully", flush=True)
+            except Exception as e:
+                print(f"[BANDWIDTH DEBUG] callback FAILED: {e}", flush=True)
+        return chunk
+
+    def __len__(self):
+        """Return total size for Content-Length header."""
+        return self.total_size
+
+    def seek(self, offset, whence=0):
+        """Seek to position (required for retry logic)."""
+        return self._bytesio.seek(offset, whence)
+
+    def tell(self):
+        """Return current position."""
+        return self._bytesio.tell()
+
+    def __getattr__(self, name):
+        """Proxy any missing attributes to underlying BytesIO."""
+        return getattr(self._bytesio, name)
+
+
+class ProgressEstimator:
+    """Estimates upload progress during network transmission using a background thread."""
+
+    def __init__(self, file_size, callback):
+        self.file_size = file_size
+        self.callback = callback
+        self.start_time = time.time()
+        self.stop_flag = False
+        self.thread = None
+
+    def start(self):
+        """Start progress estimation thread."""
+        import threading
+        self.stop_flag = False
+        self.thread = threading.Thread(target=self._estimate_progress, daemon=True)
+        self.thread.start()
+
+    def stop(self):
+        """Stop progress estimation thread."""
+        self.stop_flag = True
+        if self.thread:
+            self.thread.join(timeout=0.5)
+
+    def _estimate_progress(self):
+        """Estimate upload progress based on typical upload speed."""
+        # Assume 2 MB/s average upload speed for estimation
+        estimated_speed_bps = 2 * 1024 * 1024  #  2 MB/s
+
+        while not self.stop_flag:
+            elapsed = time.time() - self.start_time
+            estimated_bytes = min(int(elapsed * estimated_speed_bps), self.file_size)
+
+            if self.callback:
+                try:
+                    self.callback(estimated_bytes, self.file_size)
+                except Exception:
+                    pass
+
+            if estimated_bytes >= self.file_size:
+                break
+
+            time.sleep(0.1)  # Update every 100ms
+
+
 class ImxToUploader:
     # Type hints for attributes set externally by GUI worker threads
     worker_thread: Optional[Any] = None  # Set by UploadWorker when used in GUI mode
@@ -1038,7 +1138,10 @@ class ImxToUploader:
         # Connection tracking for visibility
         self._upload_count = 0
         self._connection_info_logged = False
-        
+
+        # Thread-local storage for curl handles (connection reuse)
+        self._curl_local = threading.local()
+
         # Set headers based on authentication method
         if self.api_key:
             self.headers = {
@@ -1047,7 +1150,7 @@ class ImxToUploader:
             }
         else:
             self.headers = {}
-        
+
         # Session for web interface with connection pooling
         parallel_batch_size = defaults.get('parallel_batch_size', 4)
         self.session = self._setup_resilient_session(parallel_batch_size)
@@ -1059,6 +1162,19 @@ class ImxToUploader:
             'DNT': '1'
         })
     
+    def _get_thread_curl(self):
+        """Get or create a thread-local curl handle for connection reuse.
+
+        Each thread gets its own curl handle that persists across uploads,
+        allowing TCP connection reuse for better performance.
+        """
+        if not hasattr(self._curl_local, 'curl'):
+            # Create new curl handle for this thread
+            import pycurl
+            self._curl_local.curl = pycurl.Curl()
+            log(f"Created new curl handle for thread {threading.current_thread().name}", level="debug", category="network")
+        return self._curl_local.curl
+
     def login(self):
         """Login to imx.to web interface"""
         if not self.username or not self.password:
@@ -1473,7 +1589,7 @@ class ImxToUploader:
             log(f"Error updating gallery visibility: {str(e)}", level="error")
             return False
     
-    def upload_image(self, image_path, create_gallery=False, gallery_id=None, thumbnail_size=3, thumbnail_format=2, thread_session=None):
+    def upload_image(self, image_path, create_gallery=False, gallery_id=None, thumbnail_size=3, thumbnail_format=2, thread_session=None, progress_callback=None):
         """
         Upload a single image to imx.to
 
@@ -1484,6 +1600,7 @@ class ImxToUploader:
             thumbnail_size (int): Thumbnail size (1=100x100, 2=180x180, 3=250x250, 4=300x300, 6=150x150)
             thumbnail_format (int): Thumbnail format (1=Fixed width, 2=Proportional, 3=Square, 4=Fixed height)
             thread_session (requests.Session): Optional thread-local session for concurrent uploads
+            progress_callback (callable): Optional callback(bytes_sent, total_bytes) for bandwidth tracking
 
         Returns:
             dict: API response
@@ -1506,59 +1623,101 @@ class ImxToUploader:
             log(f"Read {os.path.basename(image_path)} ({len(file_data)/1024/1024:.1f}MB) in {file_read_time:.3f}s", level="debug", category="fileio")
             self._first_read_logged = True
 
-        # Prepare files and data for upload (file handle now closed)
-        files = {'image': (os.path.basename(image_path), file_data)}
-        data = {}
-
-        if create_gallery:
-            data['create_gallery'] = 'true'
-
-        if gallery_id:
-            data['gallery_id'] = gallery_id
-
-        # Request output format as JSON with all data
-        data['format'] = 'all'
-        data['thumbnail_size'] = str(thumbnail_size)
-        data['thumbnail_format'] = str(thumbnail_format)
+        # Use pycurl for upload with real progress tracking
+        content_type = mimetypes.guess_type(image_path)[0] or 'application/octet-stream'
 
         try:
-            # Track upload count and log connection pool info
             self._upload_count += 1
 
-            # Log connection pool info on first upload to show reuse configuration
-            if not self._connection_info_logged:
-                adapter = self.session.get_adapter('https://')
-                pool_size = getattr(adapter, 'pool_maxsize', 'unknown')
-                pool_conns = getattr(adapter, 'pool_connections', 'unknown')
-                log(f"Session pool configured: max_size={pool_size}, pool_connections={pool_conns}", level="debug", category="network")
-                self._connection_info_logged = True
+            # Setup progress callback wrapper
+            callback_count = [0]  # Mutable to track in closure
 
-            # Use configurable timeouts to prevent indefinite hangs
-            timeout_tuple = (self.upload_connect_timeout, self.upload_read_timeout)
-            #print(f"DEBUG REQUEST HEADERS BEING SENT: {self.headers}")
-            response = session.post(
-                self.upload_url,
-                headers=self.headers,
-                files=files,
-                data=data,
-                timeout=timeout_tuple
-            )
+            def curl_progress_callback(download_total, downloaded, upload_total, uploaded):
+                callback_count[0] += 1
+                if callback_count[0] % 10 == 0:  # Log every 10th callback
+                    print(f"[PYCURL] Callback #{callback_count[0]}: {uploaded}/{upload_total} bytes", flush=True)
 
-            if response.status_code == 200:
-                json_response = response.json()
-                # DEBUG: Log response headers to find session state
-                #print(f"DEBUG API RESPONSE HEADERS: {dict(response.headers)}")
+                if progress_callback and upload_total > 0:
+                    try:
+                        progress_callback(int(uploaded), int(upload_total))
+                    except Exception as e:
+                        print(f"[PYCURL] Callback error: {e}", flush=True)
+                return 0
+
+            # Get or create thread-local curl handle (connection reuse)
+            curl = self._get_thread_curl()
+
+            # Reset curl handle to clear previous settings (but keep connection alive)
+            curl.reset()
+
+            # CRITICAL: Clear all cookies to prevent contamination between galleries
+            # curl.reset() preserves cookies, but we need fresh cookies per gallery
+            # to ensure images don't end up in the wrong gallery due to PHP session cookies
+            curl.setopt(pycurl.COOKIELIST, "ALL")
+
+            response_buffer = io.BytesIO()
+
+            # Set URL
+            curl.setopt(pycurl.URL, self.upload_url)
+
+            # Set headers
+            headers_list = [f'{k}: {v}' for k, v in self.headers.items()]
+            curl.setopt(pycurl.HTTPHEADER, headers_list)
+
+            # Prepare multipart form data
+            form_data = [
+                ('image', (
+                    pycurl.FORM_BUFFER, os.path.basename(image_path),
+                    pycurl.FORM_BUFFERPTR, file_data,
+                    pycurl.FORM_CONTENTTYPE, content_type
+                )),
+                ('format', 'all'),
+                ('thumbnail_size', str(thumbnail_size)),
+                ('thumbnail_format', str(thumbnail_format))
+            ]
+
+            if create_gallery:
+                form_data.append(('create_gallery', 'true'))
+            if gallery_id:
+                form_data.append(('gallery_id', gallery_id))
+
+            curl.setopt(pycurl.HTTPPOST, form_data)
+
+            # Set progress tracking
+            if progress_callback:
+                curl.setopt(pycurl.NOPROGRESS, 0)
+                curl.setopt(pycurl.XFERINFOFUNCTION, curl_progress_callback)
+
+            # Capture response
+            curl.setopt(pycurl.WRITEDATA, response_buffer)
+
+            # Set timeouts
+            curl.setopt(pycurl.CONNECTTIMEOUT, self.upload_connect_timeout)
+            curl.setopt(pycurl.TIMEOUT, self.upload_read_timeout)
+
+            # Perform upload
+            curl.perform()
+
+            # Get response
+            status_code = curl.getinfo(pycurl.RESPONSE_CODE)
+            # NOTE: Don't close curl handle - keep connection alive for reuse
+
+            if status_code == 200:
+                json_response = json.loads(response_buffer.getvalue())
                 return json_response
             else:
-                raise Exception(f"Upload failed with status code {response.status_code}: {response.text}")
+                response_text = response_buffer.getvalue().decode('utf-8', errors='replace')
+                raise Exception(f"Upload failed with status code {status_code}: {response_text}")
 
-        except requests.exceptions.Timeout as e:
-            # Include actual timeout values in error for debugging
-            raise Exception(f"Upload timeout (connect={self.upload_connect_timeout}s, read={self.upload_read_timeout}s): {str(e)}")
-        except requests.exceptions.ConnectionError as e:
-            raise Exception(f"Connection error during upload: {str(e)}")
-        except requests.exceptions.RequestException as e:
-            raise Exception(f"Network error during upload: {str(e)}")
+        except pycurl.error as e:
+            # pycurl error codes: 28=timeout, 7=connection failed, etc.
+            error_code, error_msg = e.args if len(e.args) == 2 else (0, str(e))
+            if error_code == 28:
+                raise Exception(f"Upload timeout (connect={self.upload_connect_timeout}s, read={self.upload_read_timeout}s): {error_msg}")
+            elif error_code == 7:
+                raise Exception(f"Connection error during upload: {error_msg}")
+            else:
+                raise Exception(f"Network error during upload (code {error_code}): {error_msg}")
     
     def upload_folder(self, folder_path, gallery_name=None, thumbnail_size=3, thumbnail_format=2, max_retries=3, parallel_batch_size=4, template_name="default"):
         """

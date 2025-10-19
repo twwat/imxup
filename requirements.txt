@@ -1,5 +1,7 @@
 # Core dependencies
+python>=3.14
 requests==2.31.0
+pycurl==7.45.7
 PyQt6==6.9.1
 PyQt6-Qt6==6.9.1
 PyQt6_sip==13.10.2

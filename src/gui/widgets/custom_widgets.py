@@ -625,18 +625,50 @@ class CopyableLogListWidget(QListWidget):
             widget = widget.parent() if hasattr(widget, 'parent') else None
 
     def show_context_menu(self, position):
-        """Show context menu with copy option"""
+        """Show context menu with copy, log viewer, and log settings options"""
         selected_items = self.selectedItems()
-        if not selected_items:
-            return
 
         menu = QMenu(self)
-        copy_action = menu.addAction("Copy")
-        copy_action.setShortcut("Ctrl+C")
+
+        # Add Copy action only if items are selected
+        copy_action = None
+        if selected_items:
+            copy_action = menu.addAction("Copy")
+            copy_action.setShortcut("Ctrl+C")
+            menu.addSeparator()
+
+        # Add Log Viewer and Log Settings (always available)
+        log_viewer_action = menu.addAction("Log Viewer")
+        log_settings_action = menu.addAction("Log Settings")
 
         action = menu.exec(self.mapToGlobal(position))
+
         if action == copy_action:
             self.copy_selected_items()
+        elif action == log_viewer_action:
+            self._open_log_viewer_popup()
+        elif action == log_settings_action:
+            self._open_log_settings()
+
+    def _open_log_viewer_popup(self):
+        """Open the standalone log viewer popup"""
+        # Find parent main window
+        widget = self.parent()
+        while widget:
+            if hasattr(widget, 'open_log_viewer_popup'):
+                widget.open_log_viewer_popup()
+                break
+            widget = widget.parent() if hasattr(widget, 'parent') else None
+
+    def _open_log_settings(self):
+        """Open comprehensive settings to logs tab"""
+        # Find parent main window
+        widget = self.parent()
+        while widget:
+            if hasattr(widget, 'open_log_viewer'):
+                widget.open_log_viewer()
+                break
+            widget = widget.parent() if hasattr(widget, 'parent') else None
 
 
 class CopyableLogTableWidget(QTableWidget):

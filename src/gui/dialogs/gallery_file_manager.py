@@ -117,9 +117,9 @@ class GalleryFileManagerDialog(QDialog):
         
         # Gallery info - compact header
         info_group = QGroupBox("Gallery Information")
-        info_group.setMaximumHeight(60)  # Keep it tiny
+        info_group.setMaximumHeight(80)  # Keep it tiny
         info_layout = QVBoxLayout()
-        info_layout.setContentsMargins(6, 6, 6, 6)
+        info_layout.setContentsMargins(5, 5, 5, 5)
         
         self.info_label = QLabel()
         self.update_info_label()
@@ -203,7 +203,7 @@ class GalleryFileManagerDialog(QDialog):
             total = len(self.original_files) + len(self.added_files) - len(self.removed_files)
             valid = sum(1 for v, _ in self.file_status.values() if v)
             invalid = total - valid
-            
+
             # Use different formatting for failed galleries
             if status == "failed":
                 info = f"<b><span style='color: red;'>Status: FAILED</span></b> | "
@@ -217,10 +217,17 @@ class GalleryFileManagerDialog(QDialog):
                 info += f"<b>Total Files:</b> {total} | "
                 info += f"<b>Valid:</b> {valid} | "
                 info += f"<b>Invalid:</b> {invalid}"
-                
+
                 if self.gallery_item.status == "completed":
                     info += f" | <b>Uploaded:</b> {self.gallery_item.uploaded_images}"
-            
+
+            # Add source information
+            if getattr(self.gallery_item, 'is_from_archive', False) and getattr(self.gallery_item, 'source_archive_path', None):
+                archive_name = os.path.basename(self.gallery_item.source_archive_path)
+                info += f"<br><b>Source:</b> {archive_name} (archive)"
+            else:
+                info += f"<br><b>Source:</b> {self.gallery_path}"
+
             self.info_label.setText(info)
         else:
             self.info_label.setText("Gallery information not available")

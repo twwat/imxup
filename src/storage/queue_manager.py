@@ -78,6 +78,10 @@ class GalleryQueueItem:
     custom3: str = ""
     custom4: str = ""
 
+    # Archive support
+    source_archive_path: Optional[str] = None
+    is_from_archive: bool = False
+
 
 class QueueManager(QObject):
     """Manages the gallery upload queue with persistence"""
@@ -838,7 +842,9 @@ class QueueManager(QObject):
             'custom1': item.custom1,
             'custom2': item.custom2,
             'custom3': item.custom3,
-            'custom4': item.custom4
+            'custom4': item.custom4,
+            'source_archive_path': item.source_archive_path,
+            'is_from_archive': item.is_from_archive
         }
     
     def load_persistent_queue(self):
@@ -907,10 +913,11 @@ class QueueManager(QObject):
         # Restore optional fields
         for field in ['total_size', 'avg_width', 'avg_height', 'max_width',
                      'max_height', 'min_width', 'min_height', 'scan_complete',
-                     'uploaded_bytes', 'final_kibps', 'error_message']:
+                     'uploaded_bytes', 'final_kibps', 'error_message',
+                     'source_archive_path', 'is_from_archive']:
             if field in data:
                 setattr(item, field, data[field])
-        
+
         if 'uploaded_files' in data:
             item.uploaded_files = set(data['uploaded_files'])
         if 'uploaded_images_data' in data:
