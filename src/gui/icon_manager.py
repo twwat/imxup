@@ -14,10 +14,17 @@ class IconManager:
     
     # Hybrid icon mapping: string for auto-invert, list for manual light/dark pairs
     ICON_MAP = {
-        # Status icons           Light icon                      Dark icon        
+        # Status icons           Light icon                      Dark icon
         'status_completed':     ['status_completed-light.png',  'status_completed-dark.png'],
-        'status_failed':        ['status_failed-light.png',     'status_failed-dark.png'], 
-        'status_uploading':     ['status_uploading-light.png',  'status_uploading-dark.png'],
+        'status_failed':        ['status_failed-light.png',     'status_failed-dark.png'],
+        'status_uploading':     ['status_uploading-light.png',  'status_uploading-dark.png'],  # Fallback for single frame
+        # Multi-frame uploading animation (4 frames, light/dark variants)
+        'status_uploading_frame_0': ['status_uploading-001-light.png', 'status_uploading-001-dark.png'],
+        'status_uploading_frame_1': ['status_uploading-002-light.png', 'status_uploading-002-dark.png'],
+        'status_uploading_frame_2': ['status_uploading-003-light.png', 'status_uploading-003-dark.png'],
+        'status_uploading_frame_3': ['status_uploading-004-light.png', 'status_uploading-004-dark.png'],
+        'status_uploading_frame_4': ['status_uploading-005-light.png', 'status_uploading-005-dark.png'],
+        'status_uploading_frame_5': ['status_uploading-006-light.png', 'status_uploading-006-dark.png'],
         'status_paused':        ['status_paused-light.png',     'status_paused-dark.png'],
         'status_queued':        ['status_queued-light.png',     'status_queued-dark.png'],
         'status_ready':         ['status_ready-light.png',      'status_ready-dark.png'],
@@ -248,7 +255,7 @@ class IconManager:
             print(f"Warning: Invalid icon configuration: {config}")
             return None
     
-    def get_status_icon(self, status: str, theme_mode: Optional[str] = None, is_selected: bool = False, requested_size: int = 32) -> QIcon:
+    def get_status_icon(self, status: str, theme_mode: Optional[str] = None, is_selected: bool = False, requested_size: int = 32, animation_frame: int = 0) -> QIcon:
         """
         Get icon for a specific status with theme/selection awareness.
 
@@ -257,11 +264,17 @@ class IconManager:
             theme_mode: Theme mode string ('light', 'dark', or None for auto-detect)
             is_selected: Whether icon is for selected row
             requested_size: Size to generate inverted icons at (for quality)
+            animation_frame: Frame number for animated icons (0-3 for uploading)
 
         Returns:
             QIcon object
         """
-        icon_key = f'status_{status}'
+        # Use frame-based icon for uploading status (all frames, including 0)
+        if status == 'uploading':
+            icon_key = f'status_uploading_frame_{animation_frame % 6}'
+        else:
+            icon_key = f'status_{status}'
+
         return self.get_icon(icon_key, theme_mode, is_selected, requested_size)
 
     def get_action_icon(self, action: str, theme_mode: Optional[str] = None, is_selected: bool = False) -> QIcon:

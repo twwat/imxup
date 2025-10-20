@@ -2891,6 +2891,12 @@ class ImxUploadGUI(QMainWindow):
         self._background_update_timer.timeout.connect(self._process_background_tab_updates)
         self._background_update_timer.setSingleShot(True)
 
+        # Uploading status icon animation (4 frames, 200ms each)
+        self._upload_animation_frame = 0
+        self._upload_animation_timer = QTimer()
+        self._upload_animation_timer.timeout.connect(self._advance_upload_animation)
+        self._upload_animation_timer.start(200)  # Animate every 200ms
+
         # Speed updates timer for regular refresh - COMPLETELY DISABLED
         # There's a critical issue with _update_transfer_speed_display causing hangs
         pass  # Removed timer completely
@@ -3178,7 +3184,9 @@ class ImxUploadGUI(QMainWindow):
                 return
 
             # Use IconManager with explicit theme and selection awareness
-            icon = icon_mgr.get_status_icon(status, theme_mode=self._current_theme_mode, is_selected=is_selected)
+            # Pass animation frame for uploading status
+            animation_frame = self._upload_animation_frame if status == "uploading" else 0
+            icon = icon_mgr.get_status_icon(status, theme_mode=self._current_theme_mode, is_selected=is_selected, animation_frame=animation_frame)
             tooltip = icon_mgr.get_status_tooltip(status)
 
             # Debug: Log when setting scanning icons
@@ -3239,7 +3247,132 @@ class ImxUploadGUI(QMainWindow):
 
         except Exception as e:
             print(f"Warning: Error in selection change handler: {e}")
-    
+
+    def _confirm_removal(self, paths: list, names: list = None, operation_type: str = "delete") -> bool:
+        """
+        Shared confirmation dialog for removal operations.
+
+        Args:
+            paths: List of gallery paths to remove
+            names: Optional list of gallery names (for better messaging)
+            operation_type: Type of operation ("delete", "clear", etc.)
+
+        Returns:
+            True if user confirmed, False otherwise
+        """
+        count = len(paths)
+        if count == 0:
+            return False
+
+        # Check if confirmation is needed
+        defaults = load_user_defaults()
+        confirm_delete = defaults.get('confirm_delete', True)
+
+        # Always confirm if removing more than 50 galleries
+        needs_confirmation = confirm_delete or count > 50
+
+        if not needs_confirmation:
+            return True
+
+        # Build confirmation message
+        if operation_type == "clear":
+            # For clear completed, distinguish between completed and failed
+            if count == 1:
+                message = "Remove 1 completed/failed gallery from the queue?"
+            else:
+                message = f"Remove {count} completed/failed galleries from the queue?"
+        else:
+            # For delete operations
+            if count == 1 and names:
+                message = f"Delete '{names[0]}'?"
+            else:
+                message = f"Delete {count} selected {'gallery' if count == 1 else 'galleries'}?"
+
+        # Add warning for large deletions
+        if count > 50:
+            message += f"\n\n⚠️ This will remove {count} galleries."
+
+        reply = QMessageBox.question(
+            self,
+            "Confirm Removal" if operation_type == "clear" else "Confirm Delete",
+            message,
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No  # Default to No for safety
+        )
+
+        return reply == QMessageBox.StandardButton.Yes
+
+    def _remove_galleries_batch(self, paths_to_remove: list, callback=None):
+        """
+        Non-blocking batch removal of galleries from table.
+
+        Args:
+            paths_to_remove: List of gallery paths to remove
+            callback: Optional function to call when complete
+        """
+        if not paths_to_remove:
+            if callback:
+                callback()
+            return
+
+        # Process table removals in batches to avoid UI freeze
+        batch_size = 10
+        total_count = len(paths_to_remove)
+
+        def process_batch(index):
+            try:
+                # Process one batch
+                batch_end = min(index + batch_size, total_count)
+                batch = paths_to_remove[index:batch_end]
+
+                for path in batch:
+                    self._remove_gallery_from_table(path)
+
+                # Check if more batches remain
+                if batch_end < total_count:
+                    # Schedule next batch (yields to event loop)
+                    QTimer.singleShot(0, lambda: process_batch(batch_end))
+                else:
+                    # All done - call completion callback
+                    if callback:
+                        callback()
+            except Exception as e:
+                log(f"Error in batch removal: {e}", level="error", category="ui")
+                if callback:
+                    callback()
+
+        # Start batch processing
+        QTimer.singleShot(0, lambda: process_batch(0))
+
+    def _advance_upload_animation(self):
+        """Advance the upload animation frame and update uploading icons"""
+        # Increment frame (0-3, cycling)
+        self._upload_animation_frame = (self._upload_animation_frame + 1) % 4
+
+        # Get the actual table (handle tabbed interface)
+        table = self.gallery_table
+        if hasattr(self.gallery_table, 'gallery_table'):
+            table = self.gallery_table.gallery_table
+
+        # Update only rows with "uploading" status (efficient since there's typically only 1)
+        try:
+            for row in range(table.rowCount()):
+                # Check if row is hidden (filtered out by tab)
+                if table.isRowHidden(row):
+                    continue
+
+                name_item = table.item(row, GalleryTableWidget.COL_NAME)
+                if name_item:
+                    path = name_item.data(Qt.ItemDataRole.UserRole)
+                    if path and path in self.queue_manager.items:
+                        item = self.queue_manager.items[path]
+                        if item.status == "uploading":
+                            # Update only uploading icons with new frame
+                            self._set_status_cell_icon(row, item.status)
+        except Exception as e:
+            # Silently ignore errors (table might be updating)
+            pass
+
     def refresh_icons(self):
         """Alias for refresh_all_status_icons - called from settings dialog"""
         self.refresh_all_status_icons()
@@ -3663,7 +3796,7 @@ class ImxUploadGUI(QMainWindow):
         self.settings_group.setProperty("class", "settings-group")
         settings_layout = QGridLayout(self.settings_group)
         try:
-            settings_layout.setContentsMargins(10, 10, 10, 10)
+            settings_layout.setContentsMargins(8, 8, 8, 8)
             settings_layout.setHorizontalSpacing(12)
             settings_layout.setVerticalSpacing(8)
         except Exception as e:
@@ -3671,7 +3804,7 @@ class ImxUploadGUI(QMainWindow):
             raise
         
         settings_layout.setVerticalSpacing(5)
-        settings_layout.setHorizontalSpacing(10)
+        settings_layout.setHorizontalSpacing(8)
         
         # Set fixed row heights to prevent shifting when save button appears
         settings_layout.setRowMinimumHeight(0, 28)  # Thumbnail Size row
@@ -5328,9 +5461,13 @@ class ImxUploadGUI(QMainWindow):
         """Remove a gallery from the table and update mappings"""
         if path not in self.path_to_row:
             return
-            
+
         row_to_remove = self.path_to_row[path]
-        self.gallery_table.removeRow(row_to_remove)
+        # Get the actual table (handle tabbed interface)
+        table = self.gallery_table
+        if hasattr(self.gallery_table, 'gallery_table'):
+            table = self.gallery_table.gallery_table
+        table.removeRow(row_to_remove)
         
         # Update mappings - shift all rows after the removed one
         del self.path_to_row[path]
@@ -5426,8 +5563,10 @@ class ImxUploadGUI(QMainWindow):
                 # Fallback to direct update
                 QTimer.singleShot(0, lambda: self._populate_table_row(row, item))
         else:
-            # If update fails, try full table refresh as last resort
-            QTimer.singleShot(0, self.update_queue_display)
+            # If update fails, refresh filter as fallback
+            log(f"Row update failed for {path}, refreshing filter", level="warning", category="ui")
+            if hasattr(self.gallery_table, 'refresh_filter'):
+                QTimer.singleShot(0, self.gallery_table.refresh_filter)
     
     
     def _refresh_button_icons(self):
@@ -5916,248 +6055,6 @@ class ImxUploadGUI(QMainWindow):
         if updated_any:
             QTimer.singleShot(0, self._update_button_counts)
 
-    def update_queue_display(self):
-        """Update the gallery table display - DEPRECATED: Use targeted updates instead"""
-        items = self.queue_manager.get_all_items()
-        # Minimize UI stall for large refreshes
-        try:
-            prev_updates_enabled = self.gallery_table.updatesEnabled()
-            prev_sorting_enabled = self.gallery_table.isSortingEnabled()
-            self.gallery_table.setUpdatesEnabled(False)
-            self.gallery_table.setSortingEnabled(False)
-            self.gallery_table.blockSignals(True)
-        except Exception:
-            prev_updates_enabled = True
-            prev_sorting_enabled = False
-        
-        
-        # Determine theme for contrast-aware rendering
-        try:
-            pal = self.palette()
-            _bg = pal.window().color()
-            _is_dark_mode = (0.2126 * _bg.redF() + 0.7152 * _bg.greenF() + 0.0722 * _bg.blueF()) < 0.5
-        except Exception:
-            _is_dark_mode = False
-        _light_fg = QColor(255, 255, 255)
-        _dark_fg = QColor(0, 0, 0)
-
-        # Preserve scroll position
-        scrollbar = self.gallery_table.verticalScrollBar()
-        scroll_position = scrollbar.value()
-        
-        # Preserve current selection by path (column 1 holds path in UserRole)
-        selected_paths = set()
-        try:
-            selected_rows = {it.row() for it in self.gallery_table.selectedItems()}
-            for row in selected_rows:
-                name_item = self.gallery_table.item(row, GalleryTableWidget.COL_NAME)
-                if name_item:
-                    path = name_item.data(Qt.ItemDataRole.UserRole)
-                    if path:
-                        selected_paths.add(path)
-        except Exception as e:
-            log(f"Exception in main_window: {e}", level="error", category="ui")
-            raise
-        
-        # Clear the table first
-        self.gallery_table.clearContents()
-        self.gallery_table.setRowCount(len(items))
-
-        # CRITICAL FIX: Clear and rebuild path mappings when rebuilding table
-        log(f"update_queue_display clearing path mappings and rebuilding", level="debug")
-        self.path_to_row.clear()
-        self.row_to_path.clear()
-
-        # Populate the table with current items
-        for row, item in enumerate(items):
-            # Update path mappings for this row
-            self.path_to_row[item.path] = row
-            self.row_to_path[row] = item.path
-
-            # Order number (numeric-sorting item)
-            order_item = NumericTableWidgetItem(item.insertion_order)
-            order_item.setFlags(order_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
-            order_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-            self.gallery_table.setItem(row, GalleryTableWidget.COL_ORDER, order_item)
-            
-            # Gallery name
-            name_item = QTableWidgetItem(item.name or "Unknown")
-            name_item.setFlags(name_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
-            name_item.setData(Qt.ItemDataRole.UserRole, item.path)
-            self.gallery_table.setItem(row, GalleryTableWidget.COL_NAME, name_item)
-            
-            # Uploaded count
-            uploaded_text = f"{item.uploaded_images}/{item.total_images}" if item.total_images > 0 else "0/?"
-            uploaded_item = QTableWidgetItem(uploaded_text)
-            uploaded_item.setFlags(uploaded_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
-            uploaded_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-            self.gallery_table.setItem(row, GalleryTableWidget.COL_UPLOADED, uploaded_item)
-            
-            # Progress bar - always create fresh widget to avoid sorting issues
-            progress_widget = TableProgressWidget()
-            progress_widget.update_progress(item.progress, item.status)
-            self.gallery_table.setCellWidget(row, 3, progress_widget)
-            
-            # Status: icon and text
-            self._set_status_cell_icon(row, item.status)
-            self._set_status_text_cell(row, item.status)
-
-
-            # Added time
-            added_text, added_tooltip = format_timestamp_for_display(item.added_time)
-            added_item = QTableWidgetItem(added_text)
-            added_item.setFlags(added_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
-            added_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-            if added_tooltip:
-                added_item.setToolTip(added_tooltip)
-            self.gallery_table.setItem(row, GalleryTableWidget.COL_ADDED, added_item)
-
-            # Finished time
-            finished_text, finished_tooltip = format_timestamp_for_display(item.finished_time)
-            finished_item = QTableWidgetItem(finished_text)
-            finished_item.setFlags(finished_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
-            finished_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-            if finished_tooltip:
-                finished_item.setToolTip(finished_tooltip)
-                pass
-            self.gallery_table.setItem(row, GalleryTableWidget.COL_FINISHED, finished_item)
-            
-            # Size (from scanned total_size) - ONLY set if not already set to avoid unnecessary updates
-            existing_size_item = self.gallery_table.item(row, GalleryTableWidget.COL_SIZE)
-            if existing_size_item is None or not existing_size_item.text().strip():
-                size_text = ""
-                try:
-                    size_text = format_binary_size(int(getattr(item, 'total_size', 0) or 0), precision=2)
-                except Exception:
-                    try:
-                        size_text = f"{int(getattr(item, 'total_size', 0) or 0)} B"
-                    except Exception:
-                        size_text = ""
-                size_item = QTableWidgetItem(size_text)
-                size_item.setFlags(size_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
-                size_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)  # Consistent with other method
-                self.gallery_table.setItem(row, GalleryTableWidget.COL_SIZE, size_item)
-
-            # Transfer speed
-            # - Uploading: current_kibps live value
-            # - Completed/Failed: final_kibps if present; else compute from uploaded_bytes and elapsed
-            transfer_text = ""
-            current_rate_kib = float(getattr(item, 'current_kibps', 0.0) or 0.0)
-            final_rate_kib = float(getattr(item, 'final_kibps', 0.0) or 0.0)
-            try:
-                from imxup import format_binary_rate
-                if item.status == "uploading" and current_rate_kib > 0:
-                    transfer_text = format_binary_rate(current_rate_kib, precision=2)
-                elif final_rate_kib > 0:
-                    transfer_text = format_binary_rate(final_rate_kib, precision=2)
-                else:
-                    transfer_text = ""
-            except Exception:
-                # Fallback formatting
-                rate = current_rate_kib if item.status == "uploading" else final_rate_kib
-                transfer_text = self._format_rate_consistent(rate) if rate > 0 else ""
-            xfer_item = QTableWidgetItem(transfer_text)
-            xfer_item.setFlags(xfer_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
-            xfer_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-            try:
-                # Active transfers bold and full opacity; completed/failed semi-opaque and not bold
-                theme_mode = self._current_theme_mode
-                if item.status == "uploading" and transfer_text:
-                    # Highlight active transfer in blue-ish to match header accent, keep contrast in both themes
-                    xfer_item.setForeground(QColor(173, 216, 255, 255) if theme_mode == 'dark' else QColor(20, 90, 150, 255))
-                elif item.status in ("completed", "failed") and transfer_text:
-                    # Slightly more opaque for finished items (+0.2 alpha)
-                    xfer_item.setForeground(QColor(255, 255, 255, 230) if theme_mode == 'dark' else QColor(0, 0, 0, 190))
-            except Exception as e:
-                log(f"Exception in main_window: {e}", level="error", category="ui")
-                raise
-            self.gallery_table.setItem(row, GalleryTableWidget.COL_TRANSFER, xfer_item)
-
-            # Template name: center only if it fits; otherwise left-align so the start is visible
-            template_text = item.template_name or ""
-            tmpl_item = QTableWidgetItem(template_text)
-            tmpl_item.setFlags(tmpl_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
-            try:
-                col_width = self.gallery_table.columnWidth(GalleryTableWidget.COL_TEMPLATE)
-                fm = QFontMetrics(tmpl_item.font())
-                text_w = fm.horizontalAdvance(template_text) + 8
-                if text_w <= col_width:
-                    tmpl_item.setTextAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter)
-                else:
-                    tmpl_item.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
-            except Exception:
-                tmpl_item.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
-                pass
-            self.gallery_table.setItem(row, GalleryTableWidget.COL_TEMPLATE, tmpl_item)
-
-            # Renamed status: handled by _populate_table_row() and on_gallery_renamed() signal
-            # No need to duplicate the logic here
-
-            # Action buttons - always create fresh widget to avoid sorting issues
-            action_widget = ActionButtonWidget(parent=self)
-            # Connect button signals with proper closure capture
-            # Disable Start while scanning
-            action_widget.start_btn.setEnabled(item.status != "scanning")
-            action_widget.start_btn.clicked.connect(lambda checked, path=item.path: self.start_single_item(path))
-            action_widget.stop_btn.clicked.connect(lambda checked, path=item.path: self.stop_single_item(path))
-            action_widget.view_btn.clicked.connect(lambda checked, path=item.path: self.handle_view_button(path))
-            action_widget.cancel_btn.clicked.connect(lambda checked, path=item.path: self.cancel_single_item(path))
-            # Optional: use the pause action when item is uploading, cancel when queued
-            action_widget.update_buttons(item.status)
-            self.gallery_table.setCellWidget(row, 7, action_widget)
-        
-        # Restore selection
-        if selected_paths:
-            try:
-                for row in range(self.gallery_table.rowCount()):
-                    name_item = self.gallery_table.item(row, GalleryTableWidget.COL_NAME)
-                    if name_item and name_item.data(Qt.ItemDataRole.UserRole) in selected_paths:
-                        self.gallery_table.selectRow(row)
-            except Exception as e:
-                log(f"Exception in main_window: {e}", level="error", category="ui")
-                raise
-        
-        # Restore scroll position
-        scrollbar = self.gallery_table.verticalScrollBar()
-        scrollbar.setValue(scroll_position)
-        
-        # Enable/disable top-level controls and update counts on buttons
-        try:
-            count_startable = sum(1 for item in items if item.status in ("ready", "paused", "incomplete", "scanning"))
-            count_pausable = sum(1 for item in items if item.status in ("uploading", "queued"))
-            count_completed = sum(1 for item in items if item.status == "completed")
-
-            # Update button texts with counts (preserve leading space for visual alignment)
-            self.start_all_btn.setText(" Start All " + (f"({count_startable})" if count_startable else ""))
-            self.pause_all_btn.setText(" Pause All " + (f"({count_pausable})" if count_pausable else ""))
-            self.clear_completed_btn.setText(" Clear Completed " + (f"({count_completed})" if count_completed else ""))
-
-            # Enable/disable based on counts
-            self.start_all_btn.setEnabled(count_startable > 0)
-            self.pause_all_btn.setEnabled(count_pausable > 0)
-            self.clear_completed_btn.setEnabled(count_completed > 0)
-
-            # Disable settings when any items are queued or uploading
-            count_queued = sum(1 for item in items if item.status == "queued")
-            has_uploading = any(item.status == "uploading" for item in items)
-            try:
-                self.settings_group.setEnabled(not (count_queued > 0 or has_uploading))
-            except Exception as e:
-                log(f"Exception in main_window: {e}", level="error", category="ui")
-                raise
-        except Exception:
-            # Controls may not be initialized yet during early calls
-            pass
-        finally:
-            # Restore table UI state
-            try:
-                self.gallery_table.blockSignals(False)
-                self.gallery_table.setSortingEnabled(prev_sorting_enabled)
-                self.gallery_table.setUpdatesEnabled(prev_updates_enabled)
-            except Exception as e:
-                log(f"Exception in main_window: {e}", level="error", category="ui")
-                raise
-    
     def _get_current_tab_items(self):
         """Get items filtered by current tab"""
         current_tab = getattr(self.gallery_table, 'current_tab', 'Main')
@@ -6829,6 +6726,16 @@ class ImxUploadGUI(QMainWindow):
             log(f"Exception in main_window: {e}", level="error", category="ui")
             raise
 
+    def show_status_message(self, message: str, timeout: int = 2500):
+        """
+        Show a temporary message in the status bar.
+
+        Args:
+            message: Message to display
+            timeout: Duration in milliseconds (default 2500ms = 2.5 seconds)
+        """
+        self.statusBar().showMessage(message, timeout)
+
     def open_log_viewer(self):
         """Open comprehensive settings to logs tab"""
         self.open_comprehensive_settings(tab_index=5)  # Logs tab
@@ -7151,76 +7058,97 @@ class ImxUploadGUI(QMainWindow):
             log(f"No queued items to reset", level="debug", category="queue")
     
     def clear_completed(self):
-        """Clear completed uploads from queue with minimal UI work"""
-        try:
-            self.clear_completed_btn.setEnabled(False)
-            QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
-        except Exception as e:
-            log(f"Exception in main_window: {e}", level="error", category="ui")
-            raise
-        # Pause periodic updates to avoid contention
-        try:
-            self.update_timer.stop()
-        except Exception as e:
-            log(f"Exception in main_window: {e}", level="error", category="ui")
-            raise
-        try:
-            # Pre-check counts for diagnostics
-            items_snapshot = self._get_current_tab_items()
-            count_completed = sum(1 for it in items_snapshot if it.status == "completed")
-            count_failed = sum(1 for it in items_snapshot if it.status == "failed")
-            log(f"Attempting clear: completed={count_completed}, failed={count_failed}", category="queue", level="debug")
+        """Clear completed/failed uploads - non-blocking with confirmation"""
+        log(f"clear_completed() called", category="queue", level="info")
 
-            # Get paths to remove before clearing them
-            comp_paths = [it.path for it in items_snapshot if it.status in ("completed", "failed")]
-            
-            # Clear only items from current tab
-            if comp_paths:
-                try:
-                    removed_count = self.queue_manager.remove_items(comp_paths)
-                except Exception:
-                    removed_count = 0
-            else:
-                removed_count = 0
-            
-            if removed_count > 0:
-                # Remove items from table using targeted removal
-                for path in comp_paths:
-                    self._remove_gallery_from_table(path)
-                
-                log(f"Cleared {removed_count} completed uploads", category="queue", level="info")
-                # Defer database save to prevent GUI freeze
-                from PyQt6.QtCore import QTimer
-                QTimer.singleShot(100, self.queue_manager.save_persistent_queue)
-            else:
-                log(f"No completed uploads to clear", category="queue", level="debug")
-        finally:
+        # Get items to clear
+        items_snapshot = self._get_current_tab_items()
+        log(f"Got {len(items_snapshot)} items from current tab", category="queue", level="info")
+
+        comp_paths = [it.path for it in items_snapshot if it.status in ("completed", "failed")]
+        log(f"Found {len(comp_paths)} completed/failed galleries", category="queue", level="info")
+
+        if not comp_paths:
+            log(f"No completed uploads to clear", category="queue", level="info")
+            return
+
+        # Use shared confirmation method
+        log(f"Requesting user confirmation", category="queue", level="info")
+        if not self._confirm_removal(comp_paths, operation_type="clear"):
+            log(f"User cancelled clear operation", category="queue", level="info")
+            return
+
+        log(f"User confirmed - proceeding with clear", category="queue", level="info")
+
+        # User confirmed - proceed with removal
+        count_completed = sum(1 for it in items_snapshot if it.status == "completed")
+        count_failed = sum(1 for it in items_snapshot if it.status == "failed")
+        log(f"Clearing: completed={count_completed}, failed={count_failed}", category="queue", level="info")
+
+        # Remove from queue manager (same pattern as delete_selected_items)
+        removed_paths = []
+        for path in comp_paths:
+            # Remove from memory
+            with QMutexLocker(self.queue_manager.mutex):
+                if path in self.queue_manager.items:
+                    del self.queue_manager.items[path]
+                    removed_paths.append(path)
+                    log(f"Removed: {os.path.basename(path)}", category="queue", level="debug")
+
+        if not removed_paths:
+            log(f"No items actually removed", level="info", category="queue")
+            return
+
+        log(f"Removed {len(removed_paths)} items from queue manager", category="queue", level="info")
+
+        # Completion callback
+        def on_clear_complete():
+            # Renumber remaining items
+            self.queue_manager._renumber_items()
+
+            # Delete from database
             try:
-                self.update_timer.start(500)
-                QApplication.restoreOverrideCursor()
-                self.clear_completed_btn.setEnabled(True)
+                self.queue_manager.store._executor.submit(self.queue_manager.store.delete_by_paths, removed_paths)
             except Exception as e:
-                log(f"Exception in main_window: {e}", level="error", category="ui")
-                raise
+                log(f"Error deleting from database: {e}", level="error", category="queue")
+
+            # Update button counts and progress
+            QTimer.singleShot(0, self._update_counts_and_progress)
+
+            # Update tab tooltips
+            if hasattr(self.gallery_table, '_update_tab_tooltips'):
+                self.gallery_table._update_tab_tooltips()
+
+            # Save queue
+            QTimer.singleShot(100, self.queue_manager.save_persistent_queue)
+            log(f"✓ Cleared {len(removed_paths)} completed/failed uploads", category="queue", level="info")
+
+        # Use non-blocking batch removal for table updates
+        self._remove_galleries_batch(removed_paths, callback=on_clear_complete)
     
     def delete_selected_items(self):
-        """Delete selected items from the queue"""
+        """Delete selected items from the queue - non-blocking"""
         log(f"Delete method called", level="debug", category="queue")
-        
+
+        # Get the actual table (handle tabbed interface)
+        table = self.gallery_table
+        if hasattr(self.gallery_table, 'gallery_table'):
+            table = self.gallery_table.gallery_table
+
         selected_rows = set()
-        for item in self.gallery_table.selectedItems():
+        for item in table.selectedItems():
             selected_rows.add(item.row())
-        
+
         if not selected_rows:
             log(f"No rows selected", level="debug", category="queue")
             return
-        
+
         # Get paths directly from the table cells to handle sorting correctly
         selected_paths = []
         selected_names = []
-        
+
         for row in selected_rows:
-            name_item = self.gallery_table.item(row, GalleryTableWidget.COL_NAME)  # Gallery name is in column 1
+            name_item = table.item(row, GalleryTableWidget.COL_NAME)
             if name_item:
                 path = name_item.data(Qt.ItemDataRole.UserRole)
                 if path:
@@ -7230,113 +7158,66 @@ class ImxUploadGUI(QMainWindow):
                     log(f"No path data for row {row}", level="debug", category="queue")
             else:
                 log(f"No name item for row {row}", level="debug", category="queue")
-        
+
         if not selected_paths:
             log(f"No valid paths found", level="debug", category="queue")
             return
+
+        # Use shared confirmation method
+        if not self._confirm_removal(selected_paths, selected_names, operation_type="delete"):
+            log(f"User cancelled delete", level="debug", category="ui")
+            return
         
-        # Check if confirmation is needed (setting managed by comprehensive settings)
-        from imxup import load_user_defaults
-        if load_user_defaults().get('confirm_delete', True):
-            if len(selected_paths) == 1:
-                message = f"Delete '{selected_names[0]}'?"
-            else:
-                message = f"Delete {len(selected_paths)} selected items?"
-            
-            reply = QMessageBox.question(
-                self,
-                "Confirm Delete",
-                message,
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                QMessageBox.StandardButton.No
-            )
-            
-            if reply != QMessageBox.StandardButton.Yes:
-                log(f"User cancelled delete", level="debug", category="ui")
-                return
-        
-        # Delete items using the working approach
-        removed_count = 0
+        # Remove from queue manager first (filter out uploading items)
         removed_paths = []
         log(f"Attempting to delete {len(selected_paths)} paths", level="debug", category="queue")
-        
+
         for path in selected_paths:
             # Check if item is currently uploading
             item = self.queue_manager.get_item(path)
             if item:
-                log(f"Item found with status: {item.status}", level="debug", category="queue")
                 if item.status == "uploading":
                     log(f"Skipping uploading item: {path}")
                     continue
             else:
                 log(f"Item not found in queue manager: {path}", level="debug", category="queue")
                 continue
-            
+
             # Remove from memory
             with QMutexLocker(self.queue_manager.mutex):
                 if path in self.queue_manager.items:
                     del self.queue_manager.items[path]
-                    removed_count += 1
                     removed_paths.append(path)
                     log(f"Deleted: {os.path.basename(path)}", category="queue", level="debug")
-                else:
-                    log(f"Item not found in items dict: {path}", category="queue", level="debug")
-        
-        # Update table display AFTER all deletions to avoid mapping conflicts
-        if removed_paths:
-            log(f"Updating table display for {len(removed_paths)} deleted items", category="queue", level="debug")
-            
-            # Get rows to remove and sort in descending order to avoid index shifting issues
-            rows_to_remove = []
-            for path in removed_paths:
-                if path in self.path_to_row:
-                    row_to_remove = self.path_to_row[path]
-                    rows_to_remove.append((row_to_remove, path))
-                    log(f"Will remove table row {row_to_remove} for {os.path.basename(path)}", level="debug")
-                else:
-                    log(f"No table row mapping found for {os.path.basename(path)}", level="debug")
-            
-            # Sort by row number descending (highest first) to avoid index problems
-            rows_to_remove.sort(key=lambda x: x[0], reverse=True)
-            
-            # Remove rows from highest to lowest
-            for row_to_remove, path in rows_to_remove:
-                log(f"Removing table row {row_to_remove}", level="debug")
-                self.gallery_table.removeRow(row_to_remove)
-            
-            # Rebuild path mappings after all removals
-            self._rebuild_path_mappings()
-            
-            # Force immediate table update
-            QApplication.processEvents()
-        
-        if removed_count > 0:
+
+        if not removed_paths:
+            log(f"No items removed (all were uploading or not found)", level="debug", category="queue")
+            return
+
+        # Completion callback to run after batch removal finishes
+        def on_deletion_complete():
             # Renumber remaining items
             self.queue_manager._renumber_items()
-            
+
             # Delete from database to prevent reloading
             try:
-                self.queue_manager.store._executor.submit(self.queue_manager.store.delete_by_paths, selected_paths)
+                self.queue_manager.store._executor.submit(self.queue_manager.store.delete_by_paths, removed_paths)
             except Exception as e:
-                log(f"Exception in main_window: {e}", level="error", category="ui")
-                raise
-            
-            # Display updated by row removal above
-            log(f"Updated display", level="debug")
-            
-            # Force GUI update
-            QApplication.processEvents()
+                log(f"Error deleting from database: {e}", level="error", category="ui")
+
+            # Update button counts and progress
+            QTimer.singleShot(0, self._update_counts_and_progress)
 
             # Update tab tooltips to reflect new counts
             if hasattr(self.gallery_table, '_update_tab_tooltips'):
                 self.gallery_table._update_tab_tooltips()
 
             # Defer database save to prevent GUI freeze
-            from PyQt6.QtCore import QTimer
             QTimer.singleShot(100, self.queue_manager.save_persistent_queue)
-            log(f"✓ Deleted {removed_count} items from queue", level="info", category="queue")
-        else:
-            log(f"⚠ No items were deleted (some may be currently uploading)", level="info")
+            log(f"✓ Deleted {len(removed_paths)} items from queue", level="info", category="queue")
+
+        # Use non-blocking batch removal for table updates
+        self._remove_galleries_batch(removed_paths, callback=on_deletion_complete)
     
 
     
