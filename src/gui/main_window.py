@@ -133,36 +133,23 @@ def get_icon(icon_key: str, theme_mode: str | None = None) -> QIcon:
     return QIcon()
 
 def check_stored_credentials():
-    """Check if credentials are stored"""
-    config = configparser.ConfigParser()
-    config_file = get_config_path()
-    
-    if os.path.exists(config_file):
-        config.read(config_file)
-        if 'CREDENTIALS' in config:
-            auth_type = config.get('CREDENTIALS', 'auth_type', fallback='username_password')
-            
-            if auth_type == 'username_password':
-                username = config.get('CREDENTIALS', 'username', fallback='')
-                encrypted_password = config.get('CREDENTIALS', 'password', fallback='')
-                if username and encrypted_password:
-                    return True
-            elif auth_type == 'api_key':
-                encrypted_api_key = config.get('CREDENTIALS', 'api_key', fallback='')
-                if encrypted_api_key:
-                    return True
+    """Check if credentials are stored in QSettings (Registry)"""
+    from imxup import get_credential
+
+    username = get_credential('username')
+    encrypted_password = get_credential('password')
+    encrypted_api_key = get_credential('api_key')
+
+    # Have username+password OR api_key
+    if (username and encrypted_password) or encrypted_api_key:
+        return True
     return False
 
 def api_key_is_set() -> bool:
-    """Return True if an API key exists in the credentials config, regardless of auth_type."""
-    config = configparser.ConfigParser()
-    config_file = get_config_path()
-    if os.path.exists(config_file):
-        config.read(config_file)
-        if 'CREDENTIALS' in config:
-            encrypted_api_key = config.get('CREDENTIALS', 'api_key', fallback='')
-            return bool(encrypted_api_key)
-    return False
+    """Return True if an API key exists in QSettings (Registry)."""
+    from imxup import get_credential
+    encrypted_api_key = get_credential('api_key')
+    return bool(encrypted_api_key)
 
     
 
@@ -1704,6 +1691,10 @@ class GalleryTableWidget(QTableWidget):
         (15, 'CUSTOM2',     'Custom2',      100, 'Interactive', True,  True),
         (16, 'CUSTOM3',     'Custom3',      100, 'Interactive', True,  True),
         (17, 'CUSTOM4',     'Custom4',      100, 'Interactive', True,  True),
+        (18, 'EXT1',        'ext1',         100, 'Interactive', True,  True),
+        (19, 'EXT2',        'ext2',         100, 'Interactive', True,  True),
+        (20, 'EXT3',        'ext3',         100, 'Interactive', True,  True),
+        (21, 'EXT4',        'ext4',         100, 'Interactive', True,  True),
     ]
 
     # Create class attributes dynamically from COLUMNS definition
@@ -1784,7 +1775,7 @@ class GalleryTableWidget(QTableWidget):
 
         # Apply numeric column delegate for smaller font and right alignment
         numeric_delegate = NumericColumnDelegate(self)
-        for col in [self.COL_UPLOADED, self.COL_ADDED, self.COL_FINISHED, self.COL_SIZE, self.COL_TRANSFER, self.COL_STATUS_TEXT, self.COL_GALLERY_ID, self.COL_CUSTOM1, self.COL_CUSTOM2, self.COL_CUSTOM3, self.COL_CUSTOM4]:
+        for col in [self.COL_UPLOADED, self.COL_ADDED, self.COL_FINISHED, self.COL_SIZE, self.COL_TRANSFER, self.COL_STATUS_TEXT, self.COL_GALLERY_ID, self.COL_CUSTOM1, self.COL_CUSTOM2, self.COL_CUSTOM3, self.COL_CUSTOM4, self.COL_EXT1, self.COL_EXT2, self.COL_EXT3, self.COL_EXT4]:
             self.setItemDelegateForColumn(col, numeric_delegate)
 
         # Make Status and Action columns non-resizable
@@ -1836,6 +1827,13 @@ class GalleryTableWidget(QTableWidget):
                 # Note: flag stays True so scrolling continues to refresh new rows
                 # It will be cleared when all rows are eventually visible or manually cleared
 
+    def _edit_next_cell(self, row, column):
+        """Helper to start editing a specific cell (used after Enter key)"""
+        item = self.item(row, column)
+        if item:
+            self.setCurrentItem(item)
+            self.editItem(item)
+
     def keyPressEvent(self, event):
         """Handle key press events"""
         if event.key() == Qt.Key.Key_Delete:
@@ -1846,14 +1844,33 @@ class GalleryTableWidget(QTableWidget):
                     widget.delete_selected_items()
                     return
                 widget = widget.parent()
-        #elif event.key() == Qt.Key.Key_Return or event.key() == Qt.Key.Key_Enter:
-        #    # Handle Enter key for completed items
-        #    self.handle_enter_or_double_click()
+        elif event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            # Check if we're editing a custom or ext column
+            current_index = self.currentIndex()
+            if current_index.isValid():
+                column = current_index.column()
+                row = current_index.row()
+
+                # Handle Enter key for editable columns (custom1-4, ext1-4)
+                if (GalleryTableWidget.COL_CUSTOM1 <= column <= GalleryTableWidget.COL_CUSTOM4) or \
+                   (GalleryTableWidget.COL_EXT1 <= column <= GalleryTableWidget.COL_EXT4):
+                    # Let Qt's default behavior commit the data FIRST (closes editor if open)
+                    super().keyPressEvent(event)
+
+                    # Always move to next row if not at bottom (use QTimer to delay)
+                    if row < self.rowCount() - 1:
+                        QTimer.singleShot(0, lambda r=row+1, c=column: self._edit_next_cell(r, c))
+                    # If at bottom row, we're done (already called super, so it's saved)
+
+                    return  # Event handled
+
+            # For other columns, use default Enter behavior (commented out above)
+            # self.handle_enter_or_double_click()
         elif event.modifiers() == Qt.KeyboardModifier.ControlModifier and event.key() == Qt.Key.Key_C:
             # Handle Ctrl+C for copying BBCode
             self.handle_copy_bbcode()
             return  # Don't call super() to prevent default table copy behavior
-        
+
         super().keyPressEvent(event)
     
     def mouseDoubleClickEvent(self, event):
@@ -2807,18 +2824,20 @@ class ImxUploadGUI(QMainWindow):
         self._last_scan_states = {}  # Maps path -> scan_complete status
         
         # Cache expensive operations to improve responsiveness
-        if self.splash:
-            self.splash.set_status("cache")
         self._format_functions_cached = False
         
         # Pre-cache formatting functions to avoid blocking imports during progress updates
+        if self.splash:
+            self.splash.set_status("_cache_format_function()")
         self._cache_format_functions()
         
         # Initialize non-blocking components
         if self.splash:
-            self.splash.set_status("Thread Pool")
+            self.splash.set_status("QThreadPool()")
         self._thread_pool = QThreadPool()
         self._thread_pool.setMaxThreadCount(4)  # Limit background threads
+        if self.splash:
+            self.splash.set_status("IconCache()")
         self._icon_cache = IconCache()
         
         # Initialize progress update batcher
@@ -2837,13 +2856,13 @@ class ImxUploadGUI(QMainWindow):
         
         # Single instance server
         if self.splash:
-            self.splash.set_status("Single Instance Server")
+            self.splash.set_status("SingleInstanceServer()")
         self.server = SingleInstanceServer()
         self.server.folder_received.connect(self.add_folder_from_command_line)
         self.server.start()
         
         if self.splash:
-            self.splash.set_status("User Interface")
+            self.splash.set_status("setup_ui()")
         self.setup_ui()
         
         # Initialize context menu helper and connect to the actual table widget
@@ -2870,11 +2889,13 @@ class ImxUploadGUI(QMainWindow):
             print(f"ERROR: Could not connect context menu helper: {e}")
         
         if self.splash:
-            self.splash.set_status("Menu Bar")
+            self.splash.set_status("setup_menu_bar()")
         self.setup_menu_bar()
+        if self.splash:
+            self.splash.set_status("setup_system_tray()")
         self.setup_system_tray()
         if self.splash:
-            self.splash.set_status("Saved Settings")
+            self.splash.set_status("restore_settings()")
         self.restore_settings()
        
         # Easter egg - quick gremlin flash
@@ -2891,7 +2912,7 @@ class ImxUploadGUI(QMainWindow):
         self._background_update_timer.timeout.connect(self._process_background_tab_updates)
         self._background_update_timer.setSingleShot(True)
 
-        # Uploading status icon animation (4 frames, 200ms each)
+        # Uploading status icon animation (7 frames, 200ms each)
         self._upload_animation_frame = 0
         self._upload_animation_timer = QTimer()
         self._upload_animation_timer.timeout.connect(self._advance_upload_animation)
@@ -3346,8 +3367,8 @@ class ImxUploadGUI(QMainWindow):
 
     def _advance_upload_animation(self):
         """Advance the upload animation frame and update uploading icons"""
-        # Increment frame (0-3, cycling)
-        self._upload_animation_frame = (self._upload_animation_frame + 1) % 4
+        # Increment frame (0-6, cycling through 7 frames)
+        self._upload_animation_frame = (self._upload_animation_frame + 1) % 7
 
         # Get the actual table (handle tabbed interface)
         table = self.gallery_table
@@ -3450,8 +3471,8 @@ class ImxUploadGUI(QMainWindow):
 
                 if hasattr(self, 'theme_toggle_btn'):
                     theme_icon = icon_mgr.get_icon('toggle_theme')
-                    if not theme_icon.isNull():
-                        self.theme_toggle_btn.setIcon(theme_icon)
+                    #if not theme_icon.isNull():
+                    #    self.theme_toggle_btn.setIcon(theme_icon)
 
         except Exception as e:
             print(f"Error refreshing icons: {e}")
@@ -3890,7 +3911,7 @@ class ImxUploadGUI(QMainWindow):
         # Public gallery setting moved to comprehensive settings only
 
         # Auto-start uploads checkbox
-        self.auto_start_upload_check = QCheckBox("Auto-start uploads")
+        self.auto_start_upload_check = QCheckBox("Start uploads automatically")
         self.auto_start_upload_check.setChecked(defaults.get('auto_start_upload', False))
         self.auto_start_upload_check.setToolTip("Automatically start uploads when scanning completes instead of waiting for manual start")
         self.auto_start_upload_check.toggled.connect(self.on_setting_changed)
@@ -3982,9 +4003,9 @@ class ImxUploadGUI(QMainWindow):
             icon_mgr = get_icon_manager()
             if icon_mgr:
                 theme_icon = icon_mgr.get_icon('toggle_theme')
-                if not theme_icon.isNull():
-                    self.theme_toggle_btn.setIcon(theme_icon)
-                    self.theme_toggle_btn.setIconSize(QSize(20, 20))
+                #if not theme_icon.isNull():
+                #    self.theme_toggle_btn.setIcon(theme_icon)
+                #    self.theme_toggle_btn.setIconSize(QSize(20, 20))
         except Exception as e:
             log(f"Exception in main_window: {e}", level="error", category="ui")
             raise
@@ -4291,14 +4312,13 @@ class ImxUploadGUI(QMainWindow):
             action_credentials.triggered.connect(lambda: self.open_comprehensive_settings(tab_index=1))
             action_templates = settings_menu.addAction("Templates")
             action_templates.triggered.connect(lambda: self.open_comprehensive_settings(tab_index=2))
-            action_tabs = settings_menu.addAction("Tabs")
-            action_tabs.triggered.connect(lambda: self.open_comprehensive_settings(tab_index=3))
-            action_icons = settings_menu.addAction("Icons")
-            action_icons.triggered.connect(lambda: self.open_comprehensive_settings(tab_index=4))
+            # Tabs and Icons menu items removed - functionality hidden
             action_logs = settings_menu.addAction("Logs")
-            action_logs.triggered.connect(lambda: self.open_comprehensive_settings(tab_index=5))
+            action_logs.triggered.connect(lambda: self.open_comprehensive_settings(tab_index=3))
             action_scanning = settings_menu.addAction("Image Scanning")
-            action_scanning.triggered.connect(lambda: self.open_comprehensive_settings(tab_index=6))
+            action_scanning.triggered.connect(lambda: self.open_comprehensive_settings(tab_index=4))
+            action_external_apps = settings_menu.addAction("External Apps")
+            action_external_apps.triggered.connect(lambda: self.open_comprehensive_settings(tab_index=5))
 
             # Tools menu
             tools_menu = menu_bar.addMenu("Tools")
@@ -4911,6 +4931,8 @@ class ImxUploadGUI(QMainWindow):
             self.tray_icon.setIcon(QIcon(pixmap))
             
             # Tray menu
+            if self.splash:
+                self.splash.set_status("tray menu")
             tray_menu = QMenu()
             
             show_action = tray_menu.addAction("Show")
@@ -4919,6 +4941,8 @@ class ImxUploadGUI(QMainWindow):
             quit_action = tray_menu.addAction("Quit")
             quit_action.triggered.connect(self.close)
             
+            if self.splash:
+                self.splash.set_status("context menu")
             self.tray_icon.setContextMenu(tray_menu)
             self.tray_icon.activated.connect(self.tray_icon_activated)
             self.tray_icon.show()
@@ -4939,6 +4963,7 @@ class ImxUploadGUI(QMainWindow):
             self.worker.gallery_failed.connect(self.on_gallery_failed)
             self.worker.gallery_exists.connect(self.on_gallery_exists)
             self.worker.gallery_renamed.connect(self.on_gallery_renamed)
+            self.worker.ext_fields_updated.connect(self.on_ext_fields_updated)
             self.worker.log_message.connect(self.add_log_message)
             self.worker.queue_stats.connect(self.on_queue_stats)
             self.worker.bandwidth_updated.connect(self.on_bandwidth_updated)
@@ -5818,6 +5843,20 @@ class ImxUploadGUI(QMainWindow):
                 custom_item.setFlags(custom_item.flags() | Qt.ItemFlag.ItemIsEditable)
                 custom_item.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
                 actual_table.setItem(row, col_idx, custom_item)
+
+            # Ext columns - editable (populated by external apps or user)
+            for col_idx, field_name in [
+                (GalleryTableWidget.COL_EXT1, 'ext1'),
+                (GalleryTableWidget.COL_EXT2, 'ext2'),
+                (GalleryTableWidget.COL_EXT3, 'ext3'),
+                (GalleryTableWidget.COL_EXT4, 'ext4')
+            ]:
+                value = getattr(item, field_name, '') or ''
+                ext_item = QTableWidgetItem(str(value))
+                # Make ext columns editable
+                ext_item.setFlags(ext_item.flags() | Qt.ItemFlag.ItemIsEditable)
+                ext_item.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+                actual_table.setItem(row, col_idx, ext_item)
         finally:
             # Restore original signal state
             actual_table.blockSignals(signals_blocked)
@@ -6558,7 +6597,77 @@ class ImxUploadGUI(QMainWindow):
         except Exception as e:
             log(f"Exception in main_window: {e}", level="error", category="ui")
             raise
-    
+
+    def on_ext_fields_updated(self, path: str, ext_fields: dict):
+        """Handle ext fields update from external hooks"""
+        try:
+            log(f"on_ext_fields_updated called: path={path}, ext_fields={ext_fields}", level="info", category="hooks")
+
+            # Update the item in the queue manager (already done by worker)
+            # Just need to refresh the table row to show the new values
+            with QMutexLocker(self.queue_manager.mutex):
+                if path in self.queue_manager.items:
+                    item = self.queue_manager.items[path]
+                    log(f"Found item in queue_manager: {item.name}", level="debug", category="hooks")
+
+                    # Get the actual table widget - SAME PATTERN AS _populate_table_row
+                    actual_table = getattr(self.gallery_table, 'gallery_table', self.gallery_table)
+                    log(f"Using actual_table: {type(actual_table).__name__}", level="debug", category="hooks")
+
+                    # Find the table row for this gallery
+                    if actual_table:
+                        log(f"Table has {actual_table.rowCount()} rows", level="debug", category="hooks")
+                        for row in range(actual_table.rowCount()):
+                            name_item = actual_table.item(row, GalleryTableWidget.COL_NAME)
+                            if name_item and name_item.data(Qt.ItemDataRole.UserRole) == path:
+                                log(f"Found matching row {row} for path {path}", level="debug", category="hooks")
+
+                                # Block signals to prevent itemChanged events during update
+                                signals_blocked = actual_table.signalsBlocked()
+                                actual_table.blockSignals(True)
+                                try:
+                                    # Update ext columns
+                                    for ext_field, value in ext_fields.items():
+                                        log(f"Processing ext_field={ext_field}, value={value}", level="debug", category="hooks")
+                                        if ext_field == 'ext1':
+                                            ext_item = QTableWidgetItem(str(value))
+                                            ext_item.setFlags(ext_item.flags() | Qt.ItemFlag.ItemIsEditable)
+                                            ext_item.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+                                            actual_table.setItem(row, GalleryTableWidget.COL_EXT1, ext_item)
+                                            log(f"Set COL_EXT1 (col {GalleryTableWidget.COL_EXT1}) to: {value}", level="info", category="hooks")
+                                        elif ext_field == 'ext2':
+                                            ext_item = QTableWidgetItem(str(value))
+                                            ext_item.setFlags(ext_item.flags() | Qt.ItemFlag.ItemIsEditable)
+                                            ext_item.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+                                            actual_table.setItem(row, GalleryTableWidget.COL_EXT2, ext_item)
+                                            log(f"Set COL_EXT2 (col {GalleryTableWidget.COL_EXT2}) to: {value}", level="info", category="hooks")
+                                        elif ext_field == 'ext3':
+                                            ext_item = QTableWidgetItem(str(value))
+                                            ext_item.setFlags(ext_item.flags() | Qt.ItemFlag.ItemIsEditable)
+                                            ext_item.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+                                            actual_table.setItem(row, GalleryTableWidget.COL_EXT3, ext_item)
+                                            log(f"Set COL_EXT3 (col {GalleryTableWidget.COL_EXT3}) to: {value}", level="info", category="hooks")
+                                        elif ext_field == 'ext4':
+                                            ext_item = QTableWidgetItem(str(value))
+                                            ext_item.setFlags(ext_item.flags() | Qt.ItemFlag.ItemIsEditable)
+                                            ext_item.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+                                            actual_table.setItem(row, GalleryTableWidget.COL_EXT4, ext_item)
+                                            log(f"Set COL_EXT4 (col {GalleryTableWidget.COL_EXT4}) to: {value}", level="info", category="hooks")
+                                finally:
+                                    # Restore original signal state
+                                    actual_table.blockSignals(signals_blocked)
+
+                                log(f"Updated ext fields in GUI for {item.name}: {ext_fields}", level="info", category="hooks")
+                                break
+                    else:
+                        log(f"Table is None!", level="error", category="hooks")
+                else:
+                    log(f"Path {path} not found in queue_manager.items", level="error", category="hooks")
+        except Exception as e:
+            log(f"Error updating ext fields in GUI: {e}", level="error", category="hooks")
+            import traceback
+            traceback.print_exc()
+
     
     def on_completion_processed(self, path: str):
         """Handle when background completion processing is done"""
@@ -6989,14 +7098,33 @@ class ImxUploadGUI(QMainWindow):
             log(f"No BBCode file found for: {folder_name}", level="info", category="fileio")
     
     def start_all_uploads(self):
-        """Start all ready uploads"""
+        """Start all ready uploads in currently visible rows"""
         start_time = time.time()
         log(f"start_all_uploads() started at {start_time:.6f}", level="debug", category="timing")
-        
+
         get_items_start = time.time()
-        items = self._get_current_tab_items()
+        # Get items that are currently visible (not filtered out) - same logic as _update_button_counts()
+        visible_items = []
+        all_items = self.queue_manager.get_all_items()
+
+        # Build path to row mapping for quick lookup
+        path_to_row = {}
+        for row in range(self.gallery_table.rowCount()):
+            name_item = self.gallery_table.item(row, GalleryTableWidget.COL_NAME)
+            if name_item:
+                path = name_item.data(Qt.ItemDataRole.UserRole)
+                if path:
+                    path_to_row[path] = row
+
+        # Only process items that are visible in the current filter
+        for item in all_items:
+            row = path_to_row.get(item.path)
+            if row is not None and not self.gallery_table.isRowHidden(row):
+                visible_items.append(item)
+
+        items = visible_items
         get_items_duration = time.time() - get_items_start
-        log(f"_get_current_tab_items() took {get_items_duration:.6f}s", level="debug", category="timing")
+        log(f"Getting visible items took {get_items_duration:.6f}s, found {len(items)} visible items", level="debug", category="timing")
         started_count = 0
         started_paths = []
         item_processing_start = time.time()
@@ -7540,10 +7668,11 @@ class ImxUploadGUI(QMainWindow):
         event.accept()
 
     def on_gallery_cell_clicked(self, row, column):
-        """Handle clicks on gallery table cells for template editing and custom column editing."""
-       
-        # Handle custom columns (13-16) with single-click editing
-        if GalleryTableWidget.COL_CUSTOM1 <= column <= GalleryTableWidget.COL_CUSTOM4:
+        """Handle clicks on gallery table cells for template editing and custom/ext column editing."""
+
+        # Handle custom columns (14-17) and ext columns (18-21) with single-click editing
+        if (GalleryTableWidget.COL_CUSTOM1 <= column <= GalleryTableWidget.COL_CUSTOM4) or \
+           (GalleryTableWidget.COL_EXT1 <= column <= GalleryTableWidget.COL_EXT4):
             # Get the correct table and trigger edit mode
             table = getattr(self.gallery_table, 'gallery_table', self.gallery_table)
             if table:
@@ -7551,7 +7680,7 @@ class ImxUploadGUI(QMainWindow):
                 if item:
                     table.editItem(item)
             return
-            
+
         # Only handle clicks on template column for template editing
         if column != GalleryTableWidget.COL_TEMPLATE:
             return
@@ -7811,48 +7940,86 @@ class ImxUploadGUI(QMainWindow):
     def _on_table_item_changed(self, item):
         """Handle table item changes to persist custom columns"""
         try:
-            # Only handle custom columns (13-16: Custom1, Custom2, Custom3, Custom4)
-            column = item.column()
-            if column < GalleryTableWidget.COL_CUSTOM1 or column > GalleryTableWidget.COL_CUSTOM4:
+            # Prevent recursion - use a simple flag
+            if hasattr(self, '_in_item_changed_handler') and self._in_item_changed_handler:
                 return
-            
-            # Skip if this is just table population/refresh (signals should be blocked during those operations)
-            table = getattr(self.gallery_table, 'gallery_table', self.gallery_table)
-            if not table:
-                return
-                
-            # Skip if table signals are blocked (indicates programmatic update)
-            if table.signalsBlocked():
-                return
-            
-            # Get the gallery path from the name column (UserRole data)
-            row = item.row()
-            name_item = table.item(row, GalleryTableWidget.COL_NAME)
-            if not name_item:
-                return
-                
-            path = name_item.data(Qt.ItemDataRole.UserRole)
-            if not path:
-                return
-            
-            # Map column to field name
-            field_names = {
-                GalleryTableWidget.COL_CUSTOM1: 'custom1',
-                GalleryTableWidget.COL_CUSTOM2: 'custom2',
-                GalleryTableWidget.COL_CUSTOM3: 'custom3',
-                GalleryTableWidget.COL_CUSTOM4: 'custom4'
-            }
-            field_name = field_names.get(column)
-            if not field_name:
-                return
-                
-            # Get the new value and update the database
-            new_value = item.text() or ''
-            if self.queue_manager:
-                self.queue_manager.update_custom_field(path, field_name, new_value)
-            
+
+            self._in_item_changed_handler = True
+            try:
+                # Handle custom columns (14-17) and ext columns (18-21)
+                column = item.column()
+                is_custom = GalleryTableWidget.COL_CUSTOM1 <= column <= GalleryTableWidget.COL_CUSTOM4
+                is_ext = GalleryTableWidget.COL_EXT1 <= column <= GalleryTableWidget.COL_EXT4
+
+                if not (is_custom or is_ext):
+                    return
+
+                # Get the actual table that contains this item (important for tabbed galleries!)
+                table = item.tableWidget()
+                if not table:
+                    log(f"Item has no parent table widget, skipping", level="warning", category="ui")
+                    return
+
+                # Skip if table signals are blocked (indicates programmatic update)
+                if table.signalsBlocked():
+                    return
+
+                # Get the gallery path from the name column (UserRole data)
+                row = item.row()
+                name_item = table.item(row, GalleryTableWidget.COL_NAME)
+                if not name_item:
+                    return
+
+                path = name_item.data(Qt.ItemDataRole.UserRole)
+                if not path:
+                    return
+
+                # Map column to field name
+                field_names = {
+                    GalleryTableWidget.COL_CUSTOM1: 'custom1',
+                    GalleryTableWidget.COL_CUSTOM2: 'custom2',
+                    GalleryTableWidget.COL_CUSTOM3: 'custom3',
+                    GalleryTableWidget.COL_CUSTOM4: 'custom4',
+                    GalleryTableWidget.COL_EXT1: 'ext1',
+                    GalleryTableWidget.COL_EXT2: 'ext2',
+                    GalleryTableWidget.COL_EXT3: 'ext3',
+                    GalleryTableWidget.COL_EXT4: 'ext4',
+                }
+                field_name = field_names.get(column)
+                if not field_name:
+                    return
+
+                # Get the new value and update the database
+                new_value = item.text() or ''
+                field_type = "ext" if is_ext else "custom"
+                log(f"{field_type.capitalize()} field changed: {field_name}={new_value} for {os.path.basename(path)}", level="debug", category="ui")
+
+                if self.queue_manager:
+                    # Block signals while updating to prevent cascade
+                    signals_blocked = table.signalsBlocked()
+                    table.blockSignals(True)
+                    try:
+                        # Update in-memory item
+                        with QMutexLocker(self.queue_manager.mutex):
+                            if path in self.queue_manager.items:
+                                item_obj = self.queue_manager.items[path]
+                                setattr(item_obj, field_name, new_value)
+
+                        # Save to database (outside mutex to avoid deadlock)
+                        self.queue_manager.store.update_item_custom_field(path, field_name, new_value)
+
+                        # Increment version
+                        with QMutexLocker(self.queue_manager.mutex):
+                            self.queue_manager._inc_version()
+                    finally:
+                        table.blockSignals(signals_blocked)
+            finally:
+                self._in_item_changed_handler = False
+
         except Exception as e:
             log(f"Error handling table item change: {e}", category="ui", level="error")
+            import traceback
+            traceback.print_exc()
 
     def _should_auto_regenerate_bbcode(self, path: str) -> bool:
         """Check if BBCode should be auto-regenerated for a gallery"""

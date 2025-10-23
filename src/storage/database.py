@@ -205,6 +205,13 @@ def _run_migrations(conn: sqlite3.Connection) -> None:
                 print(f"Adding {custom_field} column to galleries table...")
                 conn.execute(f"ALTER TABLE galleries ADD COLUMN {custom_field} TEXT")
                 print(f"+ Added {custom_field} column")
+
+        # Add external program result fields (ext1-4)
+        for ext_field in ['ext1', 'ext2', 'ext3', 'ext4']:
+            if ext_field not in columns:
+                print(f"Adding {ext_field} column to galleries table...")
+                conn.execute(f"ALTER TABLE galleries ADD COLUMN {ext_field} TEXT")
+                print(f"+ Added {ext_field} column")
             
     except Exception as e:
         print(f"Warning: Migration failed: {e}")
@@ -407,6 +414,10 @@ class QueueStore:
         custom2 = item.get('custom2', '')
         custom3 = item.get('custom3', '')
         custom4 = item.get('custom4', '')
+        ext1 = item.get('ext1', '')
+        ext2 = item.get('ext2', '')
+        ext3 = item.get('ext3', '')
+        ext4 = item.get('ext4', '')
 
         # Extract dimension values
         avg_width = float(item.get('avg_width', 0.0) or 0.0)
@@ -453,6 +464,10 @@ class QueueStore:
             'custom2': custom2,
             'custom3': custom3,
             'custom4': custom4,
+            'ext1': ext1,
+            'ext2': ext2,
+            'ext3': ext3,
+            'ext4': ext4,
             'avg_width': avg_width,
             'avg_height': avg_height,
             'max_width': max_width,
@@ -549,199 +564,58 @@ class QueueStore:
     def load_all_items(self) -> List[Dict[str, Any]]:
         with _connect(self.db_path) as conn:
             _ensure_schema(conn)
-            
-            # Check if failed_files and tab_id columns exist
-            cursor = conn.execute("PRAGMA table_info(galleries)")
-            columns = [column[1] for column in cursor.fetchall()]
-            has_failed_files = 'failed_files' in columns
-            has_tab_id = 'tab_id' in columns
-            
-            # Build optimized query with LEFT JOIN to get images in single query
-            if has_failed_files:
-                if has_tab_id:
-                    # New schema with failed_files and tab_id - 19 columns (18 + image_files)
-                    cur = conn.execute(
-                        """
-                        SELECT 
-                            g.id, g.path, g.name, g.status, g.added_ts, g.finished_ts, g.template, 
-                            g.total_images, g.uploaded_images, g.total_size, g.scan_complete, 
-                            g.uploaded_bytes, g.final_kibps, g.gallery_id, g.gallery_url, 
-                            g.insertion_order, g.failed_files, g.tab_name, g.tab_id,
-                            g.custom1, g.custom2, g.custom3, g.custom4,
-                            GROUP_CONCAT(i.filename) as image_files
-                        FROM galleries g
-                        LEFT JOIN images i ON g.id = i.gallery_fk
-                        GROUP BY g.id
-                        ORDER BY g.insertion_order ASC, g.added_ts ASC
-                        """
-                    )
-                else:
-                    # New schema with failed_files but no tab_id - 18 columns (17 + image_files)
-                    cur = conn.execute(
-                        """
-                        SELECT 
-                            g.id, g.path, g.name, g.status, g.added_ts, g.finished_ts, g.template, 
-                            g.total_images, g.uploaded_images, g.total_size, g.scan_complete, 
-                            g.uploaded_bytes, g.final_kibps, g.gallery_id, g.gallery_url, 
-                            g.insertion_order, g.failed_files, g.tab_name,
-                            g.custom1, g.custom2, g.custom3, g.custom4,
-                            GROUP_CONCAT(i.filename) as image_files
-                        FROM galleries g
-                        LEFT JOIN images i ON g.id = i.gallery_fk
-                        GROUP BY g.id
-                        ORDER BY g.insertion_order ASC, g.added_ts ASC
-                        """
-                    )
-            else:
-                if has_tab_id:
-                    # Old schema without failed_files but with tab_id - 17 columns (16 + image_files)
-                    cur = conn.execute(
-                        """
-                        SELECT 
-                            g.id, g.path, g.name, g.status, g.added_ts, g.finished_ts, g.template, 
-                            g.total_images, g.uploaded_images, g.total_size, g.scan_complete, 
-                            g.uploaded_bytes, g.final_kibps, g.gallery_id, g.gallery_url, 
-                            g.insertion_order, g.tab_name, g.tab_id,
-                            g.custom1, g.custom2, g.custom3, g.custom4,
-                            GROUP_CONCAT(i.filename) as image_files
-                        FROM galleries g
-                        LEFT JOIN images i ON g.id = i.gallery_fk
-                        GROUP BY g.id
-                        ORDER BY g.insertion_order ASC, g.added_ts ASC
-                        """
-                    )
-                else:
-                    # Old schema without failed_files or tab_id - 16 columns (15 + image_files)
-                    cur = conn.execute(
-                        """
-                        SELECT 
-                            g.id, g.path, g.name, g.status, g.added_ts, g.finished_ts, g.template, 
-                            g.total_images, g.uploaded_images, g.total_size, g.scan_complete, 
-                            g.uploaded_bytes, g.final_kibps, g.gallery_id, g.gallery_url, 
-                            g.insertion_order,
-                            g.custom1, g.custom2, g.custom3, g.custom4,
-                            GROUP_CONCAT(i.filename) as image_files
-                        FROM galleries g
-                        LEFT JOIN images i ON g.id = i.gallery_fk
-                        GROUP BY g.id
-                        ORDER BY g.insertion_order ASC, g.added_ts ASC
-                        """
-                    )
-            
+
+            # Query with full current schema (migrations ensure all columns exist)
+            cur = conn.execute(
+                """
+                SELECT
+                    g.id, g.path, g.name, g.status, g.added_ts, g.finished_ts, g.template,
+                    g.total_images, g.uploaded_images, g.total_size, g.scan_complete,
+                    g.uploaded_bytes, g.final_kibps, g.gallery_id, g.gallery_url,
+                    g.insertion_order, g.failed_files, g.tab_name, g.tab_id,
+                    g.custom1, g.custom2, g.custom3, g.custom4,
+                    g.ext1, g.ext2, g.ext3, g.ext4,
+                    GROUP_CONCAT(i.filename) as image_files
+                FROM galleries g
+                LEFT JOIN images i ON g.id = i.gallery_fk
+                GROUP BY g.id
+                ORDER BY g.insertion_order ASC, g.added_ts ASC
+                """
+            )
+
             rows = cur.fetchall()
             items: List[Dict[str, Any]] = []
             for r in rows:
-                if has_failed_files:
-                    if has_tab_id:
-                        # New schema with tab_id - 24 columns (id at index 0, custom1-4 at 18-21, image_files at index 23)
-                        item: Dict[str, Any] = {
-                            'path': r[1],
-                            'name': r[2],
-                            'status': r[3],
-                            'added_time': int(r[4] or 0),
-                            'finished_time': int(r[5] or 0) or None,
-                            'template_name': r[6],
-                            'total_images': int(r[7] or 0),
-                            'uploaded_images': int(r[8] or 0),
-                            'total_size': int(r[9] or 0),
-                            'scan_complete': bool(r[10] or 0),
-                            'uploaded_bytes': int(r[11] or 0),
-                            'final_kibps': float(r[12] or 0.0),
-                            'gallery_id': r[13] or "",
-                            'gallery_url': r[14] or "",
-                            'insertion_order': int(r[15] or 0),
-                            'failed_files': json.loads(r[16]) if r[16] else [],
-                            'tab_name': r[17] or 'Main',
-                            'tab_id': int(r[18] or 1),
-                            'custom1': r[19] or '',
-                            'custom2': r[20] or '',
-                            'custom3': r[21] or '',
-                            'custom4': r[22] or '',
-                            'uploaded_files': r[23].split(',') if r[23] else [],
-                        }
-                    else:
-                        # New schema without tab_id - 22 columns (id at index 0, custom1-4 at 17-20, image_files at index 21)
-                        item: Dict[str, Any] = {
-                            'path': r[1],
-                            'name': r[2],
-                            'status': r[3],
-                            'added_time': int(r[4] or 0),
-                            'finished_time': int(r[5] or 0) or None,
-                            'template_name': r[6],
-                            'total_images': int(r[7] or 0),
-                            'uploaded_images': int(r[8] or 0),
-                            'total_size': int(r[9] or 0),
-                            'scan_complete': bool(r[10] or 0),
-                            'uploaded_bytes': int(r[11] or 0),
-                            'final_kibps': float(r[12] or 0.0),
-                            'gallery_id': r[13] or "",
-                            'gallery_url': r[14] or "",
-                            'insertion_order': int(r[15] or 0),
-                            'failed_files': json.loads(r[16]) if r[16] else [],
-                            'tab_name': r[17] or 'Main',
-                            'custom1': r[18] or '',
-                            'custom2': r[19] or '',
-                            'custom3': r[20] or '',
-                            'custom4': r[21] or '',
-                            'tab_id': 1,  # Default to Main tab
-                            'uploaded_files': r[22].split(',') if r[22] else [],
-                        }
-                else:
-                    if has_tab_id:
-                        # Old schema with tab_id - 21 columns (id at index 0, custom1-4 at 16-19, image_files at index 20)
-                        item: Dict[str, Any] = {
-                            'path': r[1],
-                            'name': r[2],
-                            'status': r[3],
-                            'added_time': int(r[4] or 0),
-                            'finished_time': int(r[5] or 0) or None,
-                            'template_name': r[6],
-                            'total_images': int(r[7] or 0),
-                            'uploaded_images': int(r[8] or 0),
-                            'total_size': int(r[9] or 0),
-                            'scan_complete': bool(r[10] or 0),
-                            'uploaded_bytes': int(r[11] or 0),
-                            'final_kibps': float(r[12] or 0.0),
-                            'gallery_id': r[13] or "",
-                            'gallery_url': r[14] or "",
-                            'insertion_order': int(r[15] or 0),
-                            'failed_files': [],  # Default empty list for old schema
-                            'tab_name': r[16] or 'Main',
-                            'custom1': r[17] or '',
-                            'custom2': r[18] or '',
-                            'custom3': r[19] or '',
-                            'custom4': r[20] or '',
-                            'tab_id': int(r[21] or 1),
-                            'uploaded_files': r[22].split(',') if r[22] else [],
-                        }
-                    else:
-                        # Old schema without tab_id - 20 columns (id at index 0, custom1-4 at 15-18, image_files at index 19)
-                        item: Dict[str, Any] = {
-                            'path': r[1],
-                            'name': r[2],
-                            'status': r[3],
-                            'added_time': int(r[4] or 0),
-                            'finished_time': int(r[5] or 0) or None,
-                            'template_name': r[6],
-                            'total_images': int(r[7] or 0),
-                            'uploaded_images': int(r[8] or 0),
-                            'total_size': int(r[9] or 0),
-                            'scan_complete': bool(r[10] or 0),
-                            'uploaded_bytes': int(r[11] or 0),
-                            'final_kibps': float(r[12] or 0.0),
-                            'gallery_id': r[13] or "",
-                            'gallery_url': r[14] or "",
-                            'insertion_order': int(r[15] or 0),
-                            'failed_files': [],  # Default empty list for old schema
-                            'custom1': r[16] or '',
-                            'custom2': r[17] or '',
-                            'custom3': r[18] or '',
-                            'custom4': r[19] or '',
-                            'tab_name': 'Main',  # Default tab for old schema
-                            'tab_id': 1,  # Default to Main tab
-                            'uploaded_files': r[20].split(',') if r[20] else [],
-                        }
-                
+                # Current schema: 28 columns (id at index 0, custom1-4 at 19-22, ext1-4 at 23-26, image_files at index 27)
+                item: Dict[str, Any] = {
+                    'path': r[1],
+                    'name': r[2],
+                    'status': r[3],
+                    'added_time': int(r[4] or 0),
+                    'finished_time': int(r[5] or 0) or None,
+                    'template_name': r[6],
+                    'total_images': int(r[7] or 0),
+                    'uploaded_images': int(r[8] or 0),
+                    'total_size': int(r[9] or 0),
+                    'scan_complete': bool(r[10] or 0),
+                    'uploaded_bytes': int(r[11] or 0),
+                    'final_kibps': float(r[12] or 0.0),
+                    'gallery_id': r[13] or "",
+                    'gallery_url': r[14] or "",
+                    'insertion_order': int(r[15] or 0),
+                    'failed_files': json.loads(r[16]) if r[16] else [],
+                    'tab_name': r[17] or 'Main',
+                    'tab_id': int(r[18] or 1),
+                    'custom1': r[19] or '',
+                    'custom2': r[20] or '',
+                    'custom3': r[21] or '',
+                    'custom4': r[22] or '',
+                    'ext1': r[23] or '',
+                    'ext2': r[24] or '',
+                    'ext3': r[25] or '',
+                    'ext4': r[26] or '',
+                    'uploaded_files': r[27].split(',') if r[27] else [],
+                }
                 items.append(item)
             return items
 

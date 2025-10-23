@@ -33,6 +33,7 @@ class GUIImxToUploader(ImxToUploader):
     def upload_folder(self, folder_path, gallery_name=None, thumbnail_size=3,
                      thumbnail_format=2, max_retries=3,
                      parallel_batch_size=4, template_name="default",
+                     precalculated_dimensions=None,
                      global_byte_counter: Optional[AtomicCounter] = None,
                      gallery_byte_counter: Optional[AtomicCounter] = None):
         """GUI-friendly upload delegating to the shared UploadEngine.

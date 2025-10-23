@@ -463,8 +463,9 @@ class UploadEngine:
         transfer_speed = uploaded_size / upload_time if upload_time > 0 else 0
 
         # Dimensions: use precalculated if available, otherwise calculate from samples
+        # Use precalculated dimensions from scanning (should ALWAYS be provided)
+        # Scanning happens ONCE when gallery is added, NOT during upload
         if precalculated_dimensions:
-            # Use dimensions calculated during scanning (from queue item or dict)
             avg_width = getattr(precalculated_dimensions, 'avg_width', 0.0) or 0.0
             avg_height = getattr(precalculated_dimensions, 'avg_height', 0.0) or 0.0
             max_width = getattr(precalculated_dimensions, 'max_width', 0.0) or 0.0
@@ -472,35 +473,10 @@ class UploadEngine:
             min_width = getattr(precalculated_dimensions, 'min_width', 0.0) or 0.0
             min_height = getattr(precalculated_dimensions, 'min_height', 0.0) or 0.0
         else:
-            # Fallback: calculate dimensions from samples (for CLI or if scanning didn't provide them)
-            try:
-                successful_filenames: List[str] = []
-                if initial_completed == 1 and preseed_images:
-                    successful_filenames.append(all_image_files[0])
-                for img_file, _ in uploaded_images:
-                    successful_filenames.append(img_file)
-                # Sample up to N files for dimension computation
-                MAX_DIM_SAMPLES = 25
-                sampled_dims: List[Tuple[int, int]] = []
-                from itertools import islice
-                for fname in islice(successful_filenames, 0, MAX_DIM_SAMPLES):
-                    fp = os.path.join(folder_path, fname)
-                    try:
-                        from PIL import Image  # lazy import
-                        with Image.open(fp) as img:
-                            w, h = img.size
-                            sampled_dims.append((w, h))
-                            image_dimensions_map[fname] = (w, h)  # Store per-image dimensions
-                    except Exception:
-                        continue
-                avg_width = sum(w for w, h in sampled_dims) / len(sampled_dims) if sampled_dims else 0
-                avg_height = sum(h for w, h in sampled_dims) / len(sampled_dims) if sampled_dims else 0
-                max_width = max((w for w, h in sampled_dims), default=0)
-                max_height = max((h for w, h in sampled_dims), default=0)
-                min_width = min((w for w, h in sampled_dims), default=0)
-                min_height = min((h for w, h in sampled_dims), default=0)
-            except Exception:
-                avg_width = avg_height = max_width = max_height = min_width = min_height = 0
+            # No precalculated dimensions - this should not happen in GUI mode
+            # Dimensions should have been calculated during initial scan
+            log("WARNING: No precalculated dimensions provided to upload engine!", level="warning", category="uploads")
+            avg_width = avg_height = max_width = max_height = min_width = min_height = 0
 
         # Attach filename and optional dims/sizes to each image entry for richer JSON (CLI parity)
         dims_by_name = image_dimensions_map

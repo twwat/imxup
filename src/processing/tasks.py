@@ -337,46 +337,25 @@ class TableUpdateQueue:
 
 
 def check_stored_credentials() -> bool:
-    """Check if credentials are stored in configuration"""
+    """Check if credentials are stored in QSettings (Registry)"""
     try:
-        from imxup import get_config_path
-        config = configparser.ConfigParser()
-        config_file = get_config_path()
-        
-        if os.path.exists(config_file):
-            config.read(config_file)
-            if 'CREDENTIALS' in config:
-                auth_type = config.get('CREDENTIALS', 'auth_type', fallback='username_password')
-                
-                if auth_type == 'username_password':
-                    username = config.get('CREDENTIALS', 'username', fallback='')
-                    password = config.get('CREDENTIALS', 'password', fallback='')
-                    return bool(username and password)
-                    
-                elif auth_type == 'api_key':
-                    api_key = config.get('CREDENTIALS', 'api_key', fallback='')
-                    return bool(api_key)
-                    
+        from imxup import get_credential
+
+        username = get_credential('username')
+        password = get_credential('password')
+        api_key = get_credential('api_key')
+
+        # Have username+password OR api_key
+        return bool((username and password) or api_key)
     except Exception:
-        pass
-    
-    return False
+        return False
 
 
 def api_key_is_set() -> bool:
-    """Check if API key is configured"""
+    """Check if API key is configured in QSettings (Registry)"""
     try:
-        from imxup import get_config_path
-        config = configparser.ConfigParser()
-        config_file = get_config_path()
-        
-        if os.path.exists(config_file):
-            config.read(config_file)
-            if 'CREDENTIALS' in config:
-                api_key = config.get('CREDENTIALS', 'api_key', fallback='')
-                return bool(api_key)
-                
+        from imxup import get_credential
+        encrypted_api_key = get_credential('api_key')
+        return bool(encrypted_api_key)
     except Exception:
-        pass
-    
-    return False
+        return False

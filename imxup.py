@@ -18,7 +18,6 @@ def debug_print(msg):
     # Skip printing if no console exists (console=False build)
     if sys.stdout is None:
         return
-
     try:
         if DEBUG_MODE:
             timestamp = datetime.now().strftime("%H:%M:%S")
@@ -45,7 +44,6 @@ import sys
 from pathlib import Path
 from typing import Optional, Any
 
-
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import concurrent.futures
 import time
@@ -62,7 +60,7 @@ import glob
 import winreg
 import mimetypes
 
-__version__ = "0.5.05"  # Application version number
+__version__ = "0.5.10"  # Application version number
 
 # Build User-Agent string (defer debug_print until after console allocation)
 _system = platform.system()
@@ -70,6 +68,9 @@ _release = platform.release()
 _machine = platform.machine()
 _version = platform.version()
 USER_AGENT = f"Mozilla/5.0 (ImxUp {__version__}; {_system} {_release} {_version}; {_machine}; rv:141.0) Gecko/20100101 Firefox/141.0"
+
+def get_version() -> str:
+    return __version__
 
 def timestamp() -> str:
     """Return current timestamp for logging"""
@@ -312,6 +313,65 @@ def decrypt_password(encrypted_password):
         log(f"Failed to decrypt password: {e}", level="warning", category="auth")
         return None
 
+def get_credential(key):
+    """Get credential from QSettings (Registry on Windows)"""
+    from PyQt6.QtCore import QSettings
+    settings = QSettings("imxup", "imxup")
+    settings.beginGroup("Credentials")
+    value = settings.value(key, "")
+    settings.endGroup()
+    return value
+
+def set_credential(key, value):
+    """Set credential in QSettings (Registry on Windows)"""
+    from PyQt6.QtCore import QSettings
+    settings = QSettings("imxup", "imxup")
+    settings.beginGroup("Credentials")
+    settings.setValue(key, value)
+    settings.endGroup()
+    settings.sync()
+
+def remove_credential(key):
+    """Remove credential from QSettings"""
+    from PyQt6.QtCore import QSettings
+    settings = QSettings("imxup", "imxup")
+    settings.beginGroup("Credentials")
+    settings.remove(key)
+    settings.endGroup()
+    settings.sync()
+
+def migrate_credentials_from_ini():
+    """Migrate credentials from INI file to QSettings, then remove from INI"""
+    import configparser
+    config = configparser.ConfigParser()
+    config_file = get_config_path()
+
+    if not os.path.exists(config_file):
+        return
+
+    config.read(config_file)
+    if 'CREDENTIALS' not in config:
+        return
+
+    # Migrate only actual credentials (not cookies_enabled which stays in INI as a preference)
+    migrated = False
+    cookies_val = config['CREDENTIALS'].get('cookies_enabled', '')
+
+    for key in ['username', 'password', 'api_key']:
+        value = config['CREDENTIALS'].get(key, '')
+        if value:
+            set_credential(key, value)
+            migrated = True
+
+    # Update INI file - remove credentials but keep cookies_enabled
+    if migrated:
+        config.remove_section('CREDENTIALS')
+        if cookies_val:
+            config['CREDENTIALS'] = {'cookies_enabled': cookies_val}
+        with open(config_file, 'w') as f:
+            config.write(f)
+        log("Migrated credentials from INI to Registry", level="info", category="auth")
+
 def load_user_defaults():
     """Load user defaults from config file
 
@@ -391,23 +451,10 @@ def setup_secure_password():
         return False
 
 def _save_credentials(username, password):
-    """Save credentials to config file"""
-    config = configparser.ConfigParser()
-    config_file = get_config_path()
-    
-    if os.path.exists(config_file):
-        config.read(config_file)
-    
-    if 'CREDENTIALS' not in config:
-        config['CREDENTIALS'] = {}
-    
-    config['CREDENTIALS']['username'] = username
-    config['CREDENTIALS']['password'] = encrypt_password(password)
-    
-    with open(config_file, 'w') as f:
-        config.write(f)
-    
-    log(f"Username and encrypted password saved to {config_file}", level="info", category="auth")
+    """Save credentials to QSettings (Registry)"""
+    set_credential('username', username)
+    set_credential('password', encrypt_password(password))
+    log("Username and encrypted password saved to Registry", level="info", category="auth")
     return True
 
 def save_unnamed_gallery(gallery_id, intended_name):
@@ -663,10 +710,96 @@ def load_templates():
     
     return templates
 
+def process_conditionals(template_content, data):
+    """Process conditional logic in templates before placeholder replacement.
+
+    Supports two syntax forms:
+    1. [if placeholder]content[/if] - shows content if placeholder value is non-empty
+    2. [if placeholder=value]content[else]alternative[/if] - shows content if placeholder equals value
+
+    Features:
+    - Multiple inline conditionals on the same line
+    - Nested conditionals (processed inside-out)
+    - Empty lines from removed conditionals are stripped
+    """
+    import re
+
+    # Process conditionals iteratively until no more found
+    max_iterations = 50  # Prevent infinite loops
+    iteration = 0
+
+    while iteration < max_iterations:
+        # Look for innermost conditional pattern (no nested [if] tags inside)
+        # This regex matches [if...] followed by content WITHOUT another [if, then [/if]
+        if_pattern = r'\[if\s+(\w+)(=([^\]]+))?\]((?:(?!\[if).)*?)\[/if\]'
+        match = re.search(if_pattern, template_content, re.DOTALL)
+
+        if not match:
+            # No more conditionals found
+            break
+
+        placeholder_name = match.group(1)
+        expected_value = match.group(3)  # None if no = comparison
+        conditional_block = match.group(4)  # Content between [if] and [/if]
+
+        # Get the actual value from data
+        actual_value = data.get(placeholder_name, '')
+
+        # Check for [else] clause (only at top level, not nested)
+        else_pattern = r'^(.*?)\[else\](.*?)$'
+        else_match = re.match(else_pattern, conditional_block, re.DOTALL)
+
+        if else_match:
+            true_content = else_match.group(1)
+            false_content = else_match.group(2)
+        else:
+            true_content = conditional_block
+            false_content = ''
+
+        # Determine condition
+        if expected_value is not None:
+            # Equality check: [if placeholder=value]
+            condition_met = (str(actual_value).strip() == expected_value.strip())
+        else:
+            # Existence check: [if placeholder]
+            condition_met = bool(str(actual_value).strip())
+
+        # Select content based on condition
+        selected_content = true_content if condition_met else false_content
+
+        # Replace the entire conditional block with selected content
+        template_content = template_content[:match.start()] + selected_content + template_content[match.end():]
+
+        iteration += 1
+
+    # Clean up empty lines
+    lines = template_content.split('\n')
+    cleaned_lines = [line for line in lines if line.strip() or line == '']  # Keep intentional blank lines
+
+    # Remove consecutive empty lines and leading/trailing empty lines
+    result_lines = []
+    prev_empty = False
+    for line in cleaned_lines:
+        is_empty = not line.strip()
+        if is_empty:
+            if not prev_empty and result_lines:  # Keep one empty line
+                result_lines.append(line)
+            prev_empty = True
+        else:
+            result_lines.append(line)
+            prev_empty = False
+
+    # Remove trailing empty lines
+    while result_lines and not result_lines[-1].strip():
+        result_lines.pop()
+
+    return '\n'.join(result_lines)
+
 def apply_template(template_content, data):
     """Apply a template with data replacement"""
-    result = template_content
-    
+    # Process conditional logic first (before placeholder replacement)
+    result = process_conditionals(template_content, data)
+
     # Replace placeholders with actual data
     replacements = {
         '#folderName#': data.get('folder_name', ''),
@@ -681,7 +814,11 @@ def apply_template(template_content, data):
         '#custom1#': data.get('custom1', ''),
         '#custom2#': data.get('custom2', ''),
         '#custom3#': data.get('custom3', ''),
-        '#custom4#': data.get('custom4', '')
+        '#custom4#': data.get('custom4', ''),
+        '#ext1#': data.get('ext1', ''),
+        '#ext2#': data.get('ext2', ''),
+        '#ext3#': data.get('ext3', ''),
+        '#ext4#': data.get('ext4', '')
     }
     
     for placeholder, value in replacements.items():
@@ -717,7 +854,7 @@ def save_gallery_artifacts(
     - results: the results dict returned by upload_folder (must contain keys used below)
     - template_name: which template to use for full bbcode generation
     - store_in_uploaded/store_in_central: overrides for storage locations. When None, read defaults
-    - custom_fields: optional dict with custom1, custom2, custom3, custom4 values
+    - custom_fields: optional dict with custom1-4 and ext1-4 values
 
     Returns: dict with paths written: { 'uploaded': {'bbcode': str, 'json': str}, 'central': {...}}
     """
@@ -777,7 +914,11 @@ def save_gallery_artifacts(
         'custom1': (custom_fields or {}).get('custom1', ''),
         'custom2': (custom_fields or {}).get('custom2', ''),
         'custom3': (custom_fields or {}).get('custom3', ''),
-        'custom4': (custom_fields or {}).get('custom4', '')
+        'custom4': (custom_fields or {}).get('custom4', ''),
+        'ext1': (custom_fields or {}).get('ext1', ''),
+        'ext2': (custom_fields or {}).get('ext2', ''),
+        'ext3': (custom_fields or {}).get('ext3', ''),
+        'ext4': (custom_fields or {}).get('ext4', '')
     }
     bbcode_content = generate_bbcode_from_template(template_name, template_data)
 
@@ -947,33 +1088,21 @@ class ImxToUploader:
 
     def _get_credentials(self):
         """Get credentials from stored config (username/password or API key)"""
-        config = configparser.ConfigParser()
-        config_file = get_config_path()
-        
-        if os.path.exists(config_file):
-            config.read(config_file)
-            if 'CREDENTIALS' in config:
-                auth_type = config['CREDENTIALS'].get('auth_type', 'username_password')
-                
-                if auth_type == 'username_password':
-                    username = config['CREDENTIALS'].get('username')
-                    encrypted_password = config['CREDENTIALS'].get('password', '')
-                    encrypted_api_key = config['CREDENTIALS'].get('api_key', '')
-                    
-                    if username and encrypted_password:
-                        password = decrypt_password(encrypted_password)
-                        api_key = decrypt_password(encrypted_api_key) if encrypted_api_key else None
-                        if password:
-                            return username, password, api_key
-                
-                elif auth_type == 'api_key':
-                    encrypted_api_key = config['CREDENTIALS'].get('api_key', '')
-                    
-                    if encrypted_api_key:
-                        api_key = decrypt_password(encrypted_api_key)
-                        if api_key:
-                            return None, None, api_key
-        
+        # Read from QSettings (Registry) - migration happens at app startup
+        username = get_credential('username')
+        encrypted_password = get_credential('password')
+        encrypted_api_key = get_credential('api_key')
+
+        # Decrypt if they exist
+        password = decrypt_password(encrypted_password) if encrypted_password else None
+        api_key = decrypt_password(encrypted_api_key) if encrypted_api_key else None
+
+        # Return what we have
+        if username and password:
+            return username, password, api_key
+        elif api_key:
+            return None, None, api_key
+
         return None, None, None
     
     def _setup_resilient_session(self, parallel_batch_size=4):
@@ -2113,6 +2242,9 @@ class ImxToUploader:
         return results
 
 def main():
+    # Migrate credentials from INI to Registry (runs once, safe to call multiple times)
+    migrate_credentials_from_ini()
+
     # Auto-launch GUI if double-clicked (no arguments, no other console processes)
     if len(sys.argv) == 1:  # No arguments provided
         try:

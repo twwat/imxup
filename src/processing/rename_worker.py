@@ -17,8 +17,9 @@ class RenameWorker:
     def __init__(self):
         """Initialize RenameWorker with own web session."""
         # Import existing functions
-        from imxup import get_config_path, decrypt_password, get_firefox_cookies, load_cookies_from_file
-        from imxup import get_unnamed_galleries, remove_unnamed_gallery, sanitize_gallery_name
+        from imxup import (get_config_path, decrypt_password, get_firefox_cookies,
+                          load_cookies_from_file, get_unnamed_galleries,
+                          remove_unnamed_gallery, sanitize_gallery_name, get_credential)
 
         # Store references to these functions
         self._get_config_path = get_config_path
@@ -39,18 +40,11 @@ class RenameWorker:
         self.web_url = "https://imx.to"
         self.session = None
 
-        # Load credentials using EXACT same method as ImxToUploader._get_credentials
-        config = configparser.ConfigParser()
-        config_file = get_config_path()
-        if config_file and os.path.exists(config_file):
-            config.read(config_file)
-            if 'CREDENTIALS' in config:
-                auth_type = config['CREDENTIALS'].get('auth_type', 'username_password')
-                if auth_type == 'username_password':
-                    self.username = config['CREDENTIALS'].get('username')
-                    encrypted_password = config['CREDENTIALS'].get('password', '')
-                    if self.username and encrypted_password:
-                        self.password = decrypt_password(encrypted_password)
+        # Load credentials from QSettings (Registry)
+        self.username = get_credential('username')
+        encrypted_password = get_credential('password')
+        if self.username and encrypted_password:
+            self.password = decrypt_password(encrypted_password)
 
         # Create session using EXACT same setup as ImxToUploader
         from requests.adapters import HTTPAdapter

@@ -14,7 +14,8 @@ from PyQt6.QtCore import QSize
 from PyQt6.QtGui import QIcon
 
 # Import the core credential functions
-from imxup import get_config_path, encrypt_password, decrypt_password
+from imxup import (get_config_path, encrypt_password, decrypt_password,
+                   get_credential, set_credential, remove_credential)
 
 
 class CredentialSetupDialog(QDialog):
@@ -54,8 +55,7 @@ class CredentialSetupDialog(QDialog):
 
         # API Key info text
         api_key_info = QLabel(
-            "<b>Required</b> for uploading files.<br>"
-            "Get your API key from <a style=\"color:#0078d4\" href=\"https://imx.to/user/api\">https://imx.to/user/api</a>"
+            "<b>Required</b> for uploading files &mdash; get your API key from <a style=\"color:#0078d4\" href=\"https://imx.to/user/api\">https://imx.to/user/api</a>"
         )
         api_key_info.setWordWrap(True)
         api_key_info.setProperty("class", "info-panel")
@@ -85,17 +85,20 @@ class CredentialSetupDialog(QDialog):
         layout.addWidget(api_key_group)
 
         # ========== LOGIN / PASSWORD SECTION ==========
-        login_group = QGroupBox("Login / Password")
+        login_group = QGroupBox("Login")
         login_layout = QVBoxLayout(login_group)
 
         # Login info text
         login_info = QLabel(
-            "<b>Required</b> for renaming galleries (or use Firefox cookies below).<br>"
-            "Without this, all galleries will be named \"untitled gallery\"."
+            "<b>Required</b> for renaming galleries on imx.to &mdash; without this, all galleries will be named \"untitled gallery\"."
         )
         login_info.setWordWrap(True)
         login_info.setProperty("class", "info-panel")
         login_layout.addWidget(login_info)
+
+        # ========== USERNAME/PASSWORD SUBSECTION (nested) ==========
+        username_password_group = QGroupBox("Login / Password")
+        username_password_layout = QVBoxLayout(username_password_group)
 
         # Username status
         username_status_layout = QHBoxLayout()
@@ -115,7 +118,7 @@ class CredentialSetupDialog(QDialog):
             self.username_remove_btn.setText(" " + self.username_remove_btn.text())
         self.username_remove_btn.clicked.connect(self.remove_username)
         username_status_layout.addWidget(self.username_remove_btn)
-        login_layout.addLayout(username_status_layout)
+        username_password_layout.addLayout(username_status_layout)
 
         # Password status
         password_status_layout = QHBoxLayout()
@@ -135,7 +138,10 @@ class CredentialSetupDialog(QDialog):
             self.password_remove_btn.setText(" " + self.password_remove_btn.text())
         self.password_remove_btn.clicked.connect(self.remove_password)
         password_status_layout.addWidget(self.password_remove_btn)
-        login_layout.addLayout(password_status_layout)
+        username_password_layout.addLayout(password_status_layout)
+
+        # Add username/password group to login group (nested)
+        login_layout.addWidget(username_password_group)
 
         # ========== FIREFOX COOKIES SUBSECTION (nested) ==========
         cookies_group = QGroupBox("Firefox Cookies")
@@ -143,8 +149,7 @@ class CredentialSetupDialog(QDialog):
 
         # Cookies info text
         cookies_info = QLabel(
-            "Attempts to login using existing Firefox cookies.<br>"
-            "If it fails, will fall back to username/password if set."
+            "Attempt login using existing Firefox cookies. &nbsp;<i>Cookies tried first, login/password used as fallback (if set)</i>"
         )
         cookies_info.setWordWrap(True)
         cookies_info.setProperty("class", "info-panel")
@@ -178,8 +183,7 @@ class CredentialSetupDialog(QDialog):
 
         # Encryption note at bottom
         encryption_note = QLabel(
-            "<small>Credentials are encrypted with <b>AES-128-CBC via Fernet</b> using your system's hostname/username. "
-            "The encrypted data won't work on other computers and is obfuscated from other users on this system.</small>"
+            "<small>API key and password are encrypted via Fernet (AES-128-CBC / PKCS7 padding + HMAC-SHA256) using your system's hostname and stored in the registry.<br><br>This means the encrypted data is protected from other users on this system and won't work on other computers.</small>"
         )
         encryption_note.setWordWrap(True)
         encryption_note.setStyleSheet(f"margin-top: 8px;")
@@ -229,173 +233,164 @@ class CredentialSetupDialog(QDialog):
     
     def load_current_credentials(self):
         """Load and display current credentials"""
-        config = configparser.ConfigParser()
-        config_file = get_config_path()
-        
-        if os.path.exists(config_file):
-            config.read(config_file)
-            if 'CREDENTIALS' in config:
-                # Check username/password
-                username = config.get('CREDENTIALS', 'username', fallback='')
-                password = config.get('CREDENTIALS', 'password', fallback='')
-                
-                if username:
-                    self.username_status_label.setText(username)
-                    self.username_status_label.setProperty("class", "status-success")
-                    self.username_status_label.setStyleSheet(f"color: {self.success_color}; font-weight: bold;")
-                    style = self.username_status_label.style()
+        # Load from QSettings (migration happens once at app startup)
+        username = get_credential('username')
+        password = get_credential('password')
+
+        if username:
+            self.username_status_label.setText(username)
+            self.username_status_label.setProperty("class", "status-success")
+            self.username_status_label.setStyleSheet(f"color: {self.success_color}; font-weight: bold;")
+            style = self.username_status_label.style()
+            if style:
+                style.polish(self.username_status_label)
+            # Buttons: Change/Unset
+            try:
+                txt = " Change"
+                if not txt.startswith(" "):
+                    txt = " " + txt
+                self.username_change_btn.setText(txt)
+            except Exception:
+                self.username_change_btn.setText(" Change")
+            self.username_remove_btn.setEnabled(True)
+        else:
+            self.username_status_label.setText("NOT SET")
+            self.username_status_label.setProperty("class", "status-muted")
+            self.username_status_label.setStyleSheet(f"font-style: italic;")
+            style = self.username_status_label.style()
+            if style:
+                style.polish(self.username_status_label)
+            try:
+                txt = " Set"
+                if not txt.startswith(" "):
+                    txt = " " + txt
+                self.username_change_btn.setText(txt)
+            except Exception:
+                self.username_change_btn.setText(" Set")
+            self.username_remove_btn.setEnabled(False)
+
+        if password:
+            self.password_status_label.setText("********************************")
+            self.password_status_label.setProperty("class", "status-success")
+            self.password_status_label.setStyleSheet(f"color: {self.success_color}; font-weight: bold;")
+            style = self.password_status_label.style()
+            if style:
+                style.polish(self.password_status_label)
+            try:
+                txt = " Change"
+                if not txt.startswith(" "):
+                    txt = " " + txt
+                self.password_change_btn.setText(txt)
+            except Exception:
+                self.password_change_btn.setText(" Change")
+            self.password_remove_btn.setEnabled(True)
+        else:
+            self.password_status_label.setText("NOT SET")
+            self.password_status_label.setProperty("class", "status-muted")
+            self.password_status_label.setStyleSheet(f"font-style: italic;")
+            style = self.password_status_label.style()
+            if style:
+                style.polish(self.password_status_label)
+            try:
+                txt = " Set"
+                if not txt.startswith(" "):
+                    txt = " " + txt
+                self.password_change_btn.setText(txt)
+            except Exception:
+                self.password_change_btn.setText(" Set")
+            self.password_remove_btn.setEnabled(False)
+
+        # Check API key
+        encrypted_api_key = get_credential('api_key')
+        if encrypted_api_key:
+            try:
+                api_key = decrypt_password(encrypted_api_key)
+                if api_key and len(api_key) > 8:
+                    masked_key = api_key[:4] + "*" * 24 + api_key[-4:]
+                    self.api_key_status_label.setText(masked_key)
+                    self.api_key_status_label.setProperty("class", "status-success")
+                    self.api_key_status_label.setStyleSheet(f"color: {self.success_color}; font-weight: bold;")
+                    style = self.api_key_status_label.style()
                     if style:
-                        style.polish(self.username_status_label)
-                    # Buttons: Change/Unset
+                        style.polish(self.api_key_status_label)
                     try:
                         txt = " Change"
-                        if not txt.startswith(" "):
-                            txt = " " + txt
-                        self.username_change_btn.setText(txt)
-                    except Exception:
-                        self.username_change_btn.setText(" Change")
-                    self.username_remove_btn.setEnabled(True)
-                else:
-                    self.username_status_label.setText("NOT SET")
-                    self.username_status_label.setProperty("class", "status-muted")
-                    self.username_status_label.setStyleSheet(f"font-style: italic;")
-                    style = self.username_status_label.style()
-                    if style:
-                        style.polish(self.username_status_label)
-                    try:
-                        txt = " Set"
-                        if not txt.startswith(" "):
-                            txt = " " + txt
-                        self.username_change_btn.setText(txt)
-                    except Exception:
-                        self.username_change_btn.setText(" Set")
-                    self.username_remove_btn.setEnabled(False)
-                
-                if password:
-                    self.password_status_label.setText("********************************")
-                    self.password_status_label.setProperty("class", "status-success")
-                    self.password_status_label.setStyleSheet(f"color: {self.success_color}; font-weight: bold;")
-                    style = self.password_status_label.style()
-                    if style:
-                        style.polish(self.password_status_label)
-                    try:
-                        txt = " Change"
-                        if not txt.startswith(" "):
-                            txt = " " + txt
-                        self.password_change_btn.setText(txt)
-                    except Exception:
-                        self.password_change_btn.setText(" Change")
-                    self.password_remove_btn.setEnabled(True)
-                else:
-                    self.password_status_label.setText("NOT SET")
-                    self.password_status_label.setProperty("class", "status-muted")
-                    self.password_status_label.setStyleSheet(f"font-style: italic;")
-                    style = self.password_status_label.style()
-                    if style:
-                        style.polish(self.password_status_label)
-                    try:
-                        txt = " Set"
-                        if not txt.startswith(" "):
-                            txt = " " + txt
-                        self.password_change_btn.setText(txt)
-                    except Exception:
-                        self.password_change_btn.setText(" Set")
-                    self.password_remove_btn.setEnabled(False)
-                
-                # Check API key
-                encrypted_api_key = config.get('CREDENTIALS', 'api_key', fallback='')
-                if encrypted_api_key:
-                    try:
-                        api_key = decrypt_password(encrypted_api_key)
-                        if api_key and len(api_key) > 8:
-                            masked_key = api_key[:4] + "*" * 24 + api_key[-4:]
-                            self.api_key_status_label.setText(masked_key)
-                            self.api_key_status_label.setProperty("class", "status-success")
-                            self.api_key_status_label.setStyleSheet(f"color: {self.success_color}; font-weight: bold;")
-                            style = self.api_key_status_label.style()
-                            if style:
-                                style.polish(self.api_key_status_label)
-                            try:
-                                txt = " Change"
-                                if not txt.startswith(" "):
-                                    txt = " " + txt
-                                self.api_key_change_btn.setText(txt)
-                            except Exception:
-                                self.api_key_change_btn.setText(" Change")
-                            self.api_key_remove_btn.setEnabled(True)
-                        else:
-                            self.api_key_status_label.setText("SET")
-                            self.api_key_status_label.setProperty("class", "status-success")
-                            self.api_key_status_label.setStyleSheet(f"color: {self.success_color}; font-weight: bold;")
-                            style = self.api_key_status_label.style()
-                            if style:
-                                style.polish(self.api_key_status_label)
-                            try:
-                                txt = " Change"
-                                if not txt.startswith(" "):
-                                    txt = " " + txt
-                                self.api_key_change_btn.setText(txt)
-                            except Exception:
-                                self.api_key_change_btn.setText(" Change")
-                            self.api_key_remove_btn.setEnabled(True)
-                    except:
-                        self.api_key_status_label.setText("SET")
-                        self.api_key_status_label.setProperty("class", "status-success")
-                        self.api_key_status_label.setStyleSheet(f"color: {self.success_color}; font-weight: bold;")
-                        self.api_key_status_label.style().polish(self.api_key_status_label)
-                        try:
-                            txt = " Change"
-                            if not txt.startswith(" "):
-                                txt = " " + txt
-                            self.api_key_change_btn.setText(txt)
-                        except Exception:
-                            self.api_key_change_btn.setText(" Change")
-                        self.api_key_remove_btn.setEnabled(True)
-                else:
-                    self.api_key_status_label.setText("NOT SET")
-                    self.api_key_status_label.setProperty("class", "status-muted")
-                    self.api_key_status_label.setStyleSheet(f"font-style: italic;")
-                    self.api_key_status_label.style().polish(self.api_key_status_label)
-                     # When not set, offer Set and disable Unset
-                    try:
-                        txt = " Set"
                         if not txt.startswith(" "):
                             txt = " " + txt
                         self.api_key_change_btn.setText(txt)
                     except Exception:
-                        self.api_key_change_btn.setText(" Set")
-                    self.api_key_remove_btn.setEnabled(False)
+                        self.api_key_change_btn.setText(" Change")
+                    self.api_key_remove_btn.setEnabled(True)
+                else:
+                    self.api_key_status_label.setText("SET")
+                    self.api_key_status_label.setProperty("class", "status-success")
+                    self.api_key_status_label.setStyleSheet(f"color: {self.success_color}; font-weight: bold;")
+                    style = self.api_key_status_label.style()
+                    if style:
+                        style.polish(self.api_key_status_label)
+                    try:
+                        txt = " Change"
+                        if not txt.startswith(" "):
+                            txt = " " + txt
+                        self.api_key_change_btn.setText(txt)
+                    except Exception:
+                        self.api_key_change_btn.setText(" Change")
+                    self.api_key_remove_btn.setEnabled(True)
+            except:
+                self.api_key_status_label.setText("SET")
+                self.api_key_status_label.setProperty("class", "status-success")
+                self.api_key_status_label.setStyleSheet(f"color: {self.success_color}; font-weight: bold;")
+                self.api_key_status_label.style().polish(self.api_key_status_label)
+                try:
+                    txt = " Change"
+                    if not txt.startswith(" "):
+                        txt = " " + txt
+                    self.api_key_change_btn.setText(txt)
+                except Exception:
+                    self.api_key_change_btn.setText(" Change")
+                self.api_key_remove_btn.setEnabled(True)
+        else:
+            self.api_key_status_label.setText("NOT SET")
+            self.api_key_status_label.setProperty("class", "status-muted")
+            self.api_key_status_label.setStyleSheet(f"font-style: italic;")
+            self.api_key_status_label.style().polish(self.api_key_status_label)
+             # When not set, offer Set and disable Unset
+            try:
+                txt = " Set"
+                if not txt.startswith(" "):
+                    txt = " " + txt
+                self.api_key_change_btn.setText(txt)
+            except Exception:
+                self.api_key_change_btn.setText(" Set")
+            self.api_key_remove_btn.setEnabled(False)
 
-                # Cookies setting
+        # Cookies setting (still stored in INI file as it's a preference, not a credential)
+        import configparser
+        config = configparser.ConfigParser()
+        config_file = get_config_path()
+        cookies_enabled = True  # Default
+        if os.path.exists(config_file):
+            config.read(config_file)
+            if 'CREDENTIALS' in config:
                 cookies_enabled_val = str(config['CREDENTIALS'].get('cookies_enabled', 'true')).lower()
                 cookies_enabled = cookies_enabled_val != 'false'
-                if cookies_enabled:
-                    self.cookies_status_label.setText("Enabled")
-                    self.cookies_status_label.setProperty("class", "status-success")
-                    self.cookies_status_label.setStyleSheet(f"color: {self.success_color}; font-weight: bold;")
-                    style = self.cookies_status_label.style()
-                    if style:
-                        style.polish(self.cookies_status_label)
-                else:
-                    self.cookies_status_label.setText("Disabled")
-                    self.cookies_status_label.setProperty("class", "status-error")
-                    self.cookies_status_label.setStyleSheet(f"color: {self.error_color}; font-weight: bold;")
-                    style = self.cookies_status_label.style()
-                    if style:
-                        style.polish(self.cookies_status_label)
-                # Toggle button states
-                self.cookies_enable_btn.setEnabled(not cookies_enabled)
-                self.cookies_disable_btn.setEnabled(cookies_enabled)
-        else:
-            # Defaults if no file
+        if cookies_enabled:
             self.cookies_status_label.setText("Enabled")
             self.cookies_status_label.setProperty("class", "status-success")
             self.cookies_status_label.setStyleSheet(f"color: {self.success_color}; font-weight: bold;")
             style = self.cookies_status_label.style()
             if style:
                 style.polish(self.cookies_status_label)
-            self.cookies_enable_btn.setEnabled(False)
-            self.cookies_disable_btn.setEnabled(True)
+        else:
+            self.cookies_status_label.setText("Disabled")
+            self.cookies_status_label.setProperty("class", "status-error")
+            self.cookies_status_label.setStyleSheet(f"color: {self.error_color}; font-weight: bold;")
+            style = self.cookies_status_label.style()
+            if style:
+                style.polish(self.cookies_status_label)
+        # Toggle button states
+        self.cookies_enable_btn.setEnabled(not cookies_enabled)
+        self.cookies_disable_btn.setEnabled(cookies_enabled)
     
     def change_username(self):
         """Open dialog to change username only"""
@@ -450,24 +445,9 @@ class CredentialSetupDialog(QDialog):
         if result == QDialog.DialogCode.Accepted:
             if username:
                 try:
-                    config = configparser.ConfigParser()
-                    config_file = get_config_path()
-                    
-                    if os.path.exists(config_file):
-                        config.read(config_file)
-                    
-                    if 'CREDENTIALS' not in config:
-                        config['CREDENTIALS'] = {}
-                    
-                    config['CREDENTIALS']['username'] = username
-                    # Don't clear API key - allow both to exist
-                    
-                    with open(config_file, 'w') as f:
-                        config.write(f)
-                    
+                    set_credential('username', username)
                     self.load_current_credentials()
                     QMessageBox.information(self, "Success", "Username saved successfully!")
-                    
                 except Exception as e:
                     QMessageBox.critical(self, "Error", f"Failed to save credentials: {str(e)}")
             else:
@@ -527,24 +507,9 @@ class CredentialSetupDialog(QDialog):
         if result == QDialog.DialogCode.Accepted:
             if password:
                 try:
-                    config = configparser.ConfigParser()
-                    config_file = get_config_path()
-                    
-                    if os.path.exists(config_file):
-                        config.read(config_file)
-                    
-                    if 'CREDENTIALS' not in config:
-                        config['CREDENTIALS'] = {}
-                    
-                    config['CREDENTIALS']['password'] = encrypt_password(password)
-                    # Don't clear API key - allow both to exist
-                    
-                    with open(config_file, 'w') as f:
-                        config.write(f)
-                    
+                    set_credential('password', encrypt_password(password))
                     self.load_current_credentials()
                     QMessageBox.information(self, "Success", "Password saved successfully!")
-                    
                 except Exception as e:
                     QMessageBox.critical(self, "Error", f"Failed to save password: {str(e)}")
             else:
@@ -598,24 +563,9 @@ class CredentialSetupDialog(QDialog):
         if result == QDialog.DialogCode.Accepted:
             if api_key:
                 try:
-                    config = configparser.ConfigParser()
-                    config_file = get_config_path()
-                    
-                    if os.path.exists(config_file):
-                        config.read(config_file)
-                    
-                    if 'CREDENTIALS' not in config:
-                        config['CREDENTIALS'] = {}
-                    
-                    config['CREDENTIALS']['api_key'] = encrypt_password(api_key)
-                    # Don't clear username/password - allow both to exist
-                    
-                    with open(config_file, 'w') as f:
-                        config.write(f)
-                    
+                    set_credential('api_key', encrypt_password(api_key))
                     self.load_current_credentials()
                     QMessageBox.information(self, "Success", "API key saved successfully!")
-                    
                 except Exception as e:
                     QMessageBox.critical(self, "Error", f"Failed to save API key: {str(e)}")
             else:
@@ -668,17 +618,8 @@ class CredentialSetupDialog(QDialog):
         if result != QMessageBox.StandardButton.Yes:
             return
         try:
-            config = configparser.ConfigParser()
-            config_file = get_config_path()
-            if os.path.exists(config_file):
-                config.read(config_file)
-            if 'CREDENTIALS' not in config:
-                config['CREDENTIALS'] = {}
-            config['CREDENTIALS']['username'] = ''
-            with open(config_file, 'w') as f:
-                config.write(f)
+            remove_credential('username')
             self.load_current_credentials()
-            # Keep information dialog simple and non-blocking
             QMessageBox.information(self, "Removed", "Username removed.")
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to remove username: {str(e)}")
@@ -695,15 +636,7 @@ class CredentialSetupDialog(QDialog):
         if reply != QMessageBox.StandardButton.Yes:
             return
         try:
-            config = configparser.ConfigParser()
-            config_file = get_config_path()
-            if os.path.exists(config_file):
-                config.read(config_file)
-            if 'CREDENTIALS' not in config:
-                config['CREDENTIALS'] = {}
-            config['CREDENTIALS']['password'] = ''
-            with open(config_file, 'w') as f:
-                config.write(f)
+            remove_credential('password')
             self.load_current_credentials()
             QMessageBox.information(self, "Removed", "Password removed.")
         except Exception as e:
@@ -721,15 +654,7 @@ class CredentialSetupDialog(QDialog):
         if reply != QMessageBox.StandardButton.Yes:
             return
         try:
-            config = configparser.ConfigParser()
-            config_file = get_config_path()
-            if os.path.exists(config_file):
-                config.read(config_file)
-            if 'CREDENTIALS' not in config:
-                config['CREDENTIALS'] = {}
-            config['CREDENTIALS']['api_key'] = ''
-            with open(config_file, 'w') as f:
-                config.write(f)
+            remove_credential('api_key')
             self.load_current_credentials()
             QMessageBox.information(self, "Removed", "API key removed.")
         except Exception as e:
@@ -747,17 +672,9 @@ class CredentialSetupDialog(QDialog):
         if reply != QMessageBox.StandardButton.Yes:
             return
         try:
-            config = configparser.ConfigParser()
-            config_file = get_config_path()
-            if os.path.exists(config_file):
-                config.read(config_file)
-            if 'CREDENTIALS' not in config:
-                config['CREDENTIALS'] = {}
-            config['CREDENTIALS']['username'] = ''
-            config['CREDENTIALS']['password'] = ''
-            config['CREDENTIALS']['api_key'] = ''
-            with open(config_file, 'w') as f:
-                config.write(f)
+            remove_credential('username')
+            remove_credential('password')
+            remove_credential('api_key')
             self.load_current_credentials()
             QMessageBox.information(self, "Removed", "All credentials removed.")
         except Exception as e:

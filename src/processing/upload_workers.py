@@ -6,6 +6,7 @@ Handles gallery uploads and completion tracking in background threads
 
 import os
 import time
+import threading
 from typing import Optional, Dict, Any
 
 from PyQt6.QtCore import QThread, pyqtSignal, QMutex
@@ -30,6 +31,7 @@ class UploadWorker(QThread):
     gallery_failed = pyqtSignal(str, str)  # path, error_message
     gallery_exists = pyqtSignal(str, list)  # gallery_name, existing_files
     gallery_renamed = pyqtSignal(str)  # gallery_id
+    ext_fields_updated = pyqtSignal(str, dict)  # path, ext_fields dict (for hook results)
     log_message = pyqtSignal(str)
     queue_stats = pyqtSignal(dict)  # aggregate status stats for GUI updates
     bandwidth_updated = pyqtSignal(float)  # Instantaneous KB/s from pycurl progress callbacks
@@ -183,6 +185,30 @@ class UploadWorker(QThread):
             self.queue_manager.update_item_status(item.path, "uploading")
             item.start_time = time.time()
 
+            # Execute "started" hook in background
+            from src.processing.hooks_executor import execute_gallery_hooks
+            def run_started_hook():
+                try:
+                    ext_fields = execute_gallery_hooks(
+                        event_type='started',
+                        gallery_path=item.path,
+                        gallery_name=item.name,
+                        tab_name=item.tab_name,
+                        image_count=item.total_images or 0
+                    )
+                    # Update ext fields if hook returned any
+                    if ext_fields:
+                        for key, value in ext_fields.items():
+                            setattr(item, key, value)
+                        self.queue_manager._schedule_debounced_save([item.path])
+                        log(f"Updated ext fields from started hook: {ext_fields}", level="info", category="hooks")
+                        # Emit signal to update GUI
+                        self.ext_fields_updated.emit(item.path, ext_fields)
+                except Exception as e:
+                    log(f"Error executing started hook: {e}", level="error", category="hooks")
+
+            threading.Thread(target=run_started_hook, daemon=True).start()
+
             # Emit start signal
             self.gallery_started.emit(item.path, item.total_images or 0)
             self._emit_queue_stats(force=True)
@@ -195,6 +221,10 @@ class UploadWorker(QThread):
             # Get upload settings
             defaults = load_user_defaults()
 
+            # Pass the item directly for precalculated dimensions (engine uses getattr on it)
+            if item.scan_complete and (item.avg_width or item.avg_height):
+                log(f"Using precalculated dimensions for {item.name}: {item.avg_width}x{item.avg_height}", level="debug", category="uploads")
+
             # Perform upload with both global and per-gallery counters
             results = self.uploader.upload_folder(
                 item.path,
@@ -204,6 +234,7 @@ class UploadWorker(QThread):
                 max_retries=defaults.get('max_retries', 3),
                 parallel_batch_size=defaults.get('parallel_batch_size', 4),
                 template_name=item.template_name,
+                precalculated_dimensions=item,  # Pass item directly, engine extracts dimensions via getattr
                 global_byte_counter=self.global_byte_counter,
                 gallery_byte_counter=self.current_gallery_counter
             )
@@ -261,7 +292,7 @@ class UploadWorker(QThread):
             return
 
         # Save artifacts
-        self._save_artifacts_for_result(item, results)
+        artifact_paths = self._save_artifacts_for_result(item, results)
 
         # Determine final status
         failed_count = results.get('failed_count', 0)
@@ -273,21 +304,75 @@ class UploadWorker(QThread):
             # Complete success
             self.queue_manager.update_item_status(item.path, "completed")
 
+            # Execute "completed" hook in background
+            from src.processing.hooks_executor import execute_gallery_hooks
+            def run_completed_hook():
+                try:
+                    # Get artifact paths
+                    json_path = ''
+                    bbcode_path = ''
+                    if artifact_paths:
+                        # Try uploaded location first, then central
+                        if 'uploaded' in artifact_paths:
+                            json_path = artifact_paths['uploaded'].get('json', '')
+                            bbcode_path = artifact_paths['uploaded'].get('bbcode', '')
+                        elif 'central' in artifact_paths:
+                            json_path = artifact_paths['central'].get('json', '')
+                            bbcode_path = artifact_paths['central'].get('bbcode', '')
+
+                    ext_fields = execute_gallery_hooks(
+                        event_type='completed',
+                        gallery_path=item.path,
+                        gallery_name=item.name,
+                        tab_name=item.tab_name,
+                        image_count=results.get('successful_count', 0),
+                        gallery_id=results.get('gallery_id', ''),
+                        json_path=json_path,
+                        bbcode_path=bbcode_path,
+                        zip_path=''  # ZIP support not implemented yet
+                    )
+                    # Update ext fields if hook returned any
+                    if ext_fields:
+                        for key, value in ext_fields.items():
+                            setattr(item, key, value)
+                        self.queue_manager._schedule_debounced_save([item.path])
+                        log(f"Updated ext fields from completed hook: {ext_fields}", level="info", category="hooks")
+                        # Emit signal to update GUI
+                        self.ext_fields_updated.emit(item.path, ext_fields)
+                except Exception as e:
+                    log(f"Error executing completed hook: {e}", level="error", category="hooks")
+
+            threading.Thread(target=run_completed_hook, daemon=True).start()
+
         # Notify GUI
         self.gallery_completed.emit(item.path, results)
         self._emit_queue_stats(force=True)
 
     def _save_artifacts_for_result(self, item: GalleryQueueItem, results: dict):
-        """Save gallery artifacts (BBCode, JSON) in worker thread"""
+        """Save gallery artifacts (BBCode, JSON) in worker thread. Returns artifact paths dict."""
         try:
+            # Build custom fields dict including ext1-4
+            custom_fields = {
+                'custom1': item.custom1,
+                'custom2': item.custom2,
+                'custom3': item.custom3,
+                'custom4': item.custom4,
+                'ext1': item.ext1,
+                'ext2': item.ext2,
+                'ext3': item.ext3,
+                'ext4': item.ext4,
+            }
             written = save_gallery_artifacts(
                 folder_path=item.path,
                 results=results,
                 template_name=item.template_name or "default",
+                custom_fields=custom_fields,
             )
             # Artifact save successful, no need to log details here
+            return written
         except Exception as e:
             log(f"Artifact save error: {e}", level="error", category="fileio")
+            return {}
 
     def _emit_queue_stats(self, force: bool = False):
         """Emit queue statistics if needed"""

@@ -132,10 +132,11 @@ class ComprehensiveSettingsDialog(QDialog):
         self.setup_general_tab()
         self.setup_credentials_tab()
         self.setup_templates_tab()
-        self.setup_tabs_tab()
-        self.setup_icons_tab()
+        self.setup_tabs_tab()  # Create widgets but don't add tab
+        self.setup_icons_tab()  # Create widgets but don't add tab
         self.setup_logs_tab()
         self.setup_scanning_tab()
+        self.setup_external_apps_tab()
         
         # Buttons
         button_layout = QHBoxLayout()
@@ -271,24 +272,24 @@ class ComprehensiveSettingsDialog(QDialog):
         general_layout.addWidget(self.confirm_delete_check, 0, 0)
         
         # Auto-rename
-        self.auto_rename_check = QCheckBox("Auto-rename galleries")
+        self.auto_rename_check = QCheckBox("Automatically rename galleries on imx.to")
         self.auto_rename_check.setChecked(defaults.get('auto_rename', True))
         general_layout.addWidget(self.auto_rename_check, 1, 0)
 
         # Auto-regenerate BBCode
-        self.auto_regenerate_bbcode_check = QCheckBox("Auto-regenerate BBCode when data changes")
+        self.auto_regenerate_bbcode_check = QCheckBox("Auto-regenerate artifacts when data changes")
         self.auto_regenerate_bbcode_check.setChecked(defaults.get('auto_regenerate_bbcode', True))
         self.auto_regenerate_bbcode_check.setToolTip("Automatically regenerate BBCode when template, gallery name, or custom fields change")
         general_layout.addWidget(self.auto_regenerate_bbcode_check, 2, 0)
 
         # Auto-start uploads
-        self.auto_start_upload_check = QCheckBox("Start uploads automatically after scanning")
+        self.auto_start_upload_check = QCheckBox("Start uploads automatically")
         self.auto_start_upload_check.setChecked(defaults.get('auto_start_upload', False))
         self.auto_start_upload_check.setToolTip("Automatically start uploads when scanning completes instead of waiting for manual start")
         general_layout.addWidget(self.auto_start_upload_check, 3, 0)
 
         # Auto-clear completed uploads
-        self.auto_clear_completed_check = QCheckBox("Clear uploads automatically after completing")
+        self.auto_clear_completed_check = QCheckBox("Clear completed items automatically")
         self.auto_clear_completed_check.setChecked(defaults.get('auto_clear_completed', False))
         self.auto_clear_completed_check.setToolTip("Automatically remove completed galleries from the queue")
         general_layout.addWidget(self.auto_clear_completed_check, 4, 0)
@@ -413,12 +414,13 @@ class ComprehensiveSettingsDialog(QDialog):
         
         # Add all groups to layout in 2x2 grid with 40/60 split
         grid_layout = QGridLayout()
+        grid_layout.setVerticalSpacing(12)  # Extra vertical spacing between groups
         grid_layout.addWidget(upload_group, 0, 0)      # Top left
         grid_layout.addWidget(general_group, 0, 1)     # Top Right
         grid_layout.addWidget(thumb_group, 1, 0)       # Bottom left
         grid_layout.addWidget(theme_group, 1, 1)       # Bottom right
         grid_layout.addWidget(storage_group, 2, 0)
-        
+
         # Set column stretch factors for 40/60 split
         grid_layout.setColumnStretch(0, 50)  # Left column 50%
         grid_layout.setColumnStretch(1, 50)  # Right column 50%
@@ -484,6 +486,8 @@ class ComprehensiveSettingsDialog(QDialog):
     def setup_tabs_tab(self):
         """Setup the Tabs management tab"""
         tabs_widget = QWidget()
+        # Keep a reference to prevent garbage collection
+        self.tabs_widget_ref = tabs_widget
         layout = QVBoxLayout(tabs_widget)
         
         # Initialize tab manager reference
@@ -578,8 +582,9 @@ class ComprehensiveSettingsDialog(QDialog):
         
         # Load current tabs and settings
         self.load_tabs_settings()
-        
-        self.tab_widget.addTab(tabs_widget, "Tabs")
+
+        # Tab management temporarily hidden while deciding on functionality
+        # self.tab_widget.addTab(tabs_widget, "Tabs")
     
     def load_tabs_settings(self):
         """Load current tabs and settings"""
@@ -922,7 +927,7 @@ class ComprehensiveSettingsDialog(QDialog):
         """Setup the Logs tab with log settings"""
         from src.gui.dialogs.log_settings_widget import LogSettingsWidget
         self.log_settings_widget = LogSettingsWidget(self)
-        self.log_settings_widget.settings_changed.connect(lambda: self.mark_tab_dirty(5))
+        self.log_settings_widget.settings_changed.connect(lambda: self.mark_tab_dirty(3))  # Logs tab is at index 3 (Tabs/Icons hidden)
         self.log_settings_widget.load_settings()  # Load current settings
         self.tab_widget.addTab(self.log_settings_widget, "Logs")
         
@@ -1094,33 +1099,924 @@ class ComprehensiveSettingsDialog(QDialog):
         layout.addWidget(strategy_group)
         layout.addStretch()
         
-        # Connect change signals to mark tab as dirty (tab index 6 for scanning)
-        self.fast_scan_check.toggled.connect(lambda: self.mark_tab_dirty(6))
+        # Connect change signals to mark tab as dirty (tab index 4 for scanning after hiding Tabs/Icons)
+        self.fast_scan_check.toggled.connect(lambda: self.mark_tab_dirty(4))
 
         # Connect new sampling controls
-        self.sampling_fixed_radio.toggled.connect(lambda: self.mark_tab_dirty(6))
-        self.sampling_percent_radio.toggled.connect(lambda: self.mark_tab_dirty(6))
-        self.sampling_fixed_spin.valueChanged.connect(lambda: self.mark_tab_dirty(6))
-        self.sampling_percent_spin.valueChanged.connect(lambda: self.mark_tab_dirty(6))
+        self.sampling_fixed_radio.toggled.connect(lambda: self.mark_tab_dirty(4))
+        self.sampling_percent_radio.toggled.connect(lambda: self.mark_tab_dirty(4))
+        self.sampling_fixed_spin.valueChanged.connect(lambda: self.mark_tab_dirty(4))
+        self.sampling_percent_spin.valueChanged.connect(lambda: self.mark_tab_dirty(4))
 
         # Connect exclusion controls
-        self.exclude_first_check.toggled.connect(lambda: self.mark_tab_dirty(6))
-        self.exclude_last_check.toggled.connect(lambda: self.mark_tab_dirty(6))
-        self.exclude_small_check.toggled.connect(lambda: self.mark_tab_dirty(6))
-        self.exclude_small_spin.valueChanged.connect(lambda: self.mark_tab_dirty(6))
-        self.exclude_patterns_check.toggled.connect(lambda: self.mark_tab_dirty(6))
-        self.exclude_patterns_edit.textChanged.connect(lambda: self.mark_tab_dirty(6))
+        self.exclude_first_check.toggled.connect(lambda: self.mark_tab_dirty(4))
+        self.exclude_last_check.toggled.connect(lambda: self.mark_tab_dirty(4))
+        self.exclude_small_check.toggled.connect(lambda: self.mark_tab_dirty(4))
+        self.exclude_small_spin.valueChanged.connect(lambda: self.mark_tab_dirty(4))
+        self.exclude_patterns_check.toggled.connect(lambda: self.mark_tab_dirty(4))
+        self.exclude_patterns_edit.textChanged.connect(lambda: self.mark_tab_dirty(4))
 
         # Connect stats calculation controls
-        self.stats_exclude_outliers_check.toggled.connect(lambda: self.mark_tab_dirty(6))
-        self.avg_mean_radio.toggled.connect(lambda: self.mark_tab_dirty(6))
-        self.avg_median_radio.toggled.connect(lambda: self.mark_tab_dirty(6))
+        self.stats_exclude_outliers_check.toggled.connect(lambda: self.mark_tab_dirty(4))
+        self.avg_mean_radio.toggled.connect(lambda: self.mark_tab_dirty(4))
+        self.avg_median_radio.toggled.connect(lambda: self.mark_tab_dirty(4))
         
         self.tab_widget.addTab(scanning_widget, "Image Scanning")
-    
+
+    def setup_external_apps_tab(self):
+        """Setup the External Apps tab for running external programs on gallery events"""
+        external_widget = QWidget()
+        layout = QVBoxLayout(external_widget)
+
+        # Intro text
+        intro_label = QLabel("Run external programs at different stages of gallery processing. "
+                            "Programs can output JSON to populate ext1-4 fields for use in templates.")
+        intro_label.setWordWrap(True)
+        layout.addWidget(intro_label)
+
+        # Execution mode
+        exec_mode_group = QGroupBox("Execution Mode")
+        exec_mode_layout = QHBoxLayout(exec_mode_group)
+        self.hooks_parallel_radio = QRadioButton("Run hooks in parallel")
+        self.hooks_sequential_radio = QRadioButton("Run hooks sequentially")
+        self.hooks_parallel_radio.setChecked(True)
+        exec_mode_layout.addWidget(self.hooks_parallel_radio)
+        exec_mode_layout.addWidget(self.hooks_sequential_radio)
+        exec_mode_layout.addStretch()
+        layout.addWidget(exec_mode_group)
+
+        # Create hook sections
+        self._create_hook_section(layout, "On Gallery Added", "added")
+        self._create_hook_section(layout, "On Gallery Started", "started")
+        self._create_hook_section(layout, "On Gallery Completed", "completed")
+
+        layout.addStretch()
+        self.tab_widget.addTab(external_widget, "External Apps")
+
+        # Connect signals to mark tab as dirty (tab index 5 after hiding Tabs and Icons)
+        self.hooks_parallel_radio.toggled.connect(lambda: self.mark_tab_dirty(5))
+        self.hooks_sequential_radio.toggled.connect(lambda: self.mark_tab_dirty(5))
+        for hook_type in ['added', 'started', 'completed']:
+            getattr(self, f'hook_{hook_type}_enabled').toggled.connect(lambda: self.mark_tab_dirty(5))
+            getattr(self, f'hook_{hook_type}_command').textChanged.connect(lambda: self.mark_tab_dirty(5))
+            getattr(self, f'hook_{hook_type}_show_console').toggled.connect(lambda: self.mark_tab_dirty(5))
+
+    def _create_hook_section(self, parent_layout, title, hook_type):
+        """Create a compact section for configuring a single hook"""
+        from PyQt6.QtGui import QFontDatabase
+
+        group = QGroupBox(title)
+        layout = QVBoxLayout(group)
+        hook_titles = {
+            'added': 'added to the queue',
+            'started': 'started',
+            'completed': 'finished uploading'
+        }
+        # Top row: Enable checkbox + Configure button
+        top_row = QHBoxLayout()
+        enable_check = QCheckBox(f"Enable this hook: called when galleries are {hook_titles.get(hook_type, hook_type.title())}")
+        setattr(self, f'hook_{hook_type}_enabled', enable_check)
+        top_row.addWidget(enable_check, 2)  # Stretch factor 2 (left 2/3)
+
+        # Configure button - use descriptive hook title
+        configure_btn = QPushButton(f"Configure Hook")
+        configure_btn.setToolTip(f"Configure and test '{hook_titles.get(hook_type, hook_type.title())}' hook - set up command, test execution, and map JSON output")
+        configure_btn.clicked.connect(lambda: self._show_json_mapping_dialog(hook_type))
+        top_row.addWidget(configure_btn, 1)  # Stretch factor 1 (right 1/3)
+
+        layout.addLayout(top_row)
+
+        # Command row with monospace font
+        command_layout = QHBoxLayout()
+        command_layout.addWidget(QLabel("Command:"))
+
+        command_input = QLineEdit()
+        command_input.setPlaceholderText(f'python script.py "%p" or multi_host_uploader.py gofile "%z"')
+        # Apply monospace font
+        mono_font = QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont)
+        command_input.setFont(mono_font)
+        setattr(self, f'hook_{hook_type}_command', command_input)
+        command_layout.addWidget(command_input, 1)  # Stretch factor 1
+        layout.addLayout(command_layout)
+
+        # Hidden storage for settings
+        show_console_check = QCheckBox()
+        show_console_check.setVisible(False)
+        setattr(self, f'hook_{hook_type}_show_console', show_console_check)
+
+        for i in range(1, 5):
+            key_input = QLineEdit()
+            key_input.setVisible(False)
+            setattr(self, f'hook_{hook_type}_key{i}', key_input)
+
+        parent_layout.addWidget(group)
+
+    def _get_available_vars(self, hook_type):
+        """Get available variables for a hook type"""
+        base_vars = "%N, %T, %p, %C, %s, %t, %e1-%e4, %c1-%c4"
+        if hook_type == "completed":
+            return f"{base_vars}, %g, %j, %b, %z"
+        else:
+            return base_vars
+
+    def _browse_for_program(self, hook_type):
+        """Browse for executable program"""
+        from PyQt6.QtWidgets import QFileDialog
+        file_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Select Program",
+            "",
+            "Executables (*.exe *.bat *.cmd *.py);;All Files (*.*)"
+        )
+        if file_path:
+            command_input = getattr(self, f'hook_{hook_type}_command')
+            command_input.setText(f'"{file_path}"')
+
+    def _show_variable_menu(self, hook_type):
+        """Show menu to insert variable at cursor position"""
+        from PyQt6.QtWidgets import QMenu
+        from PyQt6.QtGui import QCursor
+
+        menu = QMenu(self)
+
+        # Define variables and their descriptions
+        variables = [
+            ("%N", "Gallery name"),
+            ("%T", "Tab name"),
+            ("%p", "Gallery folder path"),
+            ("%C", "Number of images"),
+        ]
+
+        # Add completed-only variables
+        if hook_type == "completed":
+            variables.extend([
+                ("%g", "Gallery ID"),
+                ("%j", "JSON artifact path"),
+                ("%b", "BBCode artifact path"),
+                ("%z", "ZIP archive path (if exists)"),
+            ])
+
+        # Create menu actions
+        for var, desc in variables:
+            action = menu.addAction(f"{var}  -  {desc}")
+            action.triggered.connect(lambda checked, v=var: self._insert_variable(hook_type, v))
+
+        menu.exec(QCursor.pos())
+
+    def _insert_variable(self, hook_type, variable):
+        """Insert variable at cursor position in command input"""
+        command_input = getattr(self, f'hook_{hook_type}_command')
+        cursor_pos = command_input.cursorPosition()
+        current_text = command_input.text()
+        new_text = current_text[:cursor_pos] + variable + current_text[cursor_pos:]
+        command_input.setText(new_text)
+        command_input.setCursorPosition(cursor_pos + len(variable))
+        command_input.setFocus()
+
+    def _show_json_mapping_dialog(self, hook_type):
+        """Show dialog for configuring JSON key mappings"""
+        from PyQt6.QtWidgets import QDialog, QTextEdit
+        from PyQt6.QtGui import QFont, QFontDatabase
+
+        # Map hook types to friendly names
+        hook_names = {
+            'added': 'On Gallery Added',
+            'started': 'On Gallery Started',
+            'completed': 'On Gallery Completed'
+        }
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle(f"Command Builder & JSON Mapper - {hook_names.get(hook_type, hook_type.title())}")
+        dialog.setModal(True)
+        dialog.resize(850, 750)
+
+        layout = QVBoxLayout(dialog)
+
+        # Command Builder section (moved to top)
+        command_group = QGroupBox(f"Command Builder - {hook_names.get(hook_type, hook_type.title())}")
+        command_layout = QVBoxLayout(command_group)
+
+        # Command input with helper - Now using larger multiline editor
+        command_input_layout = QHBoxLayout()
+        command_label = QLabel("Command Template:")
+        command_label.setStyleSheet("font-weight: bold;")
+        command_input_layout.addWidget(command_label)
+
+        # Insert variable button
+        insert_var_btn = QPushButton("Insert % Variable ▼")
+        insert_var_btn.setToolTip("Insert a variable at cursor position (or type % to see options)")
+        command_input_layout.addWidget(insert_var_btn)
+
+        # Run test button (moved up here)
+        test_btn = QPushButton("▶ Run Test Command")
+        test_btn.setToolTip("Execute the command with test data")
+        test_btn.setStyleSheet("font-weight: bold;")
+        command_input_layout.addWidget(test_btn)
+
+        command_input_layout.addStretch()
+        command_layout.addLayout(command_input_layout)
+
+        # Variable definitions for both menu and autocomplete (defined early for use in class)
+        base_variables = [
+            ("%N", "Gallery name"),
+            ("%T", "Tab name"),
+            ("%p", "Gallery folder path"),
+            ("%C", "Number of images"),
+            ("%s", "Gallery size in bytes"),
+            ("%t", "Template name"),
+            ("", ""),  # Separator
+            ("%e1", "ext1 field value"),
+            ("%e2", "ext2 field value"),
+            ("%e3", "ext3 field value"),
+            ("%e4", "ext4 field value"),
+            ("", ""),  # Separator
+            ("%c1", "custom1 field value"),
+            ("%c2", "custom2 field value"),
+            ("%c3", "custom3 field value"),
+            ("%c4", "custom4 field value"),
+        ]
+
+        # Additional variables for completed events
+        if hook_type == "completed":
+            base_variables.insert(4, ("%g", "Gallery ID"))
+            base_variables.insert(5, ("%j", "JSON artifact path"))
+            base_variables.insert(6, ("%b", "BBCode artifact path"))
+            base_variables.insert(7, ("%z", "ZIP archive path"))
+
+        # Custom QTextEdit with autocomplete support
+        class AutoCompleteTextEdit(QTextEdit):
+            """QTextEdit with variable autocomplete on % key"""
+            def __init__(self, variables, parent=None):
+                super().__init__(parent)
+                self.variables = [(var, desc) for var, desc in variables if var]
+                self.completer = None
+                self.setup_completer()
+
+            def setup_completer(self):
+                from PyQt6.QtWidgets import QCompleter
+                from PyQt6.QtCore import Qt, QStringListModel
+
+                # Create list of completion items with descriptions
+                self.completion_items = [f"{var}  -  {desc}" for var, desc in self.variables]
+                self.var_only = [var for var, _ in self.variables]
+
+                model = QStringListModel(self.completion_items)
+                self.completer = QCompleter(model, self)
+                self.completer.setWidget(self)
+                self.completer.setCompletionMode(QCompleter.CompletionMode.PopupCompletion)
+                self.completer.setCaseSensitivity(Qt.CaseSensitivity.CaseSensitive)
+                self.completer.activated.connect(self.insert_completion)
+
+            def insert_completion(self, completion):
+                """Insert the selected variable at cursor"""
+                # Extract just the variable part (before the ' - ')
+                var = completion.split('  -  ')[0]
+
+                cursor = self.textCursor()
+
+                # Remove the % and any partial text after it
+                cursor.movePosition(cursor.MoveOperation.Left, cursor.MoveMode.KeepAnchor,
+                                  len(self.completer.completionPrefix()) + 1)
+                cursor.removeSelectedText()
+
+                # Insert the variable
+                cursor.insertText(var)
+                self.setTextCursor(cursor)
+
+            def keyPressEvent(self, event):
+                from PyQt6.QtCore import Qt
+
+                # Handle completer popup navigation
+                if self.completer and self.completer.popup().isVisible():
+                    if event.key() in (Qt.Key.Key_Enter, Qt.Key.Key_Return,
+                                      Qt.Key.Key_Escape, Qt.Key.Key_Tab):
+                        event.ignore()
+                        return
+
+                # Call parent to handle normal key input
+                super().keyPressEvent(event)
+
+                # Show completer when % is typed
+                if event.text() == '%':
+                    self.show_completions('')
+                # Update completer filter as user types after %
+                elif self.completer and self.completer.popup().isVisible():
+                    # Get text after the last %
+                    cursor = self.textCursor()
+                    cursor.select(cursor.SelectionType.LineUnderCursor)
+                    line_text = cursor.selectedText()
+
+                    # Find the last % before cursor
+                    cursor_pos = self.textCursor().positionInBlock()
+                    last_percent = line_text.rfind('%', 0, cursor_pos)
+
+                    if last_percent >= 0:
+                        prefix = line_text[last_percent + 1:cursor_pos]
+                        self.show_completions(prefix)
+                    else:
+                        self.completer.popup().hide()
+
+            def show_completions(self, prefix):
+                """Show completion popup with filtered results"""
+                from PyQt6.QtCore import QRect
+
+                self.completer.setCompletionPrefix(prefix)
+                self.completer.complete()
+
+                # Position popup at cursor
+                cursor_rect = self.cursorRect()
+                cursor_rect.setWidth(self.completer.popup().sizeHintForColumn(0)
+                                   + self.completer.popup().verticalScrollBar().sizeHint().width())
+                self.completer.complete(cursor_rect)
+
+        # Get current command and create autocomplete text editor
+        command_input = AutoCompleteTextEdit(base_variables, dialog)
+        current_command = getattr(self, f'hook_{hook_type}_command').text()
+        command_input.setPlainText(current_command)
+        command_input.setPlaceholderText(f'e.g., python script.py "%p" "%N"\nor: C:\\program.exe "%g" --output "%j"')
+
+        # Apply monospace font with larger size
+        mono_font = QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont)
+        mono_font.setPointSize(11)  # Larger font
+        command_input.setFont(mono_font)
+        command_input.setMaximumHeight(120)  # Limit height but allow multiple lines
+        command_input.setObjectName("commandInput")
+        command_layout.addWidget(command_input)
+
+        def show_var_menu():
+            from PyQt6.QtWidgets import QMenu
+            from PyQt6.QtGui import QCursor
+            menu = QMenu(dialog)
+
+            for var, desc in base_variables:
+                if not var:  # Separator
+                    menu.addSeparator()
+                else:
+                    action = menu.addAction(f"{var}  -  {desc}")
+                    action.triggered.connect(lambda checked, v=var: insert_variable_in_dialog(v))
+
+            menu.exec(QCursor.pos())
+
+        def insert_variable_in_dialog(variable):
+            cursor = command_input.textCursor()
+            cursor.insertText(variable)
+            command_input.setFocus()
+
+        insert_var_btn.clicked.connect(show_var_menu)
+
+        # Preview section - shows resolved command
+        preview_label = QLabel("Preview (with test data):")
+        preview_label.setStyleSheet("font-weight: bold; margin-top: 8px;")
+        command_layout.addWidget(preview_label)
+
+        # Preview display with larger font
+        preview_display = QTextEdit()
+        preview_display.setReadOnly(True)
+        preview_font = QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont)
+        preview_font.setPointSize(10)  # Slightly larger preview font
+        preview_display.setFont(preview_font)
+        preview_display.setObjectName("commandPreview")
+        preview_display.setMaximumHeight(80)
+        command_layout.addWidget(preview_display)
+
+        layout.addWidget(command_group)
+
+        # Function to update preview in real-time with syntax highlighting
+        def update_preview():
+            command = command_input.toPlainText()
+
+            # Define all substitutions (longest first to handle multi-char vars)
+            substitutions = {
+                # Multi-char variables first
+                '%e1': 'val1', '%e2': 'val2', '%e3': 'val3', '%e4': 'val4',
+                '%c1': 'cval1', '%c2': 'cval2', '%c3': 'cval3', '%c4': 'cval4',
+                # Single-char variables
+                '%N': 'Test Gallery',
+                '%T': 'Main',
+                '%p': 'C:\\test\\path',
+                '%C': '10',
+                '%s': '1048576',
+                '%t': 'Main',
+            }
+
+            # Add completed-specific substitutions
+            if hook_type == "completed":
+                substitutions.update({
+                    '%g': 'TEST123',
+                    '%j': 'C:\\test\\artifact.json',
+                    '%b': 'C:\\test\\bbcode.txt',
+                    '%z': '',
+                })
+
+            # Sort by length (descending) to handle multi-char vars first
+            sorted_subs = sorted(substitutions.items(), key=lambda x: len(x[0]), reverse=True)
+
+            preview_command = command
+            for var, value in sorted_subs:
+                preview_command = preview_command.replace(var, value)
+
+            preview_display.setPlainText(preview_command)
+
+        # Enhanced syntax highlighter with color-coded variables
+        class CommandHighlighter(QSyntaxHighlighter):
+            def __init__(self, parent=None, hook_type=''):
+                super().__init__(parent)
+                from PyQt6.QtGui import QColor
+
+                # Define color formats for different variable types
+                # Gallery info variables (blue/cyan)
+                self.gallery_format = QTextCharFormat()
+                self.gallery_format.setFontWeight(QFont.Weight.Bold)
+                self.gallery_format.setForeground(QColor(41, 128, 185))  # Blue
+                self.gallery_vars = ['%N', '%T', '%p', '%C', '%s', '%t']
+
+                # Upload result variables (green)
+                self.upload_format = QTextCharFormat()
+                self.upload_format.setFontWeight(QFont.Weight.Bold)
+                self.upload_format.setForeground(QColor(39, 174, 96))  # Green
+                self.upload_vars = ['%g', '%j', '%b', '%z']
+
+                # Ext field variables (orange)
+                self.ext_format = QTextCharFormat()
+                self.ext_format.setFontWeight(QFont.Weight.Bold)
+                self.ext_format.setForeground(QColor(230, 126, 34))  # Orange
+                self.ext_vars = ['%e1', '%e2', '%e3', '%e4']
+
+                # Custom field variables (purple)
+                self.custom_format = QTextCharFormat()
+                self.custom_format.setFontWeight(QFont.Weight.Bold)
+                self.custom_format.setForeground(QColor(142, 68, 173))  # Purple
+                self.custom_vars = ['%c1', '%c2', '%c3', '%c4']
+
+                # Build complete variable list sorted by length (longest first)
+                all_vars = self.gallery_vars + self.upload_vars + self.ext_vars + self.custom_vars
+                all_vars.sort(key=len, reverse=True)
+                self.all_variables = all_vars
+
+            def highlightBlock(self, text):
+                # Highlight variables with color-coding
+                for var in self.all_variables:
+                    # Determine which format to use
+                    if var in self.gallery_vars:
+                        var_format = self.gallery_format
+                    elif var in self.upload_vars:
+                        var_format = self.upload_format
+                    elif var in self.ext_vars:
+                        var_format = self.ext_format
+                    elif var in self.custom_vars:
+                        var_format = self.custom_format
+                    else:
+                        continue
+
+                    # Find and highlight all occurrences
+                    index = text.find(var)
+                    while index >= 0:
+                        self.setFormat(index, len(var), var_format)
+                        index = text.find(var, index + len(var))
+
+        # Apply highlighter
+        highlighter = CommandHighlighter(command_input.document())
+
+        # Connect for real-time updates
+        command_input.textChanged.connect(update_preview)
+        update_preview()  # Initial update
+
+        # JSON Key Mapping section - compact 2-row layout with reduced height
+        mapping_group = QGroupBox("JSON Key Mappings")
+        mapping_layout = QVBoxLayout(mapping_group)
+        mapping_layout.setSpacing(4)  # Tighter spacing
+
+        mapping_info = QLabel("Map program output to ext1-4 columns to make data available in bbcode template (e.g. download links from filehosts).")
+        mapping_info.setStyleSheet("font-size: 10px;")
+        mapping_layout.addWidget(mapping_info)
+
+        key_inputs = {}
+        # Two rows of ext1-4
+        for row in range(1):
+            row_layout = QHBoxLayout()
+            row_layout.setSpacing(8)
+            for col in range(4):
+                i = row * 2 + col + 1  # ext1-4
+                label = QLabel(f"<b>ext{i}</b>:")
+                label.setMinimumWidth(35)
+                row_layout.addWidget(label)
+                key_input = QLineEdit()
+                current_value = getattr(self, f'hook_{hook_type}_key{i}').text()
+                key_input.setText(current_value)
+                #key_input.setPlaceholderText(f'e.g., "url", "filename"')
+                key_inputs[f'ext{i}'] = key_input
+                row_layout.addWidget(key_input, 1)  # Stretch
+            mapping_layout.addLayout(row_layout)
+
+        # Set maximum height to make it more compact
+        mapping_group.setMaximumHeight(110)
+        layout.addWidget(mapping_group)
+
+        # Console/execution options
+        options_layout = QHBoxLayout()
+        show_console_check = QCheckBox("Show console window when executing")
+        show_console_check.setToolTip("If enabled, a console window will appear when the command runs (Windows only)")
+        # Load current setting
+        current_show_console = getattr(self, f'hook_{hook_type}_show_console').isChecked()
+        show_console_check.setChecked(current_show_console)
+        options_layout.addWidget(show_console_check)
+        options_layout.addStretch()
+        layout.addLayout(options_layout)
+
+        # Test section - simplified to only show results when available
+        test_group = QGroupBox("Test Output")
+        test_layout = QVBoxLayout(test_group)
+
+        # Split view: table left (40%), raw output right (60%)
+        from PyQt6.QtWidgets import QSplitter
+        results_splitter = QSplitter(Qt.Orientation.Horizontal)
+
+        # Table widget for JSON results (left side) - hidden by default
+        table_container = QWidget()
+        table_layout = QVBoxLayout(table_container)
+        table_layout.setContentsMargins(0, 0, 0, 0)
+
+        results_table = QTableWidget()
+        results_table.setColumnCount(2)
+        results_table.setHorizontalHeaderLabels(["Key", "Value"])
+        # Larger header font
+        header_font = results_table.horizontalHeader().font()
+        header_font.setPointSize(header_font.pointSize() + 1)
+        header_font.setBold(True)
+        results_table.horizontalHeader().setFont(header_font)
+        results_table.horizontalHeader().setStretchLastSection(True)
+        results_table.setAlternatingRowColors(True)
+        results_table.setVisible(False)  # Hidden until JSON is detected
+        table_layout.addWidget(results_table)
+
+        results_splitter.addWidget(table_container)
+
+        # Text output widget for raw output (right side)
+        output_container = QWidget()
+        output_layout = QVBoxLayout(output_container)
+        output_layout.setContentsMargins(0, 0, 0, 0)
+
+        test_output = QTextEdit()
+        test_output.setReadOnly(True)
+        test_output.setPlaceholderText("Click '▶ Run Test Command' button above to execute and see output...")
+        mono_font = QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont)
+        test_output.setFont(mono_font)
+        output_layout.addWidget(test_output)
+
+        results_splitter.addWidget(output_container)
+
+        # Set initial sizes (40/60 split - more space for raw output)
+        results_splitter.setSizes([300, 500])
+
+        def run_test():
+            import subprocess
+            import json
+            import re
+
+            # Get the command from the live preview display (already has substitutions)
+            test_command = preview_display.toPlainText()
+
+            if not test_command or not command_input.toPlainText():
+                test_output.setPlainText("Error: No command configured")
+                results_table.setVisible(False)
+                return
+
+            try:
+                test_output.setText(f"Running: {test_command}\n\nPlease wait...")
+                QApplication.processEvents()  # Update UI
+
+                result = subprocess.run(
+                    test_command,
+                    shell=True,
+                    capture_output=True,
+                    text=True,
+                    timeout=30
+                )
+
+                # Always show raw output
+                output_text = f"=== STDOUT ===\n{result.stdout if result.stdout else '(empty)'}\n\n"
+                if result.stderr:
+                    output_text += f"=== STDERR ===\n{result.stderr}\n\n"
+
+                # Smart detection variables
+                detected_data = {}
+                auto_map_suggestions = {}
+
+                # Try to parse as JSON first
+                if result.stdout.strip():
+                    is_json = False
+                    try:
+                        json_data = json.loads(result.stdout.strip())
+                        is_json = True
+
+                        # Check if JSON indicates an error response
+                        is_error_response = False
+                        error_message = None
+
+                        # Common error patterns in JSON responses
+                        if isinstance(json_data, dict):
+                            # Pattern 1: {"error": "message", "status": "failed"}
+                            if 'error' in json_data and 'status' in json_data:
+                                if json_data.get('status') in ['failed', 'error', 'fail']:
+                                    is_error_response = True
+                                    error_message = json_data.get('error', 'Unknown error')
+                            # Pattern 2: {"error": "message"} (no status field)
+                            elif 'error' in json_data and not any(k in json_data for k in ['url', 'link', 'data', 'result', 'success']):
+                                is_error_response = True
+                                error_message = json_data.get('error', 'Unknown error')
+                            # Pattern 3: {"status": "error", "message": "..."}
+                            elif json_data.get('status') in ['failed', 'error', 'fail'] and 'message' in json_data:
+                                is_error_response = True
+                                error_message = json_data.get('message', 'Unknown error')
+                            # Pattern 4: {"success": false, "error": "..."}
+                            elif json_data.get('success') == False and 'error' in json_data:
+                                is_error_response = True
+                                error_message = json_data.get('error', 'Unknown error')
+
+                        # If this is an error response, show error dialog and stop processing
+                        if is_error_response:
+                            from PyQt6.QtWidgets import QMessageBox
+                            results_table.setVisible(False)
+                            output_text += f"❌ Command returned an error response\n\n"
+                            test_output.setPlainText(output_text)
+
+                            QMessageBox.critical(
+                                dialog,
+                                "External App Test Failed",
+                                f"The external application returned an error:\n\n{error_message}"
+                            )
+                            return
+
+                        # If we got valid JSON (and not an error), populate the table
+                        results_table.setRowCount(0)
+
+                        # Add each key-value pair to the table
+                        for key, value in json_data.items():
+                            row_position = results_table.rowCount()
+                            results_table.insertRow(row_position)
+
+                            # Key column
+                            key_item = QTableWidgetItem(str(key))
+                            key_item.setToolTip(str(key))
+                            results_table.setItem(row_position, 0, key_item)
+
+                            # Value column - format based on type
+                            if isinstance(value, dict) or isinstance(value, list):
+                                value_text = json.dumps(value, indent=2)
+                            else:
+                                value_text = str(value)
+
+                            value_item = QTableWidgetItem(value_text)
+                            value_item.setToolTip(value_text)
+                            results_table.setItem(row_position, 1, value_item)
+
+                            # Store for auto-mapping suggestions
+                            detected_data[key] = value_text
+
+                        # Resize columns to content
+                        results_table.resizeColumnsToContents()
+
+                        # Show table if we have results
+                        if results_table.rowCount() > 0:
+                            results_table.setVisible(True)
+                            output_text += "✓ Valid JSON detected and parsed in left panel\n\n"
+
+                            # Smart auto-mapping suggestions for JSON
+                            suggest_json_mapping(json_data, auto_map_suggestions)
+                        else:
+                            results_table.setVisible(False)
+                            output_text += "⚠ JSON was valid but empty\n\n"
+
+                        test_output.setPlainText(output_text)
+
+                    except json.JSONDecodeError:
+                        # Not valid JSON - try smart pattern detection
+                        is_json = False
+                        results_table.setVisible(False)
+
+                        # Detect URLs, file paths, and other useful data
+                        detect_patterns(result.stdout, detected_data, auto_map_suggestions)
+
+                        if detected_data:
+                            output_text += f"ℹ️ Output is not JSON, but found {len(detected_data)} useful value(s)\n\n"
+                        else:
+                            output_text += "⚠ Output is not JSON and no recognizable patterns found\n\n"
+
+                        test_output.setPlainText(output_text)
+
+                    # Show auto-mapping suggestion dialog if we found anything useful
+                    if auto_map_suggestions:
+                        show_auto_map_dialog(auto_map_suggestions, detected_data, is_json)
+
+                else:
+                    # No output
+                    results_table.setVisible(False)
+                    test_output.setPlainText(output_text + "⚠ Command produced no stdout")
+
+            except subprocess.TimeoutExpired:
+                results_table.setVisible(False)
+                test_output.setPlainText("Error: Command timed out after 30 seconds")
+            except Exception as e:
+                results_table.setVisible(False)
+                test_output.setPlainText(f"Error: {e}")
+
+        def suggest_json_mapping(json_data, suggestions):
+            """Suggest JSON key to ext field mappings based on common patterns"""
+            # Common patterns for URLs
+            url_keys = ['url', 'link', 'href', 'download_url', 'file_url', 'upload_url', 'direct_url']
+            # Common patterns for filenames
+            filename_keys = ['filename', 'name', 'file', 'title']
+            # Common patterns for IDs
+            id_keys = ['id', 'file_id', 'upload_id', 'unique_id']
+            # Common patterns for sizes
+            size_keys = ['size', 'filesize', 'bytes', 'length']
+
+            priority_order = []
+
+            for key, value in json_data.items():
+                key_lower = key.lower()
+
+                # Prioritize URL fields
+                if any(pattern in key_lower for pattern in url_keys):
+                    priority_order.append((1, key, value, "URL/Link"))
+                # Then filename fields
+                elif any(pattern in key_lower for pattern in filename_keys):
+                    priority_order.append((2, key, value, "Filename"))
+                # Then ID fields
+                elif any(pattern in key_lower for pattern in id_keys):
+                    priority_order.append((3, key, value, "ID"))
+                # Then size fields
+                elif any(pattern in key_lower for pattern in size_keys):
+                    priority_order.append((4, key, value, "Size"))
+                # Everything else
+                else:
+                    priority_order.append((5, key, value, "Data"))
+
+            # Sort by priority and assign to ext1-4
+            priority_order.sort(key=lambda x: x[0])
+            for i, (priority, key, value, data_type) in enumerate(priority_order[:4]):
+                suggestions[f'ext{i+1}'] = {
+                    'json_key': key,
+                    'value': value,
+                    'type': data_type
+                }
+
+        def detect_patterns(text, detected_data, suggestions):
+            """Detect URLs, file paths, and other patterns in plain text output"""
+            import re
+
+            # URL pattern (http, https, ftp)
+            url_pattern = r'https?://[^\s<>"\'\)]+|ftp://[^\s<>"\'\)]+'
+            urls = re.findall(url_pattern, text)
+
+            # File path pattern (Windows and Unix)
+            file_pattern = r'(?:[A-Za-z]:\\(?:[^\\\/:*?"<>|\r\n]+\\)*[^\\\/:*?"<>|\r\n]*)|(?:/[^\s:*?"<>|\r\n]+)'
+            file_paths = re.findall(file_pattern, text)
+
+            # Look for key:value or key=value patterns
+            kv_pattern = r'(\w+)\s*[:=]\s*([^\s,;\n]+)'
+            key_values = re.findall(kv_pattern, text)
+
+            ext_counter = 1
+
+            # Prioritize URLs
+            for url in urls[:4]:  # Limit to first 4 URLs
+                if ext_counter <= 4:
+                    detected_data[f'url_{ext_counter}'] = url
+                    suggestions[f'ext{ext_counter}'] = {
+                        'json_key': None,
+                        'value': url,
+                        'type': 'URL'
+                    }
+                    ext_counter += 1
+
+            # Then file paths that look like actual files (have extensions)
+            for path in file_paths:
+                if ext_counter <= 4 and '.' in path.split('/')[-1].split('\\')[-1]:
+                    detected_data[f'file_{ext_counter}'] = path
+                    suggestions[f'ext{ext_counter}'] = {
+                        'json_key': None,
+                        'value': path,
+                        'type': 'File Path'
+                    }
+                    ext_counter += 1
+
+            # Then key-value pairs
+            for key, value in key_values:
+                if ext_counter <= 4:
+                    detected_data[key] = value
+                    suggestions[f'ext{ext_counter}'] = {
+                        'json_key': key,
+                        'value': value,
+                        'type': 'Data'
+                    }
+                    ext_counter += 1
+
+        def show_auto_map_dialog(suggestions, detected_data, is_json):
+            """Show a simple dialog asking if user wants to auto-map detected values"""
+            from PyQt6.QtWidgets import QMessageBox, QCheckBox, QVBoxLayout, QLabel
+
+            msg_box = QMessageBox(dialog)
+            msg_box.setWindowTitle("Auto-Map Detected Values?")
+            msg_box.setIcon(QMessageBox.Icon.Question)
+
+            # Build the message
+            if is_json:
+                message = "✓ Found useful data in the JSON output!\n\n"
+            else:
+                message = "✓ Found useful data in the output!\n\n"
+
+            message += "Would you like to automatically map these values to ext fields?\n\n"
+
+            for ext_field, info in sorted(suggestions.items()):
+                value = info['value']
+                data_type = info['type']
+
+                # Truncate long values
+                if len(str(value)) > 50:
+                    display_value = str(value)[:47] + "..."
+                else:
+                    display_value = str(value)
+
+                if is_json and info['json_key']:
+                    message += f"• {ext_field}: {info['json_key']} = {display_value}\n   ({data_type})\n\n"
+                else:
+                    message += f"• {ext_field}: {display_value}\n   ({data_type})\n\n"
+
+            msg_box.setText(message)
+            msg_box.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+            msg_box.setDefaultButton(QMessageBox.StandardButton.Yes)
+
+            # Add "Don't ask again" checkbox
+            dont_ask_cb = QCheckBox("Don't ask me again (always auto-map)")
+            msg_box.setCheckBox(dont_ask_cb)
+
+            response = msg_box.exec()
+
+            if response == QMessageBox.StandardButton.Yes:
+                # Apply the mappings
+                for ext_field, info in suggestions.items():
+                    ext_num = ext_field[-1]  # Get the number (1-4)
+
+                    # Set the JSON key mapping (if it's JSON)
+                    if is_json and info['json_key']:
+                        key_inputs[ext_field].setText(info['json_key'])
+                    elif info['json_key']:  # Plain text key-value
+                        key_inputs[ext_field].setText(info['json_key'])
+                    # For plain URLs/paths without keys, leave the mapping empty
+                    # The value will still be accessible via the detected pattern
+
+                # Show confirmation
+                QMessageBox.information(
+                    dialog,
+                    "Mappings Applied",
+                    f"✓ Successfully mapped {len(suggestions)} value(s) to ext fields!\n\n"
+                    "Click 'Save' to keep these mappings."
+                )
+
+        test_btn.clicked.connect(run_test)
+        test_layout.addWidget(results_splitter)
+        layout.addWidget(test_group)
+
+        # Buttons
+        button_layout = QHBoxLayout()
+        button_layout.addStretch()
+
+        save_btn = QPushButton("Save")
+        save_btn.setDefault(True)  # Make it the default button
+        def save_mapping():
+            # Save the command from the command builder (QTextEdit now)
+            new_command = command_input.toPlainText().strip()
+            getattr(self, f'hook_{hook_type}_command').setText(new_command)
+
+            # Save the show console checkbox
+            getattr(self, f'hook_{hook_type}_show_console').setChecked(show_console_check.isChecked())
+
+            # Save the JSON key mappings
+            for i in range(1, 5):
+                key = f'ext{i}'
+                value = key_inputs[key].text().strip()
+                getattr(self, f'hook_{hook_type}_key{i}').setText(value)
+
+            self.mark_tab_dirty(5)  # External Apps tab is now at index 5 after hiding Tabs and Icons
+            dialog.accept()
+
+        save_btn.clicked.connect(save_mapping)
+        button_layout.addWidget(save_btn)
+
+        cancel_btn = QPushButton("Cancel")
+        cancel_btn.clicked.connect(dialog.reject)
+        button_layout.addWidget(cancel_btn)
+
+        layout.addLayout(button_layout)
+
+        dialog.exec()
+
     def setup_icons_tab(self):
         """Setup the Icon Manager tab with improved side-by-side light/dark preview"""
         icons_widget = QWidget()
+        # Keep a reference to prevent garbage collection
+        self.icons_widget_ref = icons_widget
         layout = QVBoxLayout(icons_widget)
         
         # Header info
@@ -1298,8 +2194,9 @@ class ComprehensiveSettingsDialog(QDialog):
         # Connect change signals - no need to mark dirty since icon replacement handles this
         # self.light_icon_frame.icon_dropped.connect(lambda: self.mark_tab_dirty(6))
         # self.dark_icon_frame.icon_dropped.connect(lambda: self.mark_tab_dirty(6))
-        
-        self.tab_widget.addTab(icons_widget, "Icons")
+
+        # Icons management temporarily hidden while deciding on functionality
+        # self.tab_widget.addTab(icons_widget, "Icons")
         
     def browse_central_store(self):
         """Browse for central store directory"""
@@ -1334,6 +2231,8 @@ class ComprehensiveSettingsDialog(QDialog):
         self._load_scanning_settings()
         # Load tabs settings
         self._load_tabs_settings()
+        # Load external apps settings
+        self._load_external_apps_settings()
     
     def _load_scanning_settings(self):
         """Load scanning settings from INI file"""
@@ -1414,8 +2313,81 @@ class ComprehensiveSettingsDialog(QDialog):
             if hasattr(self, 'load_tabs_settings'):
                 self.load_tabs_settings()
         except Exception as e:
-            print(f"{timestamp()} WARNING: Failed to load tabs settings: {e}")
-        
+            # Silently skip any errors since tabs functionality may be hidden
+            pass
+
+    def _load_external_apps_settings(self):
+        """Load external apps settings from INI file"""
+        try:
+            config = configparser.ConfigParser()
+            config_file = get_config_path()
+
+            #print(f"{timestamp()} DEBUG: Loading external apps settings from {config_file}")
+
+            if os.path.exists(config_file):
+                config.read(config_file)
+            else:
+                print(f"{timestamp()} WARNING: Config file does not exist: {config_file}")
+                return
+
+            # Check if EXTERNAL_APPS section exists
+            if 'EXTERNAL_APPS' not in config:
+                print(f"{timestamp()} INFO: No EXTERNAL_APPS section in config, using defaults")
+                return
+
+            # Block signals during loading
+            controls = [self.hooks_parallel_radio, self.hooks_sequential_radio]
+            for hook_type in ['added', 'started', 'completed']:
+                controls.extend([
+                    getattr(self, f'hook_{hook_type}_enabled'),
+                    getattr(self, f'hook_{hook_type}_command'),
+                    getattr(self, f'hook_{hook_type}_show_console'),
+                ])
+
+            for control in controls:
+                control.blockSignals(True)
+
+            # Load execution mode
+            parallel = config.getboolean('EXTERNAL_APPS', 'parallel_execution', fallback=True)
+            if parallel:
+                self.hooks_parallel_radio.setChecked(True)
+            else:
+                self.hooks_sequential_radio.setChecked(True)
+
+            # Load hook settings
+            for hook_type in ['added', 'started', 'completed']:
+                enabled = config.getboolean('EXTERNAL_APPS', f'hook_{hook_type}_enabled', fallback=False)
+                command = config.get('EXTERNAL_APPS', f'hook_{hook_type}_command', fallback='')
+                show_console = config.getboolean('EXTERNAL_APPS', f'hook_{hook_type}_show_console', fallback=False)
+
+                # Unescape %% back to % (ConfigParser doubles % for escaping)
+                # config.get() with raw=False (default) automatically handles this, but being explicit
+                unescaped_command = command.replace('%%', '%')
+
+                #print(f"{timestamp()} DEBUG: Loading {hook_type}: enabled={enabled}, command='{unescaped_command}', show_console={show_console}")
+
+                getattr(self, f'hook_{hook_type}_enabled').setChecked(enabled)
+                getattr(self, f'hook_{hook_type}_command').setText(unescaped_command)
+                getattr(self, f'hook_{hook_type}_show_console').setChecked(show_console)
+
+                # Load JSON key mappings
+                for i in range(1, 5):
+                    key_mapping = config.get('EXTERNAL_APPS', f'hook_{hook_type}_key{i}', fallback='')
+                    #if key_mapping:
+                    #    print(f"{timestamp()} DEBUG: Loading {hook_type}_key{i}='{key_mapping}'")
+                    getattr(self, f'hook_{hook_type}_key{i}').setText(key_mapping)
+
+            # Unblock signals
+            for control in controls:
+                control.blockSignals(False)
+
+            #print(f"{timestamp()} DEBUG: External apps settings loaded successfully")
+
+        except Exception as e:
+            import traceback
+            print(f"{timestamp()} ERROR: Failed to load external apps settings: {e}")
+            traceback.print_exc()
+
     def save_settings(self):
         """Save all settings"""
         try:
@@ -1456,7 +2428,10 @@ class ComprehensiveSettingsDialog(QDialog):
                 
                 # Save scanning settings
                 self._save_scanning_settings()
-                
+
+                # Save external apps settings
+                self._save_external_apps_settings()
+
                 # Save tabs settings
                 self._save_tabs_settings()
                     
@@ -1508,7 +2483,49 @@ class ComprehensiveSettingsDialog(QDialog):
         # No additional saving needed here as all tab operations
         # in the UI immediately update the TabManager which handles persistence
         pass
-    
+
+    def _save_external_apps_settings(self):
+        """Save external apps settings to INI file"""
+        try:
+            config = configparser.ConfigParser()
+            config_file = get_config_path()
+
+            if os.path.exists(config_file):
+                config.read(config_file)
+
+            if 'EXTERNAL_APPS' not in config:
+                config.add_section('EXTERNAL_APPS')
+
+            # Save execution mode
+            config.set('EXTERNAL_APPS', 'parallel_execution', str(self.hooks_parallel_radio.isChecked()))
+
+            # Save hook settings
+            for hook_type in ['added', 'started', 'completed']:
+                enabled = getattr(self, f'hook_{hook_type}_enabled').isChecked()
+                command = getattr(self, f'hook_{hook_type}_command').text()
+                show_console = getattr(self, f'hook_{hook_type}_show_console').isChecked()
+
+                #print(f"{timestamp()} DEBUG: Saving {hook_type}: enabled={enabled}, command='{command}', show_console={show_console}")
+
+                # Escape % characters by doubling them for ConfigParser
+                # ConfigParser uses % for interpolation, so % needs to be %%
+                escaped_command = command.replace('%', '%%')
+
+                config.set('EXTERNAL_APPS', f'hook_{hook_type}_enabled', str(enabled))
+                config.set('EXTERNAL_APPS', f'hook_{hook_type}_command', escaped_command)
+                config.set('EXTERNAL_APPS', f'hook_{hook_type}_show_console', str(show_console))
+
+                # Save JSON key mappings
+                for i in range(1, 5):
+                    key_mapping = getattr(self, f'hook_{hook_type}_key{i}').text()
+                    config.set('EXTERNAL_APPS', f'hook_{hook_type}_key{i}', key_mapping)
+
+            with open(config_file, 'w') as f:
+                config.write(f)
+
+        except Exception as e:
+            print(f"{timestamp()} WARNING: Failed to save external apps settings: {e}")
+
     def _reset_tabs_settings(self):
         """Reset tabs settings to defaults"""
         try:
@@ -1683,22 +2700,23 @@ class ComprehensiveSettingsDialog(QDialog):
     def save_current_tab(self):
         """Save only the current tab's settings"""
         current_index = self.tab_widget.currentIndex()
-        
+
         try:
+            # NOTE: Tabs and Icons tabs are created but not added to tab widget
+            # Actual tab order: General(0), Credentials(1), Templates(2), Logs(3), Image Scanning(4), External Apps(5)
             if current_index == 0:  # General tab
                 return self._save_general_tab()
             elif current_index == 1:  # Credentials tab
                 return self._save_credentials_tab()
             elif current_index == 2:  # Templates tab
                 return self._save_templates_tab()
-            elif current_index == 3:  # Tabs tab
-                return self._save_tabs_tab()
-            elif current_index == 4:  # Icon Manager tab
-                return self._save_icons_tab()
-            elif current_index == 5:  # Logs tab
+            elif current_index == 3:  # Logs tab (Tabs/Icons hidden, so this shifts to index 3)
                 return self._save_logs_tab()
-            elif current_index == 6:  # Image Scanning tab
+            elif current_index == 4:  # Image Scanning tab
                 self._save_scanning_settings()
+                return True
+            elif current_index == 5:  # External Apps tab
+                self._save_external_apps_settings()
                 return True
             else:
                 return True

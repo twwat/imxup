@@ -30,37 +30,40 @@ class SplashScreen(QSplashScreen):
                 self.logo_pixmap = None
         except Exception:
             self.logo_pixmap = None
-        self.init_action_words = [
-            "initializing", "activating actuators", "establishing alibi", "connecting to skynet",
-            "fabricating evidence", "concocting plan", "devising exit strategy", "improvising",
+            
+        # Get version info
+        try:
+            from imxup import get_version
+            APP_VERSION = get_version()
+            self.version = f"{APP_VERSION} "
+        except:
+            self.version = "unknown"
+            
+        self.random_statuses = [
+            "initializing", "activating actuators", "establishing an alibi", "connecting to skynet",
+            "fabricating evidence", "concocting plan", "devising exit strategy", "planning improvisation strategy",
             "conspiring", "mobilizing", "arousing", "linking to mothership", "replicating replicants",
-            "configuring", "populating microverse", "instantiating", "kicking", "Smashing",
-            "rebooting", "stabilizing mood", "normalizing", "approximating", "recombinating",
-            "extrapolating", "inseminating", "obliterating", "annihilating",
-            "observifying", "calibrating", "accelerating", "optimizing", "flipping tables",
-            "exorcising", "wiping back to front"]
-        self.status_text = random.choice(self.init_action_words).title()
+            "configuring", "populating microverse", 
+            "rebooting microverse", "stabilizing mood", "flipping a table", "all glory to the hypnotoad"
+            "exorcising demons", "wiping back to front", "counting sheep", "taking a nap", "making you wait for no reason"]
+        #self.status_text = random.choice(self.init_action_words).title()
+        self.status_text = f"Initializing ImxUp v{APP_VERSION}"
         self.progress_dots = ""
         
         # Random action words and objects
         self.action_words = [
-            "initializing", "activating", "establishing", "launching", "constructing",
+            "reinitializing", "activating", "establishing", "launching", "constructing",
             "inventing", "fabricating", "concocting", "devising", "improvising",
-            "actuating", "starting", "mobilizing", "arousing", "galvanizing",
-            "configuring", "populating", "instantiating", "kicking", "muttering at",
+            "actuating", "mobilizing", "arousing", "galvanizing", "monetizing", 
+            "configuring", "populating", "instantiating", "kicking", "yelling 'fuck you' at",
             "rebooting", "stabilizing", "normalizing", "approximating", "recombinating",
             "deriving", "extrapolating", "inseminating", "obliterating", "annihilating",
-            "observifying", "recalibrating", "accelerating", "optimizing", "intubating",
-            "exorcising"
+            "observifying", "recalibrating", "accelerating", "optimizing", "exorcising",
+            "adjusting", "dehumidifying", "hiding", "setting fire to"
         ]
         
        
-        # Get version info
-        try:
-            from src.core.constants import APP_VERSION
-            self.version = f"v {APP_VERSION} "
-        except:
-            self.version = "v. unknown"
+
 
         # Set rounded window shape
         self.setWindowShape()
@@ -127,8 +130,8 @@ class SplashScreen(QSplashScreen):
         y_offset += 58
         
         # Draw copyright and license info
-        painter.setPen(QColor(212, 212, 212))
-        license_font = QFont("Courier", 11)
+        painter.setPen(QColor(200, 200, 200))
+        license_font = QFont("Courier", 10)
         painter.setFont(license_font)
 
         license_lines = [
@@ -153,15 +156,15 @@ class SplashScreen(QSplashScreen):
         status_x = (self.width() - status_rect.width()) // 2
         painter.drawText(status_x, self.height() - 42, self.status_text)
         
-        # Draw progress dots in fixed position (left-aligned within centered area)
-        dots_font = QFont("Courier", 16)
+        # Draw progress dots centered
+        dots_font = QFont("Courier", 15)
         painter.setFont(dots_font)
-        painter.setPen(QColor(169, 150, 150))
-        
-        # Create a fixed-width area for dots (centered, but dots are left-aligned within it)
-        dots_area_width = 200
-        dots_area_x = (self.width() - dots_area_width) // 2
-        painter.drawText(dots_area_x, self.height() - 10, self.progress_dots)
+        painter.setPen(QColor(29, 152, 222))
+
+        # Center the dots by measuring their actual width
+        dots_rect = painter.fontMetrics().boundingRect(self.progress_dots)
+        dots_x = (self.width() - dots_rect.width()) // 2
+        painter.drawText(dots_x, self.height() - 15, self.progress_dots)
         
         painter.end()
     
@@ -177,6 +180,15 @@ class SplashScreen(QSplashScreen):
         #self.random_timer.stop()
         action = random.choice(self.action_words).title()
         self.status_text = f"{action} {text}"
+        self.progress_dots += "•"
+        self.repaint()
+        QApplication.processEvents()
+        
+    def set_random_status(self, text):
+        """Set status text with random action word and add progress dot"""
+        #self.random_timer.stop()
+        action = random.choice(self.random_statuses).capitalize()
+        self.status_text = f"{action}"
         self.progress_dots += "•"
         self.repaint()
         QApplication.processEvents()

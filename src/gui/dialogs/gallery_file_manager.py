@@ -407,9 +407,9 @@ class GalleryFileManagerDialog(QDialog):
                 # BBCode
                 bbcode = img_data.get('bbcode', '')
                 if bbcode:
-                    details += f"<b>BBCode:</b><br><code style='background: #f0f0f0; padding: 5px; display: block;'>{bbcode}</code><br><br>"
+                    details += f"<b>BBCode:</b><br><code class='code-block'>{bbcode}</code><br><br>"
                     hotlink = img_data.get('bbcode','').replace('/u/t/', '/u/i/')
-                    details += f"<b>Hotlink:</b><br><code style='background: #f0f0f0; paddingL: 5px; display: block;'>{hotlink}</code><br>"
+                    details += f"<b>Hotlink:</b><br><code class='code-block'>{hotlink}</code><br>"
                 self.details_text.setHtml(details)
                 return
 

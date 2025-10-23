@@ -39,53 +39,9 @@ class LogSettingsWidget(QWidget):
         top_buttons.addStretch()
         layout.addLayout(top_buttons)
 
-        # File Logging group
-        file_group = QGroupBox("File Logging")
-        file_grid = QGridLayout(file_group)
-
-        self.chk_log_enabled = QCheckBox("Enable file logging")
-        file_grid.addWidget(self.chk_log_enabled, 0, 0, 1, 2)
-
-        self.cmb_log_rotation = QComboBox()
-        self.cmb_log_rotation.addItems(["daily", "size"])
-        file_grid.addWidget(QLabel("Rotation:"), 1, 0)
-        file_grid.addWidget(self.cmb_log_rotation, 1, 1)
-
-        self.spn_log_backup = QSpinBox()
-        self.spn_log_backup.setRange(0, 3650)
-        file_grid.addWidget(QLabel("Backups to keep:"), 1, 2)
-        file_grid.addWidget(self.spn_log_backup, 1, 3)
-
-        self.chk_log_compress = QCheckBox("Compress rotated logs (.gz)")
-        file_grid.addWidget(self.chk_log_compress, 2, 0, 1, 2)
-
-        self.spn_log_max_bytes = QSpinBox()
-        self.spn_log_max_bytes.setRange(1024, 1024 * 1024 * 1024)
-        self.spn_log_max_bytes.setSingleStep(1024 * 1024)
-        file_grid.addWidget(QLabel("Max size (bytes, size mode):"), 2, 2)
-        file_grid.addWidget(self.spn_log_max_bytes, 2, 3)
-
         levels = ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
-        self.cmb_log_file_level = QComboBox()
-        self.cmb_log_file_level.addItems(levels)
-        level_label = QLabel("Log level:")
-        level_label.setStyleSheet("font-weight: bold;")
-        file_grid.addWidget(level_label, 3, 0)
-        file_grid.addWidget(self.cmb_log_file_level, 3, 1)
 
-        upload_label = QLabel("Upload success detail:")
-        upload_label.setStyleSheet("font-weight: bold;")
-        file_grid.addWidget(upload_label, 3, 2)
-        self.cmb_log_file_upload_mode = QComboBox()
-        self.cmb_log_file_upload_mode.addItems(["none", "file", "gallery", "both"])
-        file_grid.addWidget(self.cmb_log_file_upload_mode, 3, 3)
-
-        # File categories header
-        file_cat_label = QLabel("Categories:")
-        file_cat_label.setStyleSheet("margin-top: 10px;")
-        file_grid.addWidget(file_cat_label, 4, 0, 1, 5)
-
-        # File categories in 2 rows of 5
+        # Define categories for GUI Log section
         cats = [
             ("uploads", "Uploads"),
             ("auth", "Authentication"),
@@ -98,17 +54,8 @@ class LogSettingsWidget(QWidget):
             ("timing", "Timing"),
             ("general", "General"),
         ]
-        for idx, (cat_key, cat_label) in enumerate(cats):
-            file_key = f"cats_file_{cat_key}"
-            chk_file = QCheckBox(cat_label)
-            row = 5 + (idx // 5)
-            col = idx % 5
-            file_grid.addWidget(chk_file, row, col)
-            self._log_cat_widgets[file_key] = chk_file
 
-        layout.addWidget(file_group)
-
-        # GUI Log group
+        # GUI Log group (moved to top)
         gui_group = QGroupBox("GUI Log")
         gui_grid = QGridLayout(gui_group)
 
@@ -141,6 +88,58 @@ class LogSettingsWidget(QWidget):
             self._log_cat_widgets[gui_key] = chk_gui
 
         layout.addWidget(gui_group)
+
+        # File Logging group (moved to bottom, categories removed)
+        file_group = QGroupBox("File Logging")
+        file_grid = QGridLayout(file_group)
+
+        self.chk_log_enabled = QCheckBox("Enable file logging")
+        file_grid.addWidget(self.chk_log_enabled, 0, 0, 1, 2)
+
+        self.cmb_log_rotation = QComboBox()
+        self.cmb_log_rotation.addItems(["daily", "size"])
+        file_grid.addWidget(QLabel("Rotation:"), 1, 0)
+        file_grid.addWidget(self.cmb_log_rotation, 1, 1)
+
+        self.spn_log_backup = QSpinBox()
+        self.spn_log_backup.setRange(0, 3650)
+        file_grid.addWidget(QLabel("Backups to keep:"), 1, 2)
+        file_grid.addWidget(self.spn_log_backup, 1, 3)
+
+        self.chk_log_compress = QCheckBox("Compress rotated logs (.gz)")
+        file_grid.addWidget(self.chk_log_compress, 2, 0, 1, 2)
+
+        self.spn_log_max_bytes = QSpinBox()
+        self.spn_log_max_bytes.setRange(1024, 1024 * 1024 * 1024)
+        self.spn_log_max_bytes.setSingleStep(1024 * 1024)
+        file_grid.addWidget(QLabel("Max size (bytes, size mode):"), 2, 2)
+        file_grid.addWidget(self.spn_log_max_bytes, 2, 3)
+
+        self.cmb_log_file_level = QComboBox()
+        self.cmb_log_file_level.addItems(levels)
+        level_label = QLabel("Log level:")
+        level_label.setStyleSheet("font-weight: bold;")
+        file_grid.addWidget(level_label, 3, 0)
+        file_grid.addWidget(self.cmb_log_file_level, 3, 1)
+
+        upload_label = QLabel("Upload success detail:")
+        upload_label.setStyleSheet("font-weight: bold;")
+        file_grid.addWidget(upload_label, 3, 2)
+        self.cmb_log_file_upload_mode = QComboBox()
+        self.cmb_log_file_upload_mode.addItems(["none", "file", "gallery", "both"])
+        file_grid.addWidget(self.cmb_log_file_upload_mode, 3, 3)
+
+        # Note: File logging categories removed since filtering is done elsewhere
+        # Store empty file category widgets to maintain compatibility
+        for cat_key, _ in cats:
+            file_key = f"cats_file_{cat_key}"
+            # Create hidden checkboxes to maintain compatibility with existing settings
+            chk_file = QCheckBox()
+            chk_file.setVisible(False)
+            chk_file.setChecked(True)  # Default to all categories enabled
+            self._log_cat_widgets[file_key] = chk_file
+
+        layout.addWidget(file_group)
         layout.addStretch()
 
         # Connect all controls to emit changed signal

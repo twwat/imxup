@@ -78,6 +78,12 @@ class GalleryQueueItem:
     custom3: str = ""
     custom4: str = ""
 
+    # External program result fields
+    ext1: str = ""
+    ext2: str = ""
+    ext3: str = ""
+    ext4: str = ""
+
     # Archive support
     source_archive_path: Optional[str] = None
     is_from_archive: bool = False
@@ -766,6 +772,10 @@ class QueueManager(QObject):
                 'final_kibps': float(getattr(item, 'final_kibps', 0.0) or 0.0),
                 'failed_files': getattr(item, 'failed_files', []),
                 'error_message': getattr(item, 'error_message', ''),
+                'ext1': getattr(item, 'ext1', ''),
+                'ext2': getattr(item, 'ext2', ''),
+                'ext3': getattr(item, 'ext3', ''),
+                'ext4': getattr(item, 'ext4', ''),
             }
             
             self.store.bulk_upsert_async([item_data])
@@ -843,6 +853,10 @@ class QueueManager(QObject):
             'custom2': item.custom2,
             'custom3': item.custom3,
             'custom4': item.custom4,
+            'ext1': item.ext1,
+            'ext2': item.ext2,
+            'ext3': item.ext3,
+            'ext4': item.ext4,
             'source_archive_path': item.source_archive_path,
             'is_from_archive': item.is_from_archive
         }
@@ -907,9 +921,13 @@ class QueueManager(QObject):
             custom1=data.get('custom1', ''),
             custom2=data.get('custom2', ''),
             custom3=data.get('custom3', ''),
-            custom4=data.get('custom4', '')
+            custom4=data.get('custom4', ''),
+            ext1=data.get('ext1', ''),
+            ext2=data.get('ext2', ''),
+            ext3=data.get('ext3', ''),
+            ext4=data.get('ext4', '')
         )
-        
+
         # Restore optional fields
         for field in ['total_size', 'avg_width', 'avg_height', 'max_width',
                      'max_height', 'min_width', 'min_height', 'scan_complete',
@@ -961,6 +979,35 @@ class QueueManager(QObject):
         
         log(f"DEBUG: Adding to scan queue: {path}", category="scanning", level="debug")
         self._scan_queue.put(path)
+
+        # Execute "added" hook in background
+        from src.processing.hooks_executor import execute_gallery_hooks
+        import threading
+        def run_added_hook():
+            try:
+                ext_fields = execute_gallery_hooks(
+                    event_type='added',
+                    gallery_path=path,
+                    gallery_name=gallery_name,
+                    tab_name=tab_name,
+                    image_count=0  # Not scanned yet
+                )
+                # Update ext fields if hook returned any
+                if ext_fields:
+                    with QMutexLocker(self.mutex):
+                        if path in self.items:
+                            for key, value in ext_fields.items():
+                                setattr(self.items[path], key, value)
+                            self._schedule_debounced_save([path])
+                    log(f"Updated ext fields from added hook: {ext_fields}", level="info", category="hooks")
+                    # Emit signal through parent if available
+                    if hasattr(self, 'parent') and self.parent and hasattr(self.parent, 'on_ext_fields_updated'):
+                        self.parent.on_ext_fields_updated(path, ext_fields)
+            except Exception as e:
+                log(f"Error executing added hook: {e}", level="error", category="hooks")
+
+        threading.Thread(target=run_added_hook, daemon=True).start()
+
         #print(f"DEBUG: add_item returning True")
         return True
     
