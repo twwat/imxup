@@ -68,7 +68,7 @@ class LogViewerDialog(QDialog):
         # Filters row
         self._filters_row: Dict[str, QCheckBox] = {}
         filters_bar = QHBoxLayout()
-        filters_bar.addWidget(QLabel("View:"))
+        filters_bar.addWidget(QLabel("Category:"))
         cats = [
             ("uploads", "Uploads"),
             ("auth", "Auth"),
@@ -76,6 +76,7 @@ class LogViewerDialog(QDialog):
             ("ui", "UI"),
             ("queue", "Queue"),
             ("renaming", "Renaming"),
+            ("hooks", "Hooks"),
             ("fileio", "FileIO"),
             ("db", "DB"),
             ("timing", "Timing"),
@@ -86,14 +87,23 @@ class LogViewerDialog(QDialog):
             cb.setChecked(True)
             self._filters_row[cat_key] = cb
             filters_bar.addWidget(cb)
+
+        # Add log level filter dropdown
+        filters_bar.addWidget(QLabel("  Level:"))
+        self.cmb_level_filter = QComboBox()
+        self.cmb_level_filter.addItems(["All", "TRACE+", "DEBUG+", "INFO+", "WARNING+", "ERROR+"])
+        self.cmb_level_filter.setCurrentText("INFO+")
+        self.cmb_level_filter.setToolTip("Filter by minimum log level")
+        filters_bar.addWidget(self.cmb_level_filter)
+
         filters_bar.addStretch()
         logs_vbox.addLayout(filters_bar)
 
-        # Body: log view table with timestamp, category, message columns
+        # Body: log view table with timestamp, level, category, message columns
         body_hbox = QHBoxLayout()
         self.log_view = QTableWidget()
-        self.log_view.setColumnCount(3)
-        self.log_view.setHorizontalHeaderLabels(["Timestamp", "Category", "Message"])
+        self.log_view.setColumnCount(4)
+        self.log_view.setHorizontalHeaderLabels(["Timestamp", "Level", "Category", "Message"])
         self.log_view.setAlternatingRowColors(True)
         self.log_view.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.log_view.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
@@ -109,8 +119,9 @@ class LogViewerDialog(QDialog):
         # Column sizing
         header = self.log_view.horizontalHeader()
         header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)  # Timestamp
-        header.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)  # Category
-        header.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)  # Message
+        header.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)  # Level
+        header.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)  # Category
+        header.setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)  # Message
         self.log_view.setProperty("class", "log-viewer")
 
         # Apply inline stylesheet for semi-transparent gridlines
@@ -127,6 +138,10 @@ class LogViewerDialog(QDialog):
 
         body_hbox.addWidget(self.log_view, 1)
         logs_vbox.addLayout(body_hbox)
+        # Connect selection handler for auto-expand
+        self.log_view.itemSelectionChanged.connect(self._on_selection_changed)
+        self._selected_rows = set()  # Track which rows are currently selected
+
 
         # Just show the logs tab (no tabs needed)
         layout.addWidget(logs_container)
@@ -205,8 +220,18 @@ class LogViewerDialog(QDialog):
             except Exception:
                 return ""
 
+        def _decode_unicode(text: str) -> str:
+            """Decode Unicode escape sequences like \u2713 to actual characters like ✓"""
+            try:
+                return text.encode('utf-8').decode('unicode_escape')
+            except Exception:
+                return text
+
         def _parse_log_line(line: str) -> tuple:
-            """Parse a log line into (timestamp, category, message)"""
+            """Parse a log line into (timestamp, level, category, message)
+
+            Used when reading log files from disk.
+            """
             try:
                 # Check for timestamp at start: YYYY-MM-DD HH:MM:SS
                 if len(line) >= 19 and line[4] == '-' and line[7] == '-' and line[10] == ' ' and line[13] == ':' and line[16] == ':':
@@ -215,6 +240,15 @@ class LogViewerDialog(QDialog):
                 else:
                     timestamp = ""
                     rest = line
+
+                # Extract level from prefix (TRACE:, DEBUG:, INFO:, WARNING:, ERROR:, CRITICAL:)
+                level = "INFO"  # Default
+                level_prefixes = ["TRACE:", "DEBUG:", "INFO:", "WARNING:", "ERROR:", "CRITICAL:"]
+                for prefix in level_prefixes:
+                    if rest.startswith(prefix):
+                        level = prefix[:-1]  # Remove the colon
+                        rest = rest[len(prefix):].lstrip()
+                        break
 
                 # Extract category from [category] or [category:subtype]
                 category = "general"
@@ -227,9 +261,9 @@ class LogViewerDialog(QDialog):
                 else:
                     message = rest
 
-                return timestamp, category, message
+                return timestamp, level, category, message
             except Exception:
-                return "", "general", line
+                return "", "INFO", "general", line
 
         def _apply_initial_content():
             try:
@@ -241,17 +275,29 @@ class LogViewerDialog(QDialog):
             self.log_view.setRowCount(0)
             if norm:
                 lines = norm.splitlines()
-                for idx, line in enumerate(reversed(lines), 1):
-                    timestamp, category, message = _parse_log_line(line)
+                row_num = 1
+                for line in reversed(lines):
+                    timestamp, level, category, message = _parse_log_line(line)
+
+                    # Apply level filter (use default INFO+ for initial load)
+                    if hasattr(self, 'cmb_level_filter') and not self._should_show_level(level):
+                        continue
+
                     row = self.log_view.rowCount()
                     self.log_view.insertRow(row)
-                    self.log_view.setVerticalHeaderItem(row, QTableWidgetItem(str(idx)))
+                    self.log_view.setVerticalHeaderItem(row, QTableWidgetItem(str(row_num)))
                     self.log_view.setItem(row, 0, QTableWidgetItem(timestamp))
-                    self.log_view.setItem(row, 1, QTableWidgetItem(category))
-                    self.log_view.setItem(row, 2, QTableWidgetItem(message))
+                    self.log_view.setItem(row, 1, QTableWidgetItem(level))
+                    self.log_view.setItem(row, 2, QTableWidgetItem(category))
+                    self.log_view.setItem(row, 3, QTableWidgetItem(_decode_unicode(message)))
+                    row_num += 1
 
         _load_logs_list()
         _apply_initial_content()
+
+        # Register with logger to receive live log messages with metadata
+        from src.utils.logger import register_log_viewer
+        register_log_viewer(self)
 
         # Wire toolbar actions
         def _strip_datetime_prefix(s: str) -> str:
@@ -294,14 +340,22 @@ class LogViewerDialog(QDialog):
             self.log_view.setRowCount(0)
             if text:
                 lines = text.splitlines()
-                for idx, line in enumerate(reversed(lines), 1):
-                    timestamp, category, message = _parse_log_line(line)
+                row_num = 1
+                for line in reversed(lines):
+                    timestamp, level, category, message = _parse_log_line(line)
+
+                    # Apply level filter
+                    if not self._should_show_level(level):
+                        continue
+
                     row = self.log_view.rowCount()
                     self.log_view.insertRow(row)
-                    self.log_view.setVerticalHeaderItem(row, QTableWidgetItem(str(idx)))
+                    self.log_view.setVerticalHeaderItem(row, QTableWidgetItem(str(row_num)))
                     self.log_view.setItem(row, 0, QTableWidgetItem(timestamp))
-                    self.log_view.setItem(row, 1, QTableWidgetItem(category))
-                    self.log_view.setItem(row, 2, QTableWidgetItem(message))
+                    self.log_view.setItem(row, 1, QTableWidgetItem(level))
+                    self.log_view.setItem(row, 2, QTableWidgetItem(category))
+                    self.log_view.setItem(row, 3, QTableWidgetItem(_decode_unicode(message)))
+                    row_num += 1
 
         self.btn_refresh.clicked.connect(on_refresh)
         self.cmb_file_select.currentIndexChanged.connect(on_refresh)
@@ -317,6 +371,8 @@ class LogViewerDialog(QDialog):
                 cb.toggled.connect(on_filter_changed)
             except Exception:
                 pass
+        # Bind level dropdown
+        self.cmb_level_filter.currentTextChanged.connect(on_filter_changed)
 
         def on_clear():
             self.log_view.setRowCount(0)
@@ -342,7 +398,7 @@ class LogViewerDialog(QDialog):
             for i in range(self.log_view.rowCount()):
                 row = (start_row + i) % self.log_view.rowCount()
                 # Check all columns for match
-                for col in range(3):
+                for col in range(4):  # Now 4 columns
                     item = self.log_view.item(row, col)
                     if item and pattern in item.text().lower():
                         # Found match - select row and scroll to it
@@ -389,32 +445,64 @@ class LogViewerDialog(QDialog):
             import traceback
             traceback.print_exc()
 
-    def append_message(self, message: str):
+    def append_message(self, message: str, level: str = "info", category: str = "general"):
+        """
+        Append live log message with metadata (from logger.py).
+
+        Args:
+            message: Formatted log message
+            level: Log level (trace/debug/info/warning/error/critical)
+            category: Log category (uploads/auth/network/etc.)
+        """
         try:
-            # Ensure date is visible in the log viewer if time-only
-            from datetime import datetime as _dt
-            if isinstance(message, str) and len(message) >= 9 and message[2:3] == ":":
-                today = _dt.now().strftime("%Y-%m-%d ")
-                line = today + message
-            else:
-                line = message
+            # Extract timestamp from message
+            timestamp = ""
+            msg_text = message
 
-            # Parse the log line
-            timestamp, category, msg_text = self._parse_log_line_for_append(line)
+            # Check for timestamp at start: HH:MM:SS or YYYY-MM-DD HH:MM:SS
+            if len(message) >= 19 and message[4] == '-' and message[7] == '-':
+                # Full timestamp: YYYY-MM-DD HH:MM:SS
+                timestamp = message[:19]
+                msg_text = message[20:].lstrip()
+            elif len(message) >= 8 and message[2] == ':' and message[5] == ':':
+                # Time only: HH:MM:SS - add today's date
+                from datetime import datetime as _dt
+                today = _dt.now().strftime("%Y-%m-%d")
+                timestamp = f"{today} {message[:8]}"
+                msg_text = message[9:].lstrip()
 
-            # Apply viewer-only filters (toolbar row)
-            if category in getattr(self, '_filters_row', {}) and not self._filters_row[category].isChecked():
+            # Strip level prefix and category tag from message for clean display
+            level_prefixes = ["TRACE:", "DEBUG:", "INFO:", "WARNING:", "ERROR:", "CRITICAL:"]
+            for prefix in level_prefixes:
+                if msg_text.startswith(prefix):
+                    msg_text = msg_text[len(prefix):].lstrip()
+                    break
+
+            # Strip [category] or [category:subtype] tag
+            if msg_text.startswith("[") and "]" in msg_text:
+                close_idx = msg_text.find("]")
+                msg_text = msg_text[close_idx + 1:].lstrip()
+
+            # Apply category filter
+            if category in self._filters_row and not self._filters_row[category].isChecked():
                 return
 
-            # Prepend to table (newest first) and renumber all rows
+            # Apply level filter
+            if not self._should_show_level(level):
+                return
+
+            # Prepend to table (newest first)
             self.log_view.insertRow(0)
+
             # Update row numbers for all rows
             for row in range(self.log_view.rowCount()):
                 self.log_view.setVerticalHeaderItem(row, QTableWidgetItem(str(row + 1)))
-            # Set data for new row
+
+            # Set data for new row (4 columns)
             self.log_view.setItem(0, 0, QTableWidgetItem(timestamp))
-            self.log_view.setItem(0, 1, QTableWidgetItem(category))
-            self.log_view.setItem(0, 2, QTableWidgetItem(msg_text))
+            self.log_view.setItem(0, 1, QTableWidgetItem(level.upper()))
+            self.log_view.setItem(0, 2, QTableWidgetItem(category))
+            self.log_view.setItem(0, 3, QTableWidgetItem(msg_text))
 
             # Scroll to top if follow enabled
             if self.follow_enabled:
@@ -422,28 +510,84 @@ class LogViewerDialog(QDialog):
         except Exception:
             pass
 
-    def _parse_log_line_for_append(self, line: str) -> tuple:
-        """Parse a log line for append_message"""
+    def _should_show_level(self, level: str) -> bool:
+        """Check if a log level should be shown based on the level filter dropdown.
+
+        Args:
+            level: Log level string (trace/debug/info/warning/error/critical)
+
+        Returns:
+            True if the level should be shown, False otherwise
+        """
         try:
-            # Check for timestamp at start: YYYY-MM-DD HH:MM:SS
-            if len(line) >= 19 and line[4] == '-' and line[7] == '-' and line[10] == ' ' and line[13] == ':' and line[16] == ':':
-                timestamp = line[:19]
-                rest = line[20:].lstrip()
-            else:
-                timestamp = ""
-                rest = line
+            filter_text = self.cmb_level_filter.currentText()
+            if filter_text == "All":
+                return True
 
-            # Extract category from [category] or [category:subtype]
-            category = "general"
-            if rest.startswith("[") and "]" in rest:
-                close_idx = rest.find("]")
-                tag = rest[1:close_idx]
-                # Split on : to get category
-                category = tag.split(":")[0] if ":" in tag else tag
-                message = rest[close_idx + 1:].lstrip()
-            else:
-                message = rest
+            # Map level strings to numeric values
+            level_values = {
+                "trace": 5,
+                "debug": 10,
+                "info": 20,
+                "warning": 30,
+                "error": 40,
+                "critical": 50
+            }
 
-            return timestamp, category, message
+            # Map filter choices to minimum level
+            filter_minimums = {
+                "TRACE+": 5,
+                "DEBUG+": 10,
+                "INFO+": 20,
+                "WARNING+": 30,
+                "ERROR+": 40
+            }
+
+            level_num = level_values.get(level.lower(), 20)  # Default to INFO
+            min_level = filter_minimums.get(filter_text, 20)  # Default to INFO+
+
+            return level_num >= min_level
         except Exception:
-            return "", "general", line
+            return True  # Show by default if error
+
+    def _on_selection_changed(self):
+        """Handle row selection changes - enable word wrap and line breaks for selected rows"""
+        try:
+            selected_rows = set()
+            for item in self.log_view.selectedItems():
+                selected_rows.add(item.row())
+
+            # Process newly selected rows
+            for row in selected_rows - self._selected_rows:
+                message_item = self.log_view.item(row, 3)  # Message column
+                if message_item:
+                    # Enable word wrap
+                    message_item.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
+                    # Store original text and replace \n with actual line breaks
+                    original_text = message_item.text()
+                    if '\\n' in original_text:
+                        message_item.setText(original_text.replace('\\n', '\n'))
+                    # Resize row to fit content
+                    self.log_view.resizeRowToContents(row)
+
+            # Process deselected rows
+            for row in self._selected_rows - selected_rows:
+                message_item = self.log_view.item(row, 3)  # Message column
+                if message_item:
+                    # Get text and collapse line breaks back to \n
+                    text = message_item.text()
+                    if '\n' in text:
+                        message_item.setText(text.replace('\n', '\\n'))
+                    # Reset row height to default
+                    self.log_view.setRowHeight(row, self.log_view.verticalHeader().defaultSectionSize())
+
+            self._selected_rows = selected_rows
+        except Exception:
+            # Silently handle any errors in selection handling
+            pass
+    
+    def closeEvent(self, event):
+        """Unregister from logger when dialog closes"""
+        from src.utils.logger import unregister_log_viewer
+        unregister_log_viewer(self)
+        super().closeEvent(event)

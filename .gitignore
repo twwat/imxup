@@ -1,19 +1,56 @@
-venv/
+# Node.js dependencies for DDoS bypass
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Build outputs
+ddos_bypass.exe
+
+# Python
 __pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+ENV/
+*.egg-info/
+.pytest_cache/
+
+# PyInstaller
 build/
-backup-imxup-parts.zip
-backup-ui-folder.zip
-context.py
-imxup_gui.py.backup
-backup/
-debug.txt
-imxup_gui.py.backup
-backup/py.zip
-assets/splash.7z
-assets/bak.7z
-imxup_gui-old.py
-Makefile
-assets/Thumbs.db
-.gitignore
-thumbs.db
+dist/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
 Thumbs.db
+desktop.ini
+
+# Application data
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+*.log
+crash.log
+
+# User config
+.imxup/
+
+# Temporary files
+*.tmp
+*.temp
+nul
+
+# Test files
+test/
+test_*.py
+test_*.*

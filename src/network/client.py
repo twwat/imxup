@@ -98,6 +98,7 @@ class GUIImxToUploader(ImxToUploader):
             if hasattr(self.worker_thread, 'rename_worker'):
                 rename_worker = self.worker_thread.rename_worker
                 if rename_worker:
+                    log(f"Engine using RenameWorker {id(rename_worker)} from UploadWorker {id(self.worker_thread)}", level="debug", category="renaming")
                     log("Using RenameWorker for background renaming", level="debug", category="renaming")
                 else:
                     log("Worker thread has rename_worker attribute but it's None", level="debug", category="renaming")

@@ -53,6 +53,7 @@ class IconManager:
         'settings':             ['settings-light.png',          'settings-dark.png'],
         'templates':            ['templates-light.png',         'templates-dark.png'],
         'credentials':          ['credentials-light.png',       'credentials-dark.png'],
+        'hooks':                ['hooks-light.png',             'hooks-dark.png'],
         'toggle_theme':         ['toggle_theme-light.png',      'toggle_theme-dark.png'],
         'log_viewer':           ['log_viewer-light.png',        'log_viewer-dark.png'],
         'radio_check':          ['radio_check-light.png',       'radio_check-dark.png'],

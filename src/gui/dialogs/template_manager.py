@@ -555,10 +555,11 @@ class TemplateManagerDialog(QDialog):
         for line_num, line in enumerate(lines, 1):
             if '[if' in line:
                 in_conditional += line.count('[if')
-            if '[/if]' in line:
-                in_conditional -= line.count('[/if]')
+            # Check [else] BEFORE processing [/if] to handle single-line conditionals
             if '[else]' in line and in_conditional <= 0:
                 errors.append(f"Line {line_num}: [else] tag found outside of conditional block")
+            if '[/if]' in line:
+                in_conditional -= line.count('[/if]')
 
         return (len(errors) == 0, errors)
 

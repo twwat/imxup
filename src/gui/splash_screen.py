@@ -5,11 +5,11 @@ Splash screen with animated GIF and random status updates for imxup GUI
 
 import os
 import random
-import threading
+#import threading
 import time
 from PyQt6.QtWidgets import QSplashScreen, QApplication, QVBoxLayout, QLabel, QWidget
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer, QSize, QRectF
-from PyQt6.QtGui import QPixmap, QFont, QPainter, QColor, QMovie, QPen, QPainterPath, QRegion
+from PyQt6.QtGui import QPixmap, QFont, QPainter, QColor, QPen, QPainterPath, QRegion
 
 
 class SplashScreen(QSplashScreen):
@@ -17,7 +17,7 @@ class SplashScreen(QSplashScreen):
     
     def __init__(self):
         # Create a base pixmap for the splash screen
-        pixmap = QPixmap(540, 380)  # Increased height for logo
+        pixmap = QPixmap(520, 360)  # Increased height for logo
         pixmap.fill(QColor(29, 22, 22))  # Dark blue-gray background
         super().__init__(pixmap, Qt.WindowType.WindowStaysOnTopHint)
         
@@ -47,9 +47,7 @@ class SplashScreen(QSplashScreen):
             "rebooting microverse", "stabilizing mood", "flipping a table", "all glory to the hypnotoad"
             "exorcising demons", "wiping back to front", "counting sheep", "taking a nap", "making you wait for no reason"]
         #self.status_text = random.choice(self.init_action_words).title()
-        self.status_text = f"Initializing ImxUp v{APP_VERSION}"
-        self.progress_dots = ""
-        
+               
         # Random action words and objects
         self.action_words = [
             "reinitializing", "activating", "establishing", "launching", "constructing",
@@ -59,10 +57,11 @@ class SplashScreen(QSplashScreen):
             "rebooting", "stabilizing", "normalizing", "approximating", "recombinating",
             "deriving", "extrapolating", "inseminating", "obliterating", "annihilating",
             "observifying", "recalibrating", "accelerating", "optimizing", "exorcising",
-            "adjusting", "dehumidifying", "hiding", "setting fire to"
+            "adjusting", "dehumidifying", "hiding", "setting fire to", "vacuuming"
         ]
         
-       
+        self.status_text = f"{random.choice(self.action_words).title()} ImxUp v{APP_VERSION}"
+        self.progress_dots = ""
 
 
         # Set rounded window shape
@@ -96,20 +95,20 @@ class SplashScreen(QSplashScreen):
         y_offset = 16
         if self.logo_pixmap and not self.logo_pixmap.isNull():
             # Scale logo to fit nicely at top
-            logo_height = 128
+            logo_height = 112
             logo_scaled = self.logo_pixmap.scaledToHeight(logo_height, Qt.TransformationMode.SmoothTransformation)
             logo_x = (self.width() - logo_scaled.width()) // 2
             painter.drawPixmap(logo_x, y_offset, logo_scaled)
             y_offset += logo_height
         
         # Draw version
-        version_font = QFont("Courier", 14)
+        version_font = QFont("Courier", 12)
         painter.setFont(version_font)
-        painter.setPen(QColor(253, 69, 32))
+        painter.setPen(QColor(208, 65, 0))
         version_rect = painter.fontMetrics().boundingRect(self.version)
         version_x = (self.width() - version_rect.width()) // 2
         painter.drawText(version_x, y_offset + 13, self.version)
-        y_offset += 30
+        y_offset += 24
         
         copyright_text = "Copyright © 2025 twat"
         copyright_font = QFont("Courier", 11)
@@ -118,20 +117,20 @@ class SplashScreen(QSplashScreen):
         copyright_rect = painter.fontMetrics().boundingRect(copyright_text)
         copyright_x = (self.width() - copyright_rect.width()) // 2
         painter.drawText(copyright_x, y_offset + 20, copyright_text)
-        y_offset += 36
+        y_offset += 40
         
         apache_text = "Licensed under the Apache License, Version 2.0"
         apache_font = QFont("Courier", 11)
         painter.setFont(apache_font)
-        painter.setPen(QColor(219, 219, 219))
+        painter.setPen(QColor(195, 195, 195))
         apache_rect = painter.fontMetrics().boundingRect(apache_text)
         apache_x = (self.width() - apache_rect.width()) // 2
         painter.drawText(apache_x, y_offset + 20, apache_text)
-        y_offset += 58
+        y_offset += 50
         
         # Draw copyright and license info
-        painter.setPen(QColor(200, 200, 200))
-        license_font = QFont("Courier", 10)
+        painter.setPen(QColor(170, 170, 170))
+        license_font = QFont("Courier", 8)
         painter.setFont(license_font)
 
         license_lines = [
@@ -145,32 +144,36 @@ class SplashScreen(QSplashScreen):
                 line_rect = painter.fontMetrics().boundingRect(line)
                 line_x = (self.width() - line_rect.width()) // 2
                 painter.drawText(line_x, y_pos, line)
-            y_pos += 15
+            y_pos += 16
         
         # Draw status text at bottom
-        painter.setPen(QColor(210, 133, 133))
-        status_font = QFont("Courier", 10, QFont.Weight.Bold)
+        painter.setPen(QColor(89, 152, 222))
+        status_font = QFont("Courier", 9, QFont.Weight.Bold)
         painter.setFont(status_font)
         
         status_rect = painter.fontMetrics().boundingRect(self.status_text)
         status_x = (self.width() - status_rect.width()) // 2
-        painter.drawText(status_x, self.height() - 42, self.status_text)
+        painter.drawText(status_x, self.height() - 60, self.status_text)
         
         # Draw progress dots centered
-        dots_font = QFont("Courier", 15)
+        dots_font = QFont("Courier", 12)
         painter.setFont(dots_font)
-        painter.setPen(QColor(29, 152, 222))
+        painter.setPen(QColor(26, 150, 232))
 
         # Center the dots by measuring their actual width
         dots_rect = painter.fontMetrics().boundingRect(self.progress_dots)
         dots_x = (self.width() - dots_rect.width()) // 2
-        painter.drawText(dots_x, self.height() - 15, self.progress_dots)
+        painter.drawText(dots_x, self.height() - 25, self.progress_dots)
         
         painter.end()
     
-    
     def update_status(self, message):
         """Update the status message and repaint"""
+        if message == "random":
+            message = random.choice(self.random_statuses)
+            self.progress_dots += "•"
+        elif random.randint(1,20) == 13:
+            self.progress_dots += "•"
         self.status_text = message
         self.repaint()
         QApplication.processEvents()  # Ensure UI updates immediately
@@ -180,11 +183,12 @@ class SplashScreen(QSplashScreen):
         #self.random_timer.stop()
         action = random.choice(self.action_words).title()
         self.status_text = f"{action} {text}"
+        
         self.progress_dots += "•"
         self.repaint()
         QApplication.processEvents()
         
-    def set_random_status(self, text):
+    def set_random_status(self, text=""):
         """Set status text with random action word and add progress dot"""
         #self.random_timer.stop()
         action = random.choice(self.random_statuses).capitalize()

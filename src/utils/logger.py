@@ -7,17 +7,26 @@ Provides a single, simple logging interface that works everywhere:
 - Any module or class
 
 Usage:
-    from src.utils.logger import log
+    from src.utils.logger import log, trace, debug
 
     log("Simple message")                              # INFO level, general category
     log("Error occurred", level="error")               # ERROR level
     log("Auth successful", category="auth")            # INFO level, auth category
     log("Debug info", level="debug", category="network")  # DEBUG level, network category
+    trace("Verbose details")                           # TRACE level (never logged to file)
+
+Log Levels (lowest to highest):
+    - TRACE (5): Extremely verbose, never written to file, only console/GUI
+    - DEBUG (10): Development debugging info
+    - INFO (20): General informational messages
+    - WARNING (30): Warning messages
+    - ERROR (40): Error messages
+    - CRITICAL (50): Critical failures
 
 The logger automatically:
 - Routes to GUI log viewer when GUI is active
 - Routes to console when in CLI mode
-- Writes to file log (if enabled)
+- Writes to file log (if enabled) - EXCEPT trace level
 - Handles thread safety
 - Adds timestamps
 - Detects categories from [tags] for backwards compatibility
@@ -40,6 +49,9 @@ _lock = threading.Lock()
 # GUI reference (set by main window on startup)
 _main_window: Optional['QWidget'] = None
 
+# Log viewer references (registered when dialogs open)
+_log_viewers: list = []
+
 # Lazy import holder for AppLogger
 _app_logger = None
 
@@ -47,8 +59,13 @@ _app_logger = None
 # Set via --debug command line flag
 _debug_mode = '--debug' in sys.argv
 
+# Custom TRACE level (below DEBUG, never logged to file)
+TRACE = 5
+logging.addLevelName(TRACE, "TRACE")
+
 # Log level mapping
 LEVEL_MAP = {
+    "trace": TRACE,  # Custom level, never logged to file
     "debug": logging.DEBUG,
     "info": logging.INFO,
     "warning": logging.WARNING,
@@ -74,6 +91,34 @@ def set_main_window(main_window: 'QWidget') -> None:
     global _main_window
     with _lock:
         _main_window = main_window
+
+
+def register_log_viewer(viewer) -> None:
+    """
+    Register a log viewer dialog to receive log messages with metadata.
+    Called by LogViewerDialog on open.
+
+    Args:
+        viewer: LogViewerDialog instance
+    """
+    global _log_viewers
+    with _lock:
+        if viewer not in _log_viewers:
+            _log_viewers.append(viewer)
+
+
+def unregister_log_viewer(viewer) -> None:
+    """
+    Unregister a log viewer dialog.
+    Called by LogViewerDialog on close.
+
+    Args:
+        viewer: LogViewerDialog instance
+    """
+    global _log_viewers
+    with _lock:
+        if viewer in _log_viewers:
+            _log_viewers.remove(viewer)
 
 
 def _get_app_logger():
@@ -107,6 +152,8 @@ def _detect_level_from_message(message: str) -> Optional[str]:
         return "warning"
     elif message_upper.startswith("DEBUG:") or "DEBUG" in message_upper[:20]:
         return "debug"
+    elif message_upper.startswith("TRACE:") or "TRACE" in message_upper[:20]:
+        return "trace"
 
     return None
 
@@ -156,8 +203,9 @@ def log(message: str,
 
     Args:
         message: The log message to output
-        level: Log level (debug/info/warning/error/critical).
+        level: Log level (trace/debug/info/warning/error/critical).
                If None, auto-detects from message or defaults to 'info'
+               NOTE: 'trace' level is never written to log files
         category: Category for filtering (general/auth/uploads/network/etc).
                   If None, auto-detects from [tag] or defaults to 'general'
 
@@ -167,12 +215,13 @@ def log(message: str,
         log("User logged in", category="auth")
         log("[uploads] File uploaded successfully")  # Auto-detects category
         log("ERROR: Database connection lost")       # Auto-detects level
+        log("Verbose details", level="trace")        # TRACE: console/GUI only, never to file
 
     The function will:
         - Add timestamp if not present
         - Route to GUI log viewer when GUI is active
         - Route to console when in CLI mode
-        - Write to file log if enabled
+        - Write to file log if enabled (EXCEPT trace level)
         - Handle thread safety automatically
     """
     with _lock:
@@ -196,7 +245,11 @@ def log(message: str,
             # Don't clean the message if category was explicitly provided
             # This preserves backwards compatibility with [tag] format
         else:
-            subtype = None
+            # Parse category:subtype if colon is present (e.g., "uploads:file")
+            if ":" in category:
+                category, subtype = category.split(":", 1)
+            else:
+                subtype = None
             cleaned_msg = message
 
         # Add log level prefix for non-info messages (unless already present)
@@ -204,7 +257,9 @@ def log(message: str,
         if level != "info":
             # Check if message already has the level prefix anywhere in first 50 chars
             msg_upper = cleaned_msg.upper()[:50]
-            if level == "debug" and "DEBUG:" not in msg_upper:
+            if level == "trace" and "TRACE:" not in msg_upper:
+                level_prefix = "TRACE: "
+            elif level == "debug" and "DEBUG:" not in msg_upper:
                 level_prefix = "DEBUG: "
             elif level == "warning" and "WARNING:" not in msg_upper and "WARN:" not in msg_upper:
                 level_prefix = "WARNING: "
@@ -269,7 +324,7 @@ def log(message: str,
             print(formatted_message, file=sys.stderr, flush=True)
 
         if _main_window:
-            # GUI is available: Send to log viewer
+            # GUI is available: Send to main window's simple log display
             try:
                 # Check if should show in GUI based on filters
                 if app_logger and not app_logger.should_emit_gui(category, log_level):
@@ -282,22 +337,43 @@ def log(message: str,
                     if subtype == "gallery" and not app_logger.should_log_upload_gallery_success("gui"):
                         return
 
-                # Send to main window's log viewer (Qt handles cross-thread signals safely)
+                # Send to main window's simple log display (Qt handles cross-thread signals safely)
                 if hasattr(_main_window, 'add_log_message'):
                     _main_window.add_log_message(formatted_message)
             except Exception:
                 # Fallback to console if GUI logging fails
                 print(formatted_message, file=sys.stderr if log_level >= logging.WARNING else sys.stdout, flush=True)
-        else:
-            # No GUI available: Send to console
-            # Use stderr for warnings and above, stdout for info and below
-            if log_level >= logging.WARNING:
-                print(formatted_message, file=sys.stderr, flush=True)
-            else:
-                print(formatted_message, flush=True)
+
+        # Send to all registered log viewers with metadata (independent of main window)
+        for viewer in _log_viewers[:]:  # Copy to avoid modification during iteration
+            try:
+                if hasattr(viewer, 'append_message'):
+                    viewer.append_message(
+                        message=formatted_message,
+                        level=level,
+                        category=category
+                    )
+            except Exception:
+                # Viewer may have been closed/deleted, remove it
+                try:
+                    with _lock:
+                        if viewer in _log_viewers:
+                            _log_viewers.remove(viewer)
+                except Exception:
+                    pass
+
+        # Only print to console if there's NO GUI at all (CLI mode)
+        if not _main_window and not _debug_mode and log_level < logging.WARNING:
+            # CLI mode - print info/debug to console
+            print(formatted_message, flush=True)
 
 
 # Convenience functions for specific log levels
+def trace(message: str, category: Optional[str] = None) -> None:
+    """Log a trace message (never written to file, only console/GUI)."""
+    log(message, level="trace", category=category)
+
+
 def debug(message: str, category: Optional[str] = None) -> None:
     """Log a debug message."""
     log(message, level="debug", category=category)

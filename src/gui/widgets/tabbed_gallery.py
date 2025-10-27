@@ -425,7 +425,7 @@ class TabbedGalleryWidget(QWidget):
         
         start_time = time.time()
         row_count = self.table.rowCount()
-        log(f"_apply_filter: rowCount() returned {row_count}", level="debug")
+        log(f"_apply_filter: rowCount() returned {row_count}", level="trace", category="ui")
         
         if row_count == 0:
             return

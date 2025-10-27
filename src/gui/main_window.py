@@ -68,6 +68,7 @@ from src.gui.widgets.custom_widgets import TableProgressWidget, ActionButtonWidg
 from src.gui.widgets.context_menu_helper import GalleryContextMenuHelper
 from src.gui.widgets.gallery_table import GalleryTableWidget, NumericColumnDelegate
 from src.gui.widgets.tabbed_gallery import TabbedGalleryWidget, DropEnabledTabBar
+from src.gui.widgets.adaptive_settings_panel import AdaptiveQuickSettingsPanel
 
 # Import queue manager classes - adding one at a time
 from src.storage.queue_manager import GalleryQueueItem, QueueManager
@@ -89,6 +90,7 @@ from src.gui.dialogs.help_dialog import HelpDialog
 # Import archive support
 from src.services.archive_service import ArchiveService
 from src.processing.archive_coordinator import ArchiveCoordinator
+from src.processing.archive_worker import ArchiveExtractionWorker
 from src.utils.archive_utils import is_archive_file
 
 
@@ -269,7 +271,11 @@ class CompletionWorker(QThread):
                 'custom1': item.custom1 if item else '',
                 'custom2': item.custom2 if item else '',
                 'custom3': item.custom3 if item else '',
-                'custom4': item.custom4 if item else ''
+                'custom4': item.custom4 if item else '',
+                'ext1': item.ext1 if item else '',
+                'ext2': item.ext2 if item else '',
+                'ext3': item.ext3 if item else '',
+                'ext4': item.ext4 if item else ''
             }
             
             # Use centralized save_gallery_artifacts function
@@ -515,6 +521,7 @@ class ImxUploadGUI(QMainWindow):
         
         if self.splash:
             self.splash.set_status("setup_menu_bar()")
+            self.splash.update_status("random")
         self.setup_menu_bar()
         if self.splash:
             self.splash.set_status("setup_system_tray()")
@@ -598,6 +605,8 @@ class ImxUploadGUI(QMainWindow):
             log(f"Exception in main_window: {e}", level="error", category="ui")
             raise
         
+        log(f"GUI loaded", level="info", category="ui")
+
         # Initialize update timer for automatic updates
         self.update_timer = QTimer()
         self._last_queue_version = self.queue_manager.get_version()
@@ -760,11 +769,11 @@ class ImxUploadGUI(QMainWindow):
         """Update right panel maximum width when window is resized"""
         super().resizeEvent(event)
         try:
-            # Update right panel max width to 50% of current window width
+            # Update right panel max width to 75% of current window width
             if hasattr(self, 'right_panel'):
                 window_width = self.width()
                 if window_width > 0:
-                    max_width = int(window_width * 0.5)
+                    max_width = int(window_width * 0.75)
                     self.right_panel.setMaximumWidth(max_width)
         except Exception as e:
             log(f"Exception in main_window: {e}", level="error", category="ui")
@@ -894,7 +903,7 @@ class ImxUploadGUI(QMainWindow):
         except Exception as e:
             print(f"Warning: Error in selection change handler: {e}")
 
-    def _confirm_removal(self, paths: list, names: list = None, operation_type: str = "delete") -> bool:
+    def _confirm_removal(self, paths: list, names: list | None = None, operation_type: str = "delete") -> bool:
         """
         Shared confirmation dialog for removal operations.
 
@@ -1093,6 +1102,11 @@ class ImxUploadGUI(QMainWindow):
                     log_viewer_icon = icon_mgr.get_icon('log_viewer')
                     if not log_viewer_icon.isNull():
                         self.log_viewer_btn.setIcon(log_viewer_icon)
+
+                if hasattr(self, 'hooks_btn'):
+                    hooks_icon = icon_mgr.get_icon('hooks')
+                    if not hooks_icon.isNull():
+                        self.hooks_btn.setIcon(hooks_icon)
 
                 if hasattr(self, 'theme_toggle_btn'):
                     theme_icon = icon_mgr.get_icon('toggle_theme')
@@ -1413,25 +1427,26 @@ class ImxUploadGUI(QMainWindow):
         left_layout.addWidget(queue_group)
         
         # Set minimum width for left panel (Upload Queue)
-        left_panel.setMinimumWidth(400)
+        # Reduced to allow splitter to move further left (up to ~3/4 of window width)
+        left_panel.setMinimumWidth(250)
         self.top_splitter.addWidget(left_panel)
         
-        # Right panel - Settings and logs
+        # Right panel - Settings and logs (with vertical splitter between them)
         self.right_panel = QWidget()
-        right_layout = QVBoxLayout(self.right_panel)
-        # Set maximum width to 50% of window to keep queue panel visible
+        right_panel_outer_layout = QVBoxLayout(self.right_panel)
+        right_panel_outer_layout.setContentsMargins(0, 0, 0, 0)
+        right_panel_outer_layout.setSpacing(0)
+
+        # Create vertical splitter for Settings and Log
+        self.right_vertical_splitter = QSplitter(Qt.Orientation.Vertical)
+        right_panel_outer_layout.addWidget(self.right_vertical_splitter)
+
+        # Set maximum width to 75% of window to keep queue panel visible
         try:
-            # Calculate 50% of current window width as max width
+            # Calculate 75% of current window width as max width
             window_width = self.width() if self.width() > 0 else 1000  # fallback for initial sizing
-            max_width = int(window_width * 0.5)
+            max_width = int(window_width * 0.75)
             self.right_panel.setMaximumWidth(max_width)
-        except Exception as e:
-            log(f"Exception in main_window: {e}", level="error", category="ui")
-            raise
-        try:
-            right_layout.setContentsMargins(0, 0, 0, 0)
-            right_layout.setSpacing(6)
-            right_layout.setSizeConstraint(QVBoxLayout.SizeConstraint.SetMinimumSize)
         except Exception as e:
             log(f"Exception in main_window: {e}", level="error", category="ui")
             raise
@@ -1442,7 +1457,7 @@ class ImxUploadGUI(QMainWindow):
         self.settings_group.setProperty("class", "settings-group")
         settings_layout = QGridLayout(self.settings_group)
         try:
-            settings_layout.setContentsMargins(8, 8, 8, 8)
+            settings_layout.setContentsMargins(5, 8, 5, 5)  # Reduced left/right/bottom by 3px
             settings_layout.setHorizontalSpacing(12)
             settings_layout.setVerticalSpacing(8)
         except Exception as e:
@@ -1450,7 +1465,7 @@ class ImxUploadGUI(QMainWindow):
             raise
         
         settings_layout.setVerticalSpacing(5)
-        settings_layout.setHorizontalSpacing(8)
+        settings_layout.setHorizontalSpacing(5)
         
         # Set fixed row heights to prevent shifting when save button appears
         settings_layout.setRowMinimumHeight(0, 28)  # Thumbnail Size row
@@ -1463,15 +1478,16 @@ class ImxUploadGUI(QMainWindow):
         # Row 5 is the Save Settings button - let it appear/disappear freely
         # Row 6 is Comprehensive Settings
         # Row 7 is Templates/Credentials
-        
-        # Add stretch to bottom so extra space goes there instead of compressing rows
-        settings_layout.setRowStretch(10, 1)
+
+        # Row 10 no longer gets stretch - all vertical space goes to row 6 (adaptive panel)
+        # This makes the adaptive panel's height match the total available vertical space
+        settings_layout.setRowStretch(10, 0)
         
         # Load defaults
         defaults = load_user_defaults()
         
         # Thumbnail size
-        settings_layout.addWidget(QLabel("<b>Thumbnail Size</b>:"), 0, 0)
+        settings_layout.addWidget(QLabel("<span style=\"font-weight: 600\">Thumbnail Size</span>:"), 0, 0)
         self.thumbnail_size_combo = QComboBox()
         self.thumbnail_size_combo.addItems([
             "100x100", "180x180", "250x250", "300x300", "150x150"
@@ -1481,7 +1497,7 @@ class ImxUploadGUI(QMainWindow):
         settings_layout.addWidget(self.thumbnail_size_combo, 0, 1)
         
         # Thumbnail format
-        settings_layout.addWidget(QLabel("<b>Thumbnail Format</b>:"), 1, 0)
+        settings_layout.addWidget(QLabel("<span style=\"font-weight: 600\">Thumbnail Format</span>:"), 1, 0)
         self.thumbnail_format_combo = QComboBox()
         self.thumbnail_format_combo.addItems([
             "Fixed width", "Proportional", "Square", "Fixed height"
@@ -1508,7 +1524,7 @@ class ImxUploadGUI(QMainWindow):
         #settings_layout.addWidget(self.batch_size_spin, 3, 1)
         
         # Template selection
-        settings_layout.addWidget(QLabel("<b>BBCode Template</b>:"), 2, 0)
+        settings_layout.addWidget(QLabel("<span style=\"font-weight: 600\">Template</span>:"), 2, 0)
         self.template_combo = QComboBox()
         self.template_combo.setToolTip("Template to use for generating bbcode files")
         # Load available templates
@@ -1555,22 +1571,22 @@ class ImxUploadGUI(QMainWindow):
 
         # Track central store path (from defaults)
         self.central_store_path_value = defaults.get('central_store_path', None)
-        
-        # Comprehensive Settings button
-        self.comprehensive_settings_btn = QPushButton("Settings && Preferences") # ⚙️ 
+
+        # Comprehensive Settings button (will be added to horizontal layout below)
+        self.comprehensive_settings_btn = QPushButton(" Settings") # ⚙️
         if not self.comprehensive_settings_btn.text().startswith(" "):
             self.comprehensive_settings_btn.setText(" " + self.comprehensive_settings_btn.text())
         self.comprehensive_settings_btn.clicked.connect(self.open_comprehensive_settings)
         self.comprehensive_settings_btn.setMinimumHeight(30)
         self.comprehensive_settings_btn.setMaximumHeight(34)
         self.comprehensive_settings_btn.setProperty("class", "comprehensive-settings")
-        settings_layout.addWidget(self.comprehensive_settings_btn, 6, 0, 1, 2)
-        
-        # Manage templates and credentials buttons (same row)
-        self.manage_templates_btn = QPushButton(" Templates")
+        # Note: Now added to horizontal layout with icon buttons (see below)
+
+        # Manage templates and credentials buttons
+        self.manage_templates_btn = QPushButton("") # previously  QPushButton(" Templates")
         self.manage_templates_btn.setToolTip("Manage BBCode templates for gallery output")
-        self.manage_credentials_btn = QPushButton(" Credentials")
-        self.manage_credentials_btn.setToolTip("Configure imx.to login credentials")
+        self.manage_credentials_btn = QPushButton("") # previously  QPushButton(" Credentials")
+        self.manage_credentials_btn.setToolTip("Configure imx.to API key and login credentials")
 
         # Add icons if available
     
@@ -1580,17 +1596,17 @@ class ImxUploadGUI(QMainWindow):
                 templates_icon = icon_mgr.get_icon('templates')
                 if not templates_icon.isNull():
                     self.manage_templates_btn.setIcon(templates_icon)
-                    self.manage_templates_btn.setIconSize(QSize(16, 16))
+                    self.manage_templates_btn.setIconSize(QSize(20, 20))
 
                 credentials_icon = icon_mgr.get_icon('credentials')
                 if not credentials_icon.isNull():
                     self.manage_credentials_btn.setIcon(credentials_icon)
-                    self.manage_credentials_btn.setIconSize(QSize(16, 16))
+                    self.manage_credentials_btn.setIconSize(QSize(20, 20))
 
                 settings_icon = icon_mgr.get_icon('settings')
                 if not settings_icon.isNull():
                     self.comprehensive_settings_btn.setIcon(settings_icon)
-                    self.comprehensive_settings_btn.setIconSize(QSize(18, 18))
+                    self.comprehensive_settings_btn.setIconSize(QSize(20, 20))
                 
         except Exception as e:
             log(f"Exception in main_window: {e}", level="error", category="ui")
@@ -1611,46 +1627,72 @@ class ImxUploadGUI(QMainWindow):
                 log_viewer_icon = icon_mgr.get_icon('log_viewer')
                 if not log_viewer_icon.isNull():
                     self.log_viewer_btn.setIcon(log_viewer_icon)
-                    self.log_viewer_btn.setIconSize(QSize(20, 20))
+                    self.log_viewer_btn.setIconSize(QSize(18, 18))
         except Exception as e:
             log(f"Exception in main_window: {e}", level="error", category="ui")
             raise
         self.log_viewer_btn.clicked.connect(self.open_log_viewer_popup)
+
+        # Hooks button (opens comprehensive settings to Hooks tab)
+        self.hooks_btn = QPushButton()
+        self.hooks_btn.setProperty("class", "hooks-btn")
+        self.hooks_btn.setToolTip("Configure external application hooks")
+        try:
+            icon_mgr = get_icon_manager()
+            if icon_mgr:
+                hooks_icon = icon_mgr.get_icon('hooks')
+                if not hooks_icon.isNull():
+                    self.hooks_btn.setIcon(hooks_icon)
+                    self.hooks_btn.setIconSize(QSize(20, 20))
+        except Exception as e:
+            log(f"Exception in main_window: {e}", level="error", category="ui")
+            raise
+        self.hooks_btn.clicked.connect(lambda: self.open_comprehensive_settings(tab_index=5))
 
         # Theme toggle button (icon-only, small)
         self.theme_toggle_btn = QPushButton()
         self.theme_toggle_btn.setProperty("class", "theme-toggle-btn")
         # Set initial tooltip based on current theme
         current_theme = str(self.settings.value('ui/theme', 'dark'))
-        initial_tooltip = "Switch to light theme" if current_theme == 'dark' else "Switch to dark theme"
+        initial_tooltip = "Switch to Light Mode" if current_theme == 'dark' else "Switch to Dark Mode"
         self.theme_toggle_btn.setToolTip(initial_tooltip)
         try:
             icon_mgr = get_icon_manager()
             if icon_mgr:
                 theme_icon = icon_mgr.get_icon('toggle_theme')
-                #if not theme_icon.isNull():
-                #    self.theme_toggle_btn.setIcon(theme_icon)
-                #    self.theme_toggle_btn.setIconSize(QSize(20, 20))
+                if not theme_icon.isNull():
+                    self.theme_toggle_btn.setIcon(theme_icon)
+                    self.theme_toggle_btn.setIconSize(QSize(20, 20))
         except Exception as e:
             log(f"Exception in main_window: {e}", level="error", category="ui")
             raise
         self.theme_toggle_btn.clicked.connect(self.toggle_theme)
 
-        # Create horizontal layout for Templates, Credentials, Log Viewer, and Theme Toggle
-        templates_creds_layout = QHBoxLayout()
-        templates_creds_layout.addWidget(self.manage_templates_btn)
-        templates_creds_layout.addWidget(self.manage_credentials_btn)
-        templates_creds_layout.addWidget(self.log_viewer_btn)
-        templates_creds_layout.addWidget(self.theme_toggle_btn)
-        templates_creds_layout.setSpacing(6)
+        # Create adaptive panel for quick settings buttons
+        # Automatically adjusts layout based on available width AND height:
+        # - Compact: 1 row, icon-only (when both dimensions constrained)
+        # - Expanded: 2 rows with labels (when vertical or horizontal room available)
+        self.adaptive_settings_panel = AdaptiveQuickSettingsPanel()
+        self.adaptive_settings_panel.set_buttons(
+            self.comprehensive_settings_btn,
+            self.manage_credentials_btn,    # Credentials
+            self.manage_templates_btn,      # Templates
+            self.hooks_btn,                 # Hooks
+            self.log_viewer_btn,            # Logs
+            self.theme_toggle_btn           # Theme
+        )
 
-        settings_layout.addLayout(templates_creds_layout, 9, 0, 1, 2)
-        
+        settings_layout.addWidget(self.adaptive_settings_panel, 6, 0, 1, 2)  # Row 6, spanning 2 columns
+
+        # Give row 6 a stretch factor so the adaptive panel can expand vertically
+        # This allows it to detect when vertical space is available and switch layouts
+        settings_layout.setRowStretch(6, 1)
+
         # Log section (add first)
         log_group = QGroupBox("Log")
         log_layout = QVBoxLayout(log_group)
         try:
-            log_layout.setContentsMargins(10, 10, 10, 10)
+            log_layout.setContentsMargins(5, 10, 5, 5)  # Reduced left/right/bottom by 3px
             log_layout.setSpacing(8)
         except Exception as e:
             log(f"Exception in main_window: {e}", level="error", category="ui")
@@ -1681,19 +1723,32 @@ class ImxUploadGUI(QMainWindow):
         # QListWidget manages items differently than QTextEdit - no document() method needed
         # The item count is naturally limited by memory, not a block count setting
         log_layout.addWidget(self.log_text)
-        
-        right_layout.addWidget(self.settings_group)
-        right_layout.addWidget(log_group, 1)  # Give it stretch priority
-        
+
+        # Add settings and log groups to the vertical splitter
+        self.right_vertical_splitter.addWidget(self.settings_group)
+        self.right_vertical_splitter.addWidget(log_group)
+
+        # Configure vertical splitter - allow both to resize but prevent complete collapse
+        self.right_vertical_splitter.setCollapsible(0, False)  # Settings group cannot collapse
+        self.right_vertical_splitter.setCollapsible(1, False)  # Log group cannot collapse
+
+        # Set minimum heights to prevent either section from becoming unusable
+        # Reduced settings_group min height to allow adaptive panel to properly expand/contract
+        self.settings_group.setMinimumHeight(145)
+        log_group.setMinimumHeight(100)
+
+        # Set initial vertical splitter sizes (roughly 40/60 split - more space for log)
+        self.right_vertical_splitter.setSizes([400, 270])
+
         # Set minimum width for right panel (Settings + Log) - reduced for better resizing
-        self.right_panel.setMinimumWidth(250)
+        self.right_panel.setMinimumWidth(270)
         self.top_splitter.addWidget(self.right_panel)
-        
-        # Configure splitter to prevent panels from disappearing
+
+        # Configure main horizontal splitter
         self.top_splitter.setCollapsible(0, False)  # Left panel (queue) cannot collapse
-        self.top_splitter.setCollapsible(1, False)  # Right panel (settings+log) cannot collapse
-        
-        # Set initial splitter sizes (roughly 60/40 split)
+        self.top_splitter.setCollapsible(1, True)   # Right panel (settings+log) CAN now collapse
+
+        # Set initial horizontal splitter sizes (roughly 60/40 split)
         self.top_splitter.setSizes([600, 400])
         
         main_layout.addWidget(self.top_splitter)
@@ -1910,6 +1965,22 @@ class ImxUploadGUI(QMainWindow):
             # Standalone log viewer popup
             action_log_popup = view_menu.addAction("Open Log Viewer (Popup)")
             action_log_popup.triggered.connect(self.open_log_viewer_popup)
+
+            # Icon Manager
+            action_icon_manager = view_menu.addAction("Icon Manager")
+            action_icon_manager.triggered.connect(self.open_icon_manager)
+
+            view_menu.addSeparator()
+
+            # Toggle right panel visibility
+            self.action_toggle_right_panel = view_menu.addAction("Toggle Right Panel")
+            self.action_toggle_right_panel.setShortcut("Ctrl+R")
+            self.action_toggle_right_panel.setCheckable(True)
+            self.action_toggle_right_panel.setChecked(True)  # Initially visible
+            self.action_toggle_right_panel.triggered.connect(self.toggle_right_panel)
+
+            view_menu.addSeparator()
+
             # Theme submenu: System / Light / Dark
             theme_menu = view_menu.addMenu("Theme")
             theme_group = QActionGroup(self)
@@ -1938,20 +2009,20 @@ class ImxUploadGUI(QMainWindow):
             action_templates = settings_menu.addAction("Templates")
             action_templates.triggered.connect(lambda: self.open_comprehensive_settings(tab_index=2))
             # Tabs and Icons menu items removed - functionality hidden
-            action_logs = settings_menu.addAction("Logs")
+            action_logs = settings_menu.addAction("Log Settings")
             action_logs.triggered.connect(lambda: self.open_comprehensive_settings(tab_index=3))
             action_scanning = settings_menu.addAction("Image Scanning")
             action_scanning.triggered.connect(lambda: self.open_comprehensive_settings(tab_index=4))
-            action_external_apps = settings_menu.addAction("External Apps")
+            action_external_apps = settings_menu.addAction("Hooks (External Apps)")
             action_external_apps.triggered.connect(lambda: self.open_comprehensive_settings(tab_index=5))
 
             # Tools menu
             tools_menu = menu_bar.addMenu("Tools")
-            action_templates = tools_menu.addAction("Manage Templates")
-            action_templates.triggered.connect(self.manage_templates)
-            action_credentials = tools_menu.addAction("Manage Credentials")
-            action_credentials.triggered.connect(self.manage_credentials)
-            tools_menu.addSeparator()
+            #action_templates = tools_menu.addAction("Manage Templates")
+            #action_templates.triggered.connect(self.manage_templates)
+            #action_credentials = tools_menu.addAction("Manage Credentials")
+            #action_credentials.triggered.connect(self.manage_credentials)
+            #tools_menu.addSeparator()
             action_unrenamed = tools_menu.addAction("Unnamed Galleries")
             action_unrenamed.triggered.connect(self.open_unrenamed_galleries_dialog)
 
@@ -2269,6 +2340,44 @@ class ImxUploadGUI(QMainWindow):
         new_theme = 'dark' if current_theme == 'light' else 'light'
         self.set_theme_mode(new_theme)
 
+    def toggle_right_panel(self):
+        """Toggle visibility of the right panel (Settings + Log)."""
+        try:
+            # Get current sizes
+            sizes = self.top_splitter.sizes()
+
+            # Check if right panel is collapsed (size is 0 or very small)
+            is_collapsed = sizes[1] < 50
+
+            if is_collapsed:
+                # Restore panel - use saved size or default to 30% of window width
+                saved_size = self.settings.value("right_panel/width", 400, type=int)
+                total_width = sum(sizes)
+
+                # Ensure saved size is reasonable (between 250 and 50% of window)
+                max_width = int(total_width * 0.5)
+                restored_width = min(max(saved_size, 250), max_width)
+
+                # Set new sizes
+                self.top_splitter.setSizes([total_width - restored_width, restored_width])
+
+                # Update menu action
+                self.action_toggle_right_panel.setChecked(True)
+                log("Right panel expanded", level="info", category="ui")
+            else:
+                # Save current width before collapsing
+                self.settings.setValue("right_panel/width", sizes[1])
+
+                # Collapse panel
+                self.top_splitter.setSizes([sum(sizes), 0])
+
+                # Update menu action
+                self.action_toggle_right_panel.setChecked(False)
+                log("Right panel collapsed", level="info", category="ui")
+
+        except Exception as e:
+            log(f"Error toggling right panel: {e}", level="error", category="ui")
+
     def set_theme_mode(self, mode: str):
         """Switch theme mode and persist. mode in {'light','dark'}."""
         try:
@@ -2581,7 +2690,9 @@ class ImxUploadGUI(QMainWindow):
     def start_worker(self):
         """Start the upload worker thread"""
         if self.worker is None or not self.worker.isRunning():
+            log(f"Creating new UploadWorker (old worker: {id(self.worker) if self.worker else 'None'}{(", running: " and self.worker.isRunning()) if self.worker else ''})", level="debug", category="uploads")
             self.worker = UploadWorker(self.queue_manager)
+            log(f"New UploadWorker created ({id(self.worker)})", level="debug", category="uploads")
             self.worker.progress_updated.connect(self.on_progress_updated)
             self.worker.gallery_started.connect(self.on_gallery_started)
             self.worker.gallery_completed.connect(self.on_gallery_completed)
@@ -2594,15 +2705,15 @@ class ImxUploadGUI(QMainWindow):
             self.worker.bandwidth_updated.connect(self.on_bandwidth_updated)
             self.worker.start()
             
-            log(f"Worker.isRunning(): {self.worker.isRunning()}", level="debug")
-            log(f"Worker thread started", level="debug")
+            log(f"DEBUG: Worker.isRunning(): {self.worker.isRunning()}", level="debug")
+            #log(f"Worker thread started", level="debug")
 
     def on_queue_item_status_changed(self, path: str, old_status: str, new_status: str):
         """Handle individual queue item status changes"""
         item = self.queue_manager.get_item(path)
         scan_status = item.scan_complete if item else "NO_ITEM"
         in_mapping = path in self.path_to_row
-        log(f"GUI received status change signal: {path} from {old_status} to {new_status}, scan_complete={scan_status}, in_path_to_row={in_mapping}", level="debug", category="ui")
+        log(f"DEBUG: GUI received status change signal: {path} from {old_status} to {new_status}, scan_complete={scan_status}, in_path_to_row={in_mapping}", level="debug", category="ui")
         
         # When an item goes from scanning to ready, just update tab counts
         if old_status == "scanning" and new_status == "ready":
@@ -2614,7 +2725,7 @@ class ImxUploadGUI(QMainWindow):
         # Debug the item data before updating table
         item = self.queue_manager.get_item(path)
         if item:
-            log(f"Item data: total_images={getattr(item, 'total_images', 'NOT SET')}, progress={getattr(item, 'progress', 'NOT SET')}, status={getattr(item, 'status', 'NOT SET')}, added_time={getattr(item, 'added_time', 'NOT SET')}", level="debug", category="ui")
+            log(f"DEBUG: Item data: total_images={getattr(item, 'total_images', 'NOT SET')}, progress={getattr(item, 'progress', 'NOT SET')}, status={getattr(item, 'status', 'NOT SET')}, added_time={getattr(item, 'added_time', 'NOT SET')}", level="debug", category="ui")
         
         # Update table display for this specific item
         self._update_specific_gallery_display(path)
@@ -2754,17 +2865,17 @@ class ImxUploadGUI(QMainWindow):
         if folders:
             self.add_folders(folders)
 
-        # Process archives
+        # Process archives in background threads
         for archive_path in archives:
-            selected_folders = self.archive_coordinator.process_archive(archive_path)
-            if selected_folders:
-                # Mark folders as from archive and add to queue
-                for folder_path in selected_folders:
-                    self._add_archive_folder(str(folder_path), str(archive_path))
+            worker = ArchiveExtractionWorker(archive_path, self.archive_coordinator)
+            worker.signals.finished.connect(self.on_archive_extraction_finished)
+            worker.signals.error.connect(self.on_archive_extraction_error)
+            self._thread_pool.start(worker)
+            log(f"DEBUG: Started background extraction for: {os.path.basename(archive_path)}", level="debug", category="ui")
 
     def add_folders(self, folder_paths: List[str]):
         """Add folders to the upload queue with duplicate detection"""
-        log(f"add_folders called with {len(folder_paths)} paths", level="debug", category="queue")
+        log(f"add_folders called with {len(folder_paths)} paths", level="trace", category="queue")
 
         if len(folder_paths) == 1:
             # Single folder - use the old method for backward compatibility
@@ -2775,7 +2886,7 @@ class ImxUploadGUI(QMainWindow):
     
     def _add_single_folder(self, path: str):
         """Add a single folder with duplicate detection."""
-        log(f"_add_single_folder called with path={path}", level="debug", category="queue")
+        log(f"_add_single_folder called with path={path}", level="trace", category="queue")
         
         # Use duplicate detection for single folders too
         folder_name = os.path.basename(path)
@@ -2796,7 +2907,7 @@ class ImxUploadGUI(QMainWindow):
             if msg.exec() == QMessageBox.StandardButton.Yes:
                 # Replace existing
                 self.queue_manager.remove_item(path)
-                log(f"Replaced {folder_name} in queue", level="debug", category="queue")
+                log(f"DEBUG: Replaced {folder_name} in queue", level="debug", category="queue")
             else:
                 return  # User chose not to replace
         
@@ -2859,8 +2970,30 @@ class ImxUploadGUI(QMainWindow):
                 item.is_from_archive = True
                 self.queue_manager.save_persistent_queue([folder_path])
                 self._add_gallery_to_table(item)
-                log(f"Added from archive: {gallery_name}", category="queue")
+                log(f"Added from archive: {gallery_name}", category="queue", level="info")
 
+    def on_archive_extraction_finished(self, archive_path: str, selected_folders: List[str]):
+        """Handle successful archive extraction (called from worker thread signal)"""
+        log(f"Archive extraction completed: {os.path.basename(archive_path)} ({len(selected_folders)} folders)", 
+            level="info", category="fileio")
+        
+        # Add all selected folders to queue
+        for folder_path in selected_folders:
+            self._add_archive_folder(folder_path, archive_path)
+
+    def on_archive_extraction_error(self, archive_path: str, error_message: str):
+        """Handle archive extraction error (called from worker thread signal)"""
+        log(f"Archive extraction failed for {os.path.basename(archive_path)}: {error_message}", 
+            level="warning", category="fileio")
+        
+        # Only show message box if it's a real error (not user cancellation)
+        if "cancelled" not in error_message.lower() and "no folders selected" not in error_message.lower():
+            QMessageBox.warning(
+                self,
+                "Archive Extraction Failed",
+                f"Failed to extract {os.path.basename(archive_path)}:\n\n{error_message}"
+            )
+            
     def _check_gallery_exists_background(self, path: str, gallery_name: str, template_name: str):
         """Check if gallery exists in background and show dialog on main thread"""
         # This runs in a deferred timer, but the network call should be in a proper thread
@@ -2945,16 +3078,16 @@ class ImxUploadGUI(QMainWindow):
             
             # Show results
             if results['added'] > 0:
-                log(f"Added {results['added']} galleries to queue", category="queue")
+                log(f"Added {results['added']} galleries to queue", category="queue", level="info")
             if results['duplicates'] > 0:
-                log(f"Skipped {results['duplicates']} duplicate galleries", category="queue")
+                log(f"Skipped {results['duplicates']} duplicate galleries", category="queue", level="info")
             if results['failed'] > 0:
                 log(f"Failed to add {results['failed']} galleries", category="queue")
                 # Show detailed errors if any
                 for error in results['errors'][:5]:  # Show first 5 errors
-                    log(f"{error}", category="queue", level="error")
+                    log(f"WARNING: {error}", category="queue", level="warning")
                 if len(results['errors']) > 5:
-                    log(f"... and {len(results['errors']) - 5} more errors", category="queue")
+                    log(f"... and {len(results['errors']) - 5} more errors", category="queue", level="warning")
             
             # Add all successfully added items to table
             for path in results.get('added_paths', []):
@@ -2969,7 +3102,7 @@ class ImxUploadGUI(QMainWindow):
                 pass
             
         except Exception as e:
-            log(f"Error adding multiple folders: {str(e)}", category="queue")
+            log(f"ERROR: Adding multiple folders: {str(e)}", category="queue", level="error")
         finally:
             progress.close()
     
@@ -2993,7 +3126,7 @@ class ImxUploadGUI(QMainWindow):
                 template_name = self.template_combo.currentText()
                 # Get current tab BEFORE adding items
                 current_tab = self.gallery_table.current_tab if hasattr(self.gallery_table, 'current_tab') else "Main"
-                log(f"Multiple folders - adding to tab: {current_tab}", level="debug")
+                log(f"Multiple folders - adding to tab: {current_tab}", level="debug", category="queue")
                 
                 for folder_path in folders_to_add_normally:
                     try:
@@ -3005,19 +3138,18 @@ class ImxUploadGUI(QMainWindow):
                                 # Add to table display immediately (like single folder does)
                                 self._add_gallery_to_table(item)
                             
-                            log(f"Added to queue: {os.path.basename(folder_path)}", category="queue", level="info")
+                            log(f"DEBUG: Added to queue: {os.path.basename(folder_path)}", category="queue", level="debug")
                     except Exception as e:
-                        log(f"Error adding folder: {os.path.basename(folder_path)}: {e}", level="error", category="queue")
+                        log(f"ERROR: Adding folder: {os.path.basename(folder_path)}: {e}", level="error", category="queue")
             
             # Process folders that should replace existing queue items
             if folders_to_replace_in_queue:
-                log(f"Replacing {len(folders_to_replace_in_queue)} folders in queue", level="debug")
+                log(f"Replacing {len(folders_to_replace_in_queue)} folders in queue", level="debug", category="queue")
                 template_name = self.template_combo.currentText()
                 # Get current tab for replacements too
                 if 'current_tab' not in locals():
                     current_tab = self.gallery_table.current_tab if hasattr(self.gallery_table, 'current_tab') else "Main"
-                    log(f"Multiple folders replacement - adding to tab: {current_tab}", level="debug")
-                
+                    log(f"DEBUG: Multiple folders replacement - adding to tab: {current_tab}", level="debug", category="queue")                
                 for folder_path in folders_to_replace_in_queue:
                     try:
                         # Remove existing item from both queue and table
@@ -3033,21 +3165,21 @@ class ImxUploadGUI(QMainWindow):
                                 # Add to table display immediately
                                 self._add_gallery_to_table(item)
                         
-                        log(f"Replaced {os.path.basename(folder_path)} in queue", level="debug")
+                        log(f"DEBUG: Replaced {os.path.basename(folder_path)} in queue", level="debug", category="queue")
                     except Exception as e:
-                        log(f"Error replacing {os.path.basename(folder_path)}: {e}", level="warning")
+                        log(f"ERROR: Replacing {os.path.basename(folder_path)}: {e}", level="error", category="queue")
             
             # Update display
             total_processed = len(folders_to_add_normally) + len(folders_to_replace_in_queue)
             if total_processed > 0:
-                log(f"Added {total_processed} galleries to queue", level="info")
+                log(f"Added {total_processed} galleries to queue", level="info", category="queue")
                 # Trigger table refresh and update tab counts/tooltips
                 # TESTING: Comment out _update_scanned_rows to see if it's causing race condition
                 #QTimer.singleShot(50, self._update_scanned_rows)
                 QTimer.singleShot(100, lambda: self._update_tab_tooltips() if hasattr(self, '_update_tab_tooltips') else None)
             
         except Exception as e:
-            log(f"Error processing folders: {e}", level="error")
+            log(f"ERROR: Processing folders: {e}", level="error", category="queue")
     
     def add_folder_from_command_line(self, folder_path: str):
         """Add folder from command line (single instance)"""
@@ -3062,28 +3194,28 @@ class ImxUploadGUI(QMainWindow):
     
     def _add_gallery_to_table(self, item: GalleryQueueItem):
         """Add a new gallery item to the table without rebuilding"""
-        log(f"_add_gallery_to_table called for {item.path} with tab_name={item.tab_name}", level="debug")
+        log(f"DEBUG: _add_gallery_to_table called for {item.path} with tab_name={item.tab_name}", level="debug", category="queue")
 
         # CRITICAL FIX: Check if path already exists in table to prevent duplicates
         if item.path in self.path_to_row:
             existing_row = self.path_to_row[item.path]
-            log(f"Gallery already in table at row {existing_row}, updating instead of adding duplicate", level="debug")
+            log(f"DEBUG: Gallery already in table at row {existing_row}, updating instead of adding duplicate", level="debug", category="queue")
             # Update existing row instead of creating duplicate
             self._populate_table_row(existing_row, item)
             return
 
         row = self.gallery_table.rowCount()
         self.gallery_table.setRowCount(row + 1)
-        log(f"Adding NEW gallery to table at row {row}", level="debug")
+        log(f"DEBUG: Adding NEW gallery to table at row {row}", level="debug", category="queue")
 
         # Update mappings
         self.path_to_row[item.path] = row
         self.row_to_path[row] = item.path
-        log(f"Added {item.path} to path_to_row at row {row}, scan_complete={item.scan_complete}, status={item.status}", level="debug")
+        log(f"DEBUG: Added {item.path} to path_to_row at row {row}, scan_complete={item.scan_complete}, status={item.status}", level="debug", category="queue")
 
         # Initialize scan state tracking
         self._last_scan_states[item.path] = item.scan_complete
-        log(f"Initialized _last_scan_states[{item.path}] = {item.scan_complete}", level="debug")
+        log(f"DEBUG: Initialized _last_scan_states[{item.path}] = {item.scan_complete}", level="debug", category="queue")
         
         # Populate the new row
         self._populate_table_row(row, item)
@@ -3092,20 +3224,20 @@ class ImxUploadGUI(QMainWindow):
         current_tab = self.gallery_table.current_tab if hasattr(self.gallery_table, 'current_tab') else None
         if current_tab and (current_tab == "All Tabs" or item.tab_name == current_tab):
             self.gallery_table.setRowHidden(row, False)
-            log(f"Row {row} set VISIBLE for current tab '{current_tab}' (item tab: '{item.tab_name}')", level="debug")
+            log(f"Row {row} set VISIBLE for current tab '{current_tab}' (item tab: '{item.tab_name}')", level="trace", category="queue")
         else:
             self.gallery_table.setRowHidden(row, True)
-            log(f"Row {row} set HIDDEN - item tab '{item.tab_name}' != current tab '{current_tab}'", level="debug")
+            log(f"Row {row} set HIDDEN - item tab '{item.tab_name}' != current tab '{current_tab}'", level="trace", category="queue")
         
         # Invalidate TabManager's cache for this tab so it reloads from database
         if hasattr(self.gallery_table, 'tab_manager') and item.tab_name:
             self.gallery_table.tab_manager.invalidate_tab_cache(item.tab_name)
-            log(f"Invalidated TabManager cache for tab {item.tab_name}", level="debug")
+            log(f"DEBUG: Invalidated TabManager cache for tab {item.tab_name}", level="debug", category="queue")
 
         # CRITICAL FIX: Invalidate table update queue visibility cache so new visible rows get updates
         if hasattr(self, '_table_update_queue') and self._table_update_queue:
             self._table_update_queue.invalidate_visibility_cache()
-            log(f"Invalidated table update queue visibility cache after adding row {row}", level="debug")
+            log(f"DEBUG: Invalidated table update queue visibility cache after adding row {row}", level="debug", category="queue")
     
     def _remove_gallery_from_table(self, path: str):
         """Remove a gallery from the table and update mappings"""
@@ -3201,7 +3333,7 @@ class ImxUploadGUI(QMainWindow):
         
         # Check if row is currently visible for performance optimization
         row = self.path_to_row.get(path)
-        log(f"_update_specific_gallery_display - row={row}, path_to_row has path: {path in self.path_to_row}", level="debug")
+        log(f"DEBUG: _update_specific_gallery_display - row={row}, path_to_row has path: {path in self.path_to_row}", level="debug", category="queue")
         if row is not None and 0 <= row < self.gallery_table.rowCount():
             #print(f"DEBUG: Row {row} is valid, checking update queue")
             # Use table update queue for visible rows (includes hidden row filtering)
@@ -3214,7 +3346,7 @@ class ImxUploadGUI(QMainWindow):
                 QTimer.singleShot(0, lambda: self._populate_table_row(row, item))
         else:
             # If update fails, refresh filter as fallback
-            log(f"Row update failed for {path}, refreshing filter", level="warning", category="ui")
+            log(f"WARNING: Row update failed for {path}, refreshing filter", level="warning", category="queue")
             if hasattr(self.gallery_table, 'refresh_filter'):
                 QTimer.singleShot(0, self.gallery_table.refresh_filter)
     
@@ -3235,6 +3367,7 @@ class ImxUploadGUI(QMainWindow):
             button_icon_map = [
                 ('manage_templates_btn', 'templates'),
                 ('manage_credentials_btn', 'credentials'),
+                ('hooks_btn', 'hooks'),
                 ('log_viewer_btn', 'log_viewer'),
                 ('theme_toggle_btn', 'toggle_theme'),
                 # Add more buttons here as needed when they get icon manager support
@@ -3248,7 +3381,7 @@ class ImxUploadGUI(QMainWindow):
                     if not icon.isNull():
                         button.setIcon(icon)
             #t2 = time.time()
-            #log(f"  button icons updated: {(t2-t1)*1000:.1f}ms", level="debug", category="ui")
+            #log(f"button icons updated: {(t2-t1)*1000:.1f}ms", level="trace", category="ui")
 
             # Refresh renamed column icons - ONLY VISIBLE ROWS for fast theme switching
             table = self.gallery_table
@@ -3299,7 +3432,7 @@ class ImxUploadGUI(QMainWindow):
 
             #log(f"  TOTAL _refresh_button_icons: {(t4-t_start)*1000:.1f}ms", level="debug", category="ui")
         except Exception as e:
-            log(f"Error refreshing button icons: {e}", level="debug")
+            log(f"ERROR: Exception refreshing button icons: {e}", level="warning", category="ui")
 
     def _populate_table_row(self, row: int, item: GalleryQueueItem):
         """Update row data immediately with proper font consistency - COMPLETE VERSION"""
@@ -3309,7 +3442,7 @@ class ImxUploadGUI(QMainWindow):
                 self.splash.update_status(f"Populating row {row}")
             except Exception as e:
                 
-                log(f"Exception in main_window: {e}", level="error", category="ui")
+                log(f"ERROR: Exception in main_window: {e}", level="error", category="ui")
                 raise
 
         # CRITICAL: Verify row is still valid for this item (table may have changed due to deletions)
@@ -3318,12 +3451,12 @@ class ImxUploadGUI(QMainWindow):
 
         if actual_row is None:
             # Item was removed from table entirely
-            log(f"Skipping update - {os.path.basename(item.path)} no longer in table", level="debug")
+            log(f"Skipping update - {os.path.basename(item.path)} no longer in table", level="debug", category="queue")
             return
 
         if actual_row != row:
             # Table was modified (row deletions/insertions), use current row
-            log(f"Row adjusted for {os.path.basename(item.path)}: {row} → {actual_row}", level="debug")
+            log(f"Row adjusted for {os.path.basename(item.path)}: {row} → {actual_row}", level="trace", category="queue")
             row = actual_row
 
         theme_mode = self._current_theme_mode
@@ -3352,7 +3485,7 @@ class ImxUploadGUI(QMainWindow):
             # PyQt is retarded, manually set font
             self.gallery_table.setItem(row, GalleryTableWidget.COL_UPLOADED, uploaded_item)
         else:
-            log(f"No uploaded column set because total_images={total_images} <= 0", level="debug")
+            log(f"DEBUG: No uploaded column set because total_images={total_images} <= 0", level="debug")
 
         # Progress bar
         progress_widget = self.gallery_table.cellWidget(row, 3)
@@ -3628,7 +3761,7 @@ class ImxUploadGUI(QMainWindow):
                 if transfer_text:
                     xfer_item.setForeground(QColor(0, 0, 0, 160))
         except Exception as e:
-            log(f"Exception in main_window: {e}", level="error", category="ui")
+            log(f"ERROR: Exception in main_window: {e}", level="error", category="ui")
             raise
         self.gallery_table.setItem(row, GalleryTableWidget.COL_TRANSFER, xfer_item)
     
@@ -3882,7 +4015,7 @@ class ImxUploadGUI(QMainWindow):
             else:
                 self.speed_fastest_value_label.setToolTip("")  # Clear tooltip
         except Exception as e:
-            log(f"Exception in main_window: {e}", level="error", category="ui")
+            log(f"ERROR: Exception in main_window: {e}", level="error", category="ui")
             raise
         # Current transfer speed: calculate from ALL uploading items (not tab-filtered)
         all_items = self.queue_manager.get_all_items()
@@ -3922,7 +4055,7 @@ class ImxUploadGUI(QMainWindow):
         try:
             self.settings_group.setEnabled(False)
         except Exception as e:
-            log(f"Exception in main_window: {e}", level="error", category="ui")
+            log(f"ERROR: Exception in main_window: {e}", level="error", category="ui")
             raise
 
         for row in range(self.gallery_table.rowCount()):
@@ -3968,7 +4101,7 @@ class ImxUploadGUI(QMainWindow):
                         estimated_uploaded = (progress_percent / 100.0) * item.total_size
                         item.current_kibps = (estimated_uploaded / elapsed) / 1024.0
                 except Exception as e:
-                    log(f"Exception in main_window: {e}", level="error", category="ui")
+                    log(f"ERROR: Exception in main_window: {e}", level="error", category="ui")
                     raise
 
         # Add to batched progress updates for non-blocking GUI updates
@@ -4080,7 +4213,7 @@ class ImxUploadGUI(QMainWindow):
                     if final_text:
                         xfer_item.setForeground(QColor(0, 0, 0, 160))
                 except Exception as e:
-                    log(f"Exception in main_window: {e}", level="error", category="ui")
+                    log(f"ERROR: Exception in main_window: {e}", level="error", category="ui")
                     raise
                 self.gallery_table.setItem(matched_row, GalleryTableWidget.COL_TRANSFER, xfer_item)
                 
@@ -4088,7 +4221,7 @@ class ImxUploadGUI(QMainWindow):
             self.update_progress_display()
                 
         except Exception as e:
-            log(f"Exception in main_window: {e}", level="error", category="ui")
+            log(f"ERROR: Exception in main_window: {e}", level="error", category="ui")
             raise  # Fail silently to prevent blocking
     
     def on_gallery_completed(self, path: str, results: dict):
@@ -4113,7 +4246,7 @@ class ImxUploadGUI(QMainWindow):
                     item.final_kibps = (float(results.get('uploaded_size', 0) or 0) / elapsed) / 1024.0
                     item.current_kibps = 0.0
                 except Exception as e:
-                    log(f"Exception in main_window: {e}", level="error", category="ui")
+                    log(f"ERROR: Exception in main_window: {e}", level="error", category="ui")
                     raise
         
         # Force final progress update to show 100% completion
@@ -4147,7 +4280,7 @@ class ImxUploadGUI(QMainWindow):
                     item = self.queue_manager.items[path]
                     item.final_kibps = self._current_transfer_kbps
         except Exception as e:
-            log(f"Exception in main_window: {e}", level="error", category="ui")
+            log(f"ERROR: Exception in main_window: {e}", level="error", category="ui")
             raise
         
         # Re-enable settings if no remaining active items (defer to avoid blocking)
@@ -4179,7 +4312,7 @@ class ImxUploadGUI(QMainWindow):
             any_active = any(i.status in ("queued", "uploading") for i in remaining)
             self.settings_group.setEnabled(not any_active)
         except Exception as e:
-            log(f"Exception in main_window: {e}", level="error", category="ui")
+            log(f"ERROR: Exception in main_window: {e}", level="error", category="ui")
             raise
     
     def _update_unnamed_count_background(self):
@@ -4220,7 +4353,7 @@ class ImxUploadGUI(QMainWindow):
             # Refresh progress display to show updated stats
             self.update_progress_display()
         except Exception as e:
-            log(f"Exception in main_window: {e}", level="error", category="ui")
+            log(f"ERROR: Exception in main_window: {e}", level="error", category="ui")
             raise
 
     def on_ext_fields_updated(self, path: str, ext_fields: dict):
@@ -4233,19 +4366,19 @@ class ImxUploadGUI(QMainWindow):
             with QMutexLocker(self.queue_manager.mutex):
                 if path in self.queue_manager.items:
                     item = self.queue_manager.items[path]
-                    log(f"Found item in queue_manager: {item.name}", level="debug", category="hooks")
+                    log(f"DEBUG: Found item in queue_manager: {item.name}", level="debug", category="hooks")
 
                     # Get the actual table widget - SAME PATTERN AS _populate_table_row
                     actual_table = getattr(self.gallery_table, 'table', self.gallery_table)
-                    log(f"Using actual_table: {type(actual_table).__name__}", level="debug", category="hooks")
+                    log(f"DEBUG: Using actual_table: {type(actual_table).__name__}", level="debug", category="hooks")
 
                     # Find the table row for this gallery
                     if actual_table:
-                        log(f"Table has {actual_table.rowCount()} rows", level="debug", category="hooks")
+                        log(f"DEBUG: Table has {actual_table.rowCount()} rows", level="debug", category="hooks")
                         for row in range(actual_table.rowCount()):
                             name_item = actual_table.item(row, GalleryTableWidget.COL_NAME)
                             if name_item and name_item.data(Qt.ItemDataRole.UserRole) == path:
-                                log(f"Found matching row {row} for path {path}", level="debug", category="hooks")
+                                log(f"DEBUG: Found matching row {row} for path {path}", level="debug", category="hooks")
 
                                 # Block signals to prevent itemChanged events during update
                                 signals_blocked = actual_table.signalsBlocked()
@@ -4253,31 +4386,31 @@ class ImxUploadGUI(QMainWindow):
                                 try:
                                     # Update ext columns
                                     for ext_field, value in ext_fields.items():
-                                        log(f"Processing ext_field={ext_field}, value={value}", level="debug", category="hooks")
+                                        log(f"DEBUG: Processing ext_field={ext_field}, value={value}", level="debug", category="hooks")
                                         if ext_field == 'ext1':
                                             ext_item = QTableWidgetItem(str(value))
                                             ext_item.setFlags(ext_item.flags() | Qt.ItemFlag.ItemIsEditable)
                                             ext_item.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
                                             actual_table.setItem(row, GalleryTableWidget.COL_EXT1, ext_item)
-                                            log(f"Set COL_EXT1 (col {GalleryTableWidget.COL_EXT1}) to: {value}", level="info", category="hooks")
+                                            log(f"Set COL_EXT1 (col {GalleryTableWidget.COL_EXT1}) to: {value}", level="trace", category="hooks")
                                         elif ext_field == 'ext2':
                                             ext_item = QTableWidgetItem(str(value))
                                             ext_item.setFlags(ext_item.flags() | Qt.ItemFlag.ItemIsEditable)
                                             ext_item.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
                                             actual_table.setItem(row, GalleryTableWidget.COL_EXT2, ext_item)
-                                            log(f"Set COL_EXT2 (col {GalleryTableWidget.COL_EXT2}) to: {value}", level="info", category="hooks")
+                                            log(f"Set COL_EXT2 (col {GalleryTableWidget.COL_EXT2}) to: {value}", level="trace", category="hooks")
                                         elif ext_field == 'ext3':
                                             ext_item = QTableWidgetItem(str(value))
                                             ext_item.setFlags(ext_item.flags() | Qt.ItemFlag.ItemIsEditable)
                                             ext_item.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
                                             actual_table.setItem(row, GalleryTableWidget.COL_EXT3, ext_item)
-                                            log(f"Set COL_EXT3 (col {GalleryTableWidget.COL_EXT3}) to: {value}", level="info", category="hooks")
+                                            log(f"Set COL_EXT3 (col {GalleryTableWidget.COL_EXT3}) to: {value}", level="trace", category="hooks")
                                         elif ext_field == 'ext4':
                                             ext_item = QTableWidgetItem(str(value))
                                             ext_item.setFlags(ext_item.flags() | Qt.ItemFlag.ItemIsEditable)
                                             ext_item.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
                                             actual_table.setItem(row, GalleryTableWidget.COL_EXT4, ext_item)
-                                            log(f"Set COL_EXT4 (col {GalleryTableWidget.COL_EXT4}) to: {value}", level="info", category="hooks")
+                                            log(f"Set COL_EXT4 (col {GalleryTableWidget.COL_EXT4}) to: {value}", level="trace", category="hooks")
                                 finally:
                                     # Restore original signal state
                                     actual_table.blockSignals(signals_blocked)
@@ -4285,11 +4418,11 @@ class ImxUploadGUI(QMainWindow):
                                 log(f"Updated ext fields in GUI for {item.name}: {ext_fields}", level="info", category="hooks")
                                 break
                     else:
-                        log(f"Table is None!", level="error", category="hooks")
+                        log(f"WARNING: Table is None!", level="debug", category="hooks")
                 else:
-                    log(f"Path {path} not found in queue_manager.items", level="error", category="hooks")
+                    log(f"DEBUG: Path {path} not found in queue_manager.items", level="debug", category="hooks")
         except Exception as e:
-            log(f"Error updating ext fields in GUI: {e}", level="error", category="hooks")
+            log(f"ERROR: Error updating ext fields in GUI: {e}", level="error", category="hooks")
             import traceback
             traceback.print_exc()
 
@@ -4317,13 +4450,15 @@ class ImxUploadGUI(QMainWindow):
         """Handle upload gallery exists confirmation"""
         if result != QMessageBox.StandardButton.Yes:
             # Cancel the upload
-            log(f"Upload cancelled by user due to existing gallery", level="debug", category="ui")
+            log(f"INFO: Upload cancelled by user due to existing gallery", level="info", category="ui")
             # TODO: Implement proper cancellation mechanism
         else:
-            log("User chose to continue with existing gallery", level="debug", category="ui")
+            log("INFO: User chose to continue with existing gallery", level="info", category="ui")
 
     def on_gallery_renamed(self, gallery_id: str):
         """Mark cells for the given gallery_id as renamed (check icon) - optimized version."""
+        # Update unnamed gallery count
+        self._update_unnamed_count_background()
         # Defer the expensive operation to avoid blocking GUI
         QTimer.singleShot(1, lambda: self._handle_gallery_renamed_background(gallery_id))
     
@@ -4341,7 +4476,7 @@ class ImxUploadGUI(QMainWindow):
             if found_row is not None:
                 self._set_renamed_cell_icon(found_row, True)
         except Exception as e:
-            log(f"Exception in main_window: {e}", level="error", category="ui")
+            log(f"ERROR: Exception in main_window: {e}", level="error", category="ui")
             raise
 
     def on_gallery_failed(self, path: str, error_message: str):
@@ -4358,7 +4493,7 @@ class ImxUploadGUI(QMainWindow):
             any_active = any(i.status in ("queued", "uploading") for i in remaining)
             self.settings_group.setEnabled(not any_active)
         except Exception as e:
-            log(f"Exception in main_window: {e}", level="error", category="ui")
+            log(f"ERROR: Exception in main_window: {e}", level="error", category="ui")
             raise
 
         # Update display when status changes  
@@ -4368,7 +4503,7 @@ class ImxUploadGUI(QMainWindow):
         QTimer.singleShot(0, self._update_counts_and_progress)
         
         gallery_name = os.path.basename(path)
-        log(f"✗ Failed: {gallery_name} - {error_message}", level="error")
+        log(f"✗ Failed: {gallery_name} - {error_message}", level="warning")
     
     def _ensure_log_visible(self):
         """Ensure log is scrolled to bottom - called via QTimer for thread safety"""
@@ -4377,88 +4512,46 @@ class ImxUploadGUI(QMainWindow):
             if vbar:
                 vbar.setValue(vbar.maximum())
         except Exception as e:
-            log(f"Exception in main_window: {e}", level="error", category="ui")
+            log(f"ERROR: Exception in main_window: {e}", level="error", category="ui")
             raise
 
     def add_log_message(self, message: str):
-        """Add message to log"""
-        # Determine category and subtype for GUI gating and file logging
-        # Auto-detect log level from message keywords
-        log_level = logging.INFO  # Default
-        message_upper = message.upper()
-        if "CRITICAL" in message_upper or "FATAL" in message_upper:
-            log_level = logging.CRITICAL
-        elif "ERROR" in message_upper:
-            log_level = logging.ERROR
-        elif "WARNING" in message_upper or "WARN" in message_upper:
-            log_level = logging.WARNING
-        elif "DEBUG" in message_upper:
-            log_level = logging.DEBUG
+        """
+        Add message to GUI log list (simple display only).
 
-        category = "general"
-        subtype = None
+        Filtering is already done by logger.py before this is called.
+        This method just displays the message in the simple log list.
+        Log viewers are called directly by logger.py with metadata.
+        """
         try:
-            # message may start with timestamp; strip it first for token parse
-            head = message
+            # Strip category tags for clean display
+            display = message
+            prefix = ""
+
+            # Extract timestamp prefix if present (HH:MM:SS)
             parts = message.split(" ", 1)
             if len(parts) > 1 and parts[0].count(":") == 2:
-                head = parts[1]
-            if head.startswith("[") and "]" in head:
-                token = head[1:head.find("]")]
-                bits = token.split(":")
-                category = bits[0] or "general"
-                subtype = bits[1] if len(bits) > 1 else None
-        except Exception as e:
-            log(f"Exception in main_window: {e}", level="error", category="ui")
-            raise
+                prefix = parts[0] + " "
+                rest = parts[1]
+            else:
+                rest = message
 
-        # GUI visibility based on settings
-        show_in_gui = True
-        try:
-            logger = get_logger()
-            if not logger.should_emit_gui(category, log_level):
-                show_in_gui = False
-            if category == "uploads" and show_in_gui:
-                if subtype == "file" and not logger.should_log_upload_file_success("gui"):
-                    show_in_gui = False
-                if subtype == "gallery" and not logger.should_log_upload_gallery_success("gui"):
-                    show_in_gui = False
-        except Exception as e:
-            log(f"Exception in main_window: {e}", level="error", category="ui")
-            raise
+            # Strip [category] or [category:subtype] tag if present
+            if rest.startswith("[") and "]" in rest:
+                close_idx = rest.find("]")
+                rest = rest[close_idx + 1:].lstrip()
 
-        # Append to GUI log without category tags and auto-follow
-        if show_in_gui:
-            try:
-                display = message
-                # Strip leading category tag [xxx] if present (after optional time)
-                head = message
-                prefix = ""
-                parts = message.split(" ", 1)
-                if len(parts) > 1 and parts[0].count(":") == 2:
-                    prefix = parts[0] + " "
-                    head = parts[1]
-                if head.startswith("[") and "]" in head:
-                    head = head[head.find("]") + 1:].lstrip()
-                display = prefix + head
+            display = prefix + rest
 
-                # Prepend to top of list (newest first)
-                self.log_text.insertItem(0, display)
+            # Prepend to top of list (newest first)
+            self.log_text.insertItem(0, display)
 
-                # Limit to 5000 items
-                if self.log_text.count() > 5000:
-                    self.log_text.takeItem(5000)
-            except Exception:
-                self.log_text.insertItem(0, message)
-
-        # NO FILE LOGGING HERE - the log() function already did that!
-        # Retain long history; no aggressive trimming
-        try:
-            if getattr(self, "_log_viewer_dialog", None) is not None and self._log_viewer_dialog.isVisible():
-                self._log_viewer_dialog.append_message(message)
-        except Exception as e:
-            log(f"Exception in main_window: {e}", level="error", category="ui")
-            raise
+            # Limit to 5000 items
+            if self.log_text.count() > 5000:
+                self.log_text.takeItem(5000)
+        except Exception:
+            # Fallback: add raw message
+            self.log_text.insertItem(0, message)
 
     def show_status_message(self, message: str, timeout: int = 2500):
         """
@@ -4481,11 +4574,18 @@ class ImxUploadGUI(QMainWindow):
             from src.utils.logging import get_logger
             initial_text = get_logger().read_current_log(tail_bytes=2 * 1024 * 1024) or ""
         except Exception as e:
-            log("Error opening log viewer dialog popup: {e}", level="error", category="ui")
+            log("ERROR: Error opening log viewer dialog popup: {e}", level="error", category="ui")
             initial_text = ""
 
         dialog = LogViewerDialog(initial_text, self)
         dialog.show()  # Non-modal dialog
+
+    def open_icon_manager(self):
+        """Open Icon Manager dialog"""
+        from src.gui.dialogs.icon_manager_dialog import IconManagerDialog
+
+        dialog = IconManagerDialog(self)
+        dialog.exec()
 
     def open_unrenamed_galleries_dialog(self):
         """Open dialog to manage unrenamed galleries"""
@@ -4506,7 +4606,7 @@ class ImxUploadGUI(QMainWindow):
             # Update button counts after status change
             QTimer.singleShot(0, self._update_button_counts)
         else:
-            log(f"Failed to start: {os.path.basename(path)}", level="warning", category="queue")
+            log(f"WARNING: Failed to start: {os.path.basename(path)}", level="warning", category="queue")
     
     def pause_single_item(self, path: str):
         """Pause a single item"""
@@ -4516,7 +4616,7 @@ class ImxUploadGUI(QMainWindow):
             # Update button counts after status change
             QTimer.singleShot(0, self._update_button_counts)
         else:
-            log(f"Failed to pause: {os.path.basename(path)}", level="warning", category="queue")
+            log(f"WARNING: Failed to pause: {os.path.basename(path)}", level="warning", category="queue")
     
     def stop_single_item(self, path: str):
         """Mark current uploading item to finish in-flight transfers, then become incomplete."""
@@ -4527,10 +4627,10 @@ class ImxUploadGUI(QMainWindow):
             self._update_specific_gallery_display(path)
             # Update button counts after status change
             QTimer.singleShot(0, self._update_button_counts)
-            log(f"Will stop after current transfers: {os.path.basename(path)}", level="debug", category="queue")
+            log(f"DEBUG: Will stop after current transfers: {os.path.basename(path)}", level="debug", category="queue")
         else:
             # If not the actively uploading one, nothing to do
-            log(f"Stop requested but item not currently uploading: {os.path.basename(path)}", level="debug", category="queue")
+            log(f"DEBUG: Stop requested but item not currently uploading: {os.path.basename(path)}", level="debug", category="queue")
         # Controls will be updated by the targeted display update above
     
     def cancel_single_item(self, path: str):
@@ -4539,7 +4639,7 @@ class ImxUploadGUI(QMainWindow):
             item = self.queue_manager.items[path]
             if item.status == "queued":
                 self.queue_manager.update_item_status(path, "ready")
-                log(f"Canceled queued item: {os.path.basename(path)}", level="debug", category="queue")
+                log(f"DEBUG: Canceled queued item: {os.path.basename(path)}", level="debug", category="queue")
                 
                 # Force immediate action widget update
                 if path in self.path_to_row:
@@ -4602,13 +4702,13 @@ class ImxUploadGUI(QMainWindow):
                     self._update_specific_gallery_display(path)  # Update only this item
                     return True
                 else:
-                    log(f"Failed to start upload for: {path}", level="warning", category="queue")
+                    log(f"WARNING: Failed to start upload for: {path}", level="warning", category="queue")
                     return False
             else:
-                log(f"Cannot start upload for item with status: {item.status}", level="debug", category="queue")
+                log(f"DEBUG: Cannot start upload for item with status: {item.status}", level="debug", category="queue")
                 return False
         except Exception as e:
-            log(f"Error starting upload for {path}: {e}", level="error", category="queue")
+            log(f"ERROR: Exception starting upload for {path}: {e}", level="error", category="queue")
             return False
 
     def handle_view_button(self, path: str):
@@ -4646,7 +4746,7 @@ class ImxUploadGUI(QMainWindow):
         item = self.queue_manager.get_item(path)
         if not item or item.status != "completed":
             QMessageBox.warning(self, "Not Available", "BBCode files are only available for completed galleries.")
-            log(f"BBCode files are only available for completed galleries.", level="debug", category="fileio")
+            log(f"DEBUG: BBCode files are only available for completed galleries.", level="debug", category="fileio")
             return
         
         # Open the viewer dialog
@@ -4658,7 +4758,7 @@ class ImxUploadGUI(QMainWindow):
         # Check if item is completed
         item = self.queue_manager.get_item(path)
         if not item or item.status != "completed":
-            log(f"BBcode copy failed: {os.path.basename(path)} is not completed", level="warning", category="fileio")
+            log(f"DEBUG: BBcode copy failed: {os.path.basename(path)} is not completed", level="debug", category="fileio")
             return
         
         folder_name = os.path.basename(path)
@@ -4671,10 +4771,10 @@ class ImxUploadGUI(QMainWindow):
         from imxup import build_gallery_filenames
         item = self.queue_manager.get_item(path)
         if item and item.gallery_id and (item.name or folder_name):
-            log(f"BBcode copy: item.name='{item.name}', folder_name='{folder_name}', gallery_id='{item.gallery_id}'", level="debug", category="fileio")
+            log(f"DEBUG: BBcode copy: item.name='{item.name}', folder_name='{folder_name}', gallery_id='{item.gallery_id}'", level="debug", category="fileio")
             _, _, bbcode_filename = build_gallery_filenames(item.name or folder_name, item.gallery_id)
             central_bbcode = os.path.join(central_path, bbcode_filename)
-            log(f"BBcode copy: central_bbcode path='{central_bbcode}' Exists={os.path.exists(central_bbcode)}", level="debug", category="fileio")
+            log(f"DEBUG: BBcode copy: central_bbcode path='{central_bbcode}' Exists={os.path.exists(central_bbcode)}", level="debug", category="fileio")
         else:
             central_bbcode = os.path.join(central_path, f"{folder_name}_bbcode.txt") # Fallback to old format for existing files
         
@@ -4689,13 +4789,13 @@ class ImxUploadGUI(QMainWindow):
             # Try pattern-based lookup using gallery_id if exact filename fails
             if item and item.gallery_id:
                 import glob
-                log(f"BBcode copy: exact filename not found, trying pattern-based lookup for gallery_id '{item.gallery_id}'", level="debug", category="fileio")
+                log(f"DEBUG: BBcode copy: exact filename not found, trying pattern-based lookup for gallery_id '{item.gallery_id}'", level="debug", category="fileio")
                 pattern = os.path.join(central_path, f"*_{item.gallery_id}_bbcode.txt")
                 matches = glob.glob(pattern)
-                log(f"BBcode copy, found {len(matches)} matches for '{pattern}': {matches}", level="debug", category="fileio")
+                log(f"DEBUG: BBcode copy, found {len(matches)} matches for '{pattern}': {matches}", level="debug", category="fileio")
                 if matches:
                     central_bbcode = matches[0]  # Use first match
-                    log(f"BBcode copy using pattern match: {central_bbcode}", level="debug", category="fileio")
+                    log(f"DEBUG: BBcode copy using pattern match: {central_bbcode}", level="debug", category="fileio")
                     if os.path.exists(central_bbcode):
                         with open(central_bbcode, 'r', encoding='utf-8') as f:
                             content = f.read()
@@ -4725,7 +4825,7 @@ class ImxUploadGUI(QMainWindow):
     def start_all_uploads(self):
         """Start all ready uploads in currently visible rows"""
         start_time = time.time()
-        log(f"start_all_uploads() started at {start_time:.6f}", level="debug", category="timing")
+        log(f"DEBUG: start_all_uploads() started at {start_time:.6f}", level="debug", category="timing")
 
         get_items_start = time.time()
         # Get items that are currently visible (not filtered out) - same logic as _update_button_counts()
@@ -4749,7 +4849,7 @@ class ImxUploadGUI(QMainWindow):
 
         items = visible_items
         get_items_duration = time.time() - get_items_start
-        log(f"Getting visible items took {get_items_duration:.6f}s, found {len(items)} visible items", level="debug", category="timing")
+        log(f"DEBUG: Getting visible items took {get_items_duration:.6f}s, found {len(items)} visible items", level="debug", category="timing")
         started_count = 0
         started_paths = []
         item_processing_start = time.time()
@@ -4761,19 +4861,19 @@ class ImxUploadGUI(QMainWindow):
                     start_item_begin = time.time()
                     if self.queue_manager.start_item(item.path):
                         start_item_duration = time.time() - start_item_begin
-                        log(f"start_item({item.path}) took {start_item_duration:.6f}s", category="timing", level="debug")
+                        log(f"DEBUG: start_item({item.path}) took {start_item_duration:.6f}s", category="timing", level="debug")
                         started_count += 1
                         started_paths.append(item.path)
                     else:
                         start_item_duration = time.time() - start_item_begin
-                        log(f"start_item({item.path}) failed in {start_item_duration:.6f}s", category="timing", level="warning")
+                        log(f"DEBUG: start_item({item.path}) failed in {start_item_duration:.6f}s", category="timing", level="debug")
         
         item_processing_duration = time.time() - item_processing_start
-        log(f"Processing all items took {item_processing_duration:.6f}s", category="timing", level="info")
+        log(f"DEBUG: Processing all items took {item_processing_duration:.6f}s", category="timing", level="info")
         
         ui_update_start = time.time()
         if started_count > 0:
-            log(f"Started {started_count} uploads")
+            log(f"Started {started_count} uploads", level="info")
             # Update all affected items individually instead of rebuilding table
             for path in started_paths:
                 self._update_specific_gallery_display(path)
@@ -4783,10 +4883,10 @@ class ImxUploadGUI(QMainWindow):
             log(f"No items to start", category="queue", level="info")
         
         ui_update_duration = time.time() - ui_update_start
-        log(f"UI updates took {ui_update_duration:.6f}s", category="timing", level="debug")
+        log(f"DEBUG: UI updates took {ui_update_duration:.6f}s", category="timing", level="debug")
         
         total_duration = time.time() - start_time
-        log(f"start_all_uploads() completed in {total_duration:.6f}s total", category="timing", level="debug")
+        log(f"DEBUG: start_all_uploads() completed in {total_duration:.6f}s total", category="timing", level="debug")
     
     def pause_all_uploads(self):
         """Reset all queued items back to ready (acts like Cancel for queued) - tab-specific"""
@@ -4801,42 +4901,42 @@ class ImxUploadGUI(QMainWindow):
                     reset_paths.append(item.path)
         
         if reset_count > 0:
-            log(f"Reset {reset_count} queued item(s) to Ready", level="debug", category="queue")
+            log(f"Reset {reset_count} queued item(s) to Ready", level="info", category="queue")
             # Update all affected items individually instead of rebuilding table
             for path in reset_paths:
                 self._update_specific_gallery_display(path)
             # Update button counts and progress after state changes
             QTimer.singleShot(0, self._update_counts_and_progress)
         else:
-            log(f"No queued items to reset", level="debug", category="queue")
+            log(f"DEBUG: No queued items to reset", level="info", category="queue")
     
     def clear_completed(self):
         """Clear completed/failed uploads - non-blocking with confirmation"""
-        log(f"clear_completed() called", category="queue", level="info")
+        log(f"DEBUG: clear_completed() called", category="queue", level="debug")
 
         # Get items to clear
         items_snapshot = self._get_current_tab_items()
-        log(f"Got {len(items_snapshot)} items from current tab", category="queue", level="info")
+        log(f"DEBUG: Got {len(items_snapshot)} items from current tab", category="queue", level="debug")
 
         comp_paths = [it.path for it in items_snapshot if it.status in ("completed", "failed")]
-        log(f"Found {len(comp_paths)} completed/failed galleries", category="queue", level="info")
+        log(f"DEBUG: Found {len(comp_paths)} completed/failed galleries", category="queue", level="debug")
 
         if not comp_paths:
             log(f"No completed uploads to clear", category="queue", level="info")
             return
 
         # Use shared confirmation method
-        log(f"Requesting user confirmation", category="queue", level="info")
+        log(f"DEBUG: Requesting user confirmation", category="queue", level="debug")
         if not self._confirm_removal(comp_paths, operation_type="clear"):
             log(f"User cancelled clear operation", category="queue", level="info")
             return
 
-        log(f"User confirmed - proceeding with clear", category="queue", level="info")
+        log(f"DEBUG: User confirmed - proceeding with clear", category="queue", level="debug")
 
         # User confirmed - proceed with removal
         count_completed = sum(1 for it in items_snapshot if it.status == "completed")
         count_failed = sum(1 for it in items_snapshot if it.status == "failed")
-        log(f"Clearing: completed={count_completed}, failed={count_failed}", category="queue", level="info")
+        log(f"DEBUG: Clearing (user confirmed): completed={count_completed}, failed={count_failed}", category="queue", level="debug")
 
         # Remove from queue manager (same pattern as delete_selected_items)
         removed_paths = []
@@ -4846,7 +4946,7 @@ class ImxUploadGUI(QMainWindow):
                 if path in self.queue_manager.items:
                     del self.queue_manager.items[path]
                     removed_paths.append(path)
-                    log(f"Removed: {os.path.basename(path)}", category="queue", level="debug")
+                    log(f"Removed item (user confirmed): {os.path.basename(path)}", category="queue", level="debug")
 
         if not removed_paths:
             log(f"No items actually removed", level="info", category="queue")
@@ -4863,7 +4963,7 @@ class ImxUploadGUI(QMainWindow):
             try:
                 self.queue_manager.store._executor.submit(self.queue_manager.store.delete_by_paths, removed_paths)
             except Exception as e:
-                log(f"Error deleting from database: {e}", level="error", category="queue")
+                log(f"ERROR: Exception deleting from database: {e}", level="error", category="db")
 
             # Update button counts and progress
             QTimer.singleShot(0, self._update_counts_and_progress)
@@ -4874,14 +4974,14 @@ class ImxUploadGUI(QMainWindow):
 
             # Save queue
             QTimer.singleShot(100, self.queue_manager.save_persistent_queue)
-            log(f"✓ Cleared {len(removed_paths)} completed/failed uploads", category="queue", level="info")
+            log(f"Cleared {len(removed_paths)} completed/failed uploads", category="queue", level="info")
 
         # Use non-blocking batch removal for table updates
         self._remove_galleries_batch(removed_paths, callback=on_clear_complete)
     
     def delete_selected_items(self):
         """Delete selected items from the queue - non-blocking"""
-        log(f"Delete method called", level="debug", category="queue")
+        log(f"DEBUG: Delete method called", level="debug", category="queue")
 
         # Get the actual table (handle tabbed interface)
         table = self.gallery_table
@@ -4893,7 +4993,7 @@ class ImxUploadGUI(QMainWindow):
             selected_rows.add(item.row())
 
         if not selected_rows:
-            log(f"No rows selected", level="debug", category="queue")
+            log(f"DEBUG: No rows selected", level="debug", category="queue")
             return
 
         # Get paths directly from the table cells to handle sorting correctly
@@ -4908,22 +5008,22 @@ class ImxUploadGUI(QMainWindow):
                     selected_paths.append(path)
                     selected_names.append(name_item.text())
                 else:
-                    log(f"No path data for row {row}", level="debug", category="queue")
+                    log(f"DEBUG: No path data for row {row}", level="debug", category="queue")
             else:
-                log(f"No name item for row {row}", level="debug", category="queue")
+                log(f"DEBUG: No name item for row {row}", level="debug", category="queue")
 
         if not selected_paths:
-            log(f"No valid paths found", level="debug", category="queue")
+            log(f"DEBUG: No valid paths found", level="debug", category="queue")
             return
 
         # Use shared confirmation method
         if not self._confirm_removal(selected_paths, selected_names, operation_type="delete"):
-            log(f"User cancelled delete", level="debug", category="ui")
+            log(f"DEBUG: User cancelled delete", level="debug", category="ui")
             return
         
         # Remove from queue manager first (filter out uploading items)
         removed_paths = []
-        log(f"Attempting to delete {len(selected_paths)} paths", level="debug", category="queue")
+        log(f"DEBUG: Attempting to delete {len(selected_paths)} paths", level="debug", category="queue")
 
         for path in selected_paths:
             # Check if item is currently uploading
@@ -4933,7 +5033,7 @@ class ImxUploadGUI(QMainWindow):
                     log(f"Skipping uploading item: {path}")
                     continue
             else:
-                log(f"Item not found in queue manager: {path}", level="debug", category="queue")
+                log(f"DEBUG: Item not found in queue manager: {path}", level="debug", category="queue")
                 continue
 
             # Remove from memory
@@ -4941,10 +5041,10 @@ class ImxUploadGUI(QMainWindow):
                 if path in self.queue_manager.items:
                     del self.queue_manager.items[path]
                     removed_paths.append(path)
-                    log(f"Deleted: {os.path.basename(path)}", category="queue", level="debug")
+                    log(f"DEBUG: Deleted: {os.path.basename(path)}", category="queue", level="debug")
 
         if not removed_paths:
-            log(f"No items removed (all were uploading or not found)", level="debug", category="queue")
+            log(f"DEBUG: No items removed (all were uploading or not found)", level="debug", category="queue")
             return
 
         # Completion callback to run after batch removal finishes
@@ -4956,7 +5056,7 @@ class ImxUploadGUI(QMainWindow):
             try:
                 self.queue_manager.store._executor.submit(self.queue_manager.store.delete_by_paths, removed_paths)
             except Exception as e:
-                log(f"Error deleting from database: {e}", level="error", category="ui")
+                log(f"ERROR: Exception deleting from database: {e}", level="error", category="database")
 
             # Update button counts and progress
             QTimer.singleShot(0, self._update_counts_and_progress)
@@ -4980,11 +5080,25 @@ class ImxUploadGUI(QMainWindow):
         if geometry:
             self.restoreGeometry(geometry)
         
-        # Restore splitter state for resizable divider between queue and settings
+        # Restore splitter states for resizable dividers
         if hasattr(self, 'top_splitter'):
             splitter_state = self.settings.value("splitter/state")
             if splitter_state:
                 self.top_splitter.restoreState(splitter_state)
+
+        # Restore vertical splitter state (Settings/Log divider)
+        if hasattr(self, 'right_vertical_splitter'):
+            vertical_splitter_state = self.settings.value("splitter/vertical_state")
+            if vertical_splitter_state:
+                self.right_vertical_splitter.restoreState(vertical_splitter_state)
+
+        # Restore right panel collapsed state
+        is_collapsed = self.settings.value("right_panel/collapsed", False, type=bool)
+        if is_collapsed and hasattr(self, 'action_toggle_right_panel'):
+            # Collapse after a short delay to allow UI to initialize
+            QTimer.singleShot(100, lambda: self.toggle_right_panel())
+        elif hasattr(self, 'action_toggle_right_panel'):
+            self.action_toggle_right_panel.setChecked(True)
         
         # Load settings from .ini file
         defaults = load_user_defaults()
@@ -4996,7 +5110,7 @@ class ImxUploadGUI(QMainWindow):
             theme = str(self.settings.value('ui/theme', 'dark'))
             self.apply_theme(theme)
         except Exception as e:
-            log(f"Exception in main_window: {e}", level="error", category="ui")
+            log(f"ERROR: Exception in main_window: {e}", level="error", category="ui")
             raise
         
         # Apply saved font size
@@ -5004,15 +5118,26 @@ class ImxUploadGUI(QMainWindow):
             font_size = int(self.settings.value('ui/font_size', 9))
             self.apply_font_size(font_size)
         except Exception as e:
-            log(f"Error loading font size: {e}", category="ui", level="debug")
+            log(f"ERROR: Error loading font size: {e}", category="ui", level="debug")
             pass
     
     def save_settings(self):
         """Save window settings"""
         self.settings.setValue("geometry", self.saveGeometry())
-        # Save splitter state for resizable divider between queue and settings
+
+        # Save splitter states for resizable dividers
         if hasattr(self, 'top_splitter'):
             self.settings.setValue("splitter/state", self.top_splitter.saveState())
+
+        # Save vertical splitter state (Settings/Log divider)
+        if hasattr(self, 'right_vertical_splitter'):
+            self.settings.setValue("splitter/vertical_state", self.right_vertical_splitter.saveState())
+
+        # Save right panel collapsed state
+        if hasattr(self, 'action_toggle_right_panel'):
+            is_collapsed = not self.action_toggle_right_panel.isChecked()
+            self.settings.setValue("right_panel/collapsed", is_collapsed)
+
         self.save_table_settings()
 
     def save_table_settings(self):
@@ -5028,7 +5153,7 @@ class ImxUploadGUI(QMainWindow):
             self.settings.setValue("table/column_visible", json.dumps(visibility))
             self.settings.setValue("table/column_order", json.dumps(order))
         except Exception as e:
-            log(f"Exception in main_window: {e}", level="error", category="ui")
+            log(f"ERROR: Exception in main_window: {e}", level="error", category="ui")
             raise
 
     def restore_table_settings(self):
@@ -5045,7 +5170,7 @@ class ImxUploadGUI(QMainWindow):
                         if isinstance(widths[i], int) and widths[i] > 0:
                             self.gallery_table.setColumnWidth(i, widths[i])
                 except Exception as e:
-                    log(f"Exception in main_window: {e}", level="error", category="ui")
+                    log(f"ERROR: Exception in main_window: {e}", level="error", category="ui")
                     raise
             if visible_raw:
                 try:
@@ -5053,7 +5178,7 @@ class ImxUploadGUI(QMainWindow):
                     for i in range(min(column_count, len(visible))):
                         self.gallery_table.setColumnHidden(i, not bool(visible[i]))
                 except Exception as e:
-                    log(f"Exception in main_window: {e}", level="error", category="ui")
+                    log(f"ERROR: Exception in main_window: {e}", level="error", category="ui")
                     raise
             if order_raw:
                 try:
@@ -5071,10 +5196,10 @@ class ImxUploadGUI(QMainWindow):
                         if current_visual != target_visual:
                             header.moveSection(current_visual, target_visual)
                 except Exception as e:
-                    log(f"Exception in main_window: {e}", level="error", category="ui")
+                    log(f"ERROR: Exception in main_window: {e}", level="error", category="ui")
                     raise
         except Exception as e:
-            log(f"Exception in main_window: {e}", level="error", category="ui")
+            log(f"ERROR: Exception in main_window: {e}", level="error", category="ui")
             raise
 
     def _on_header_section_resized(self, logicalIndex, oldSize, newSize):
@@ -5106,7 +5231,7 @@ class ImxUploadGUI(QMainWindow):
             if available > current and available > 0:
                 self.gallery_table.setColumnWidth(name_col, available)
         except Exception as e:
-            log(f"Exception in main_window: {e}", level="error", category="ui")
+            log(f"ERROR: Exception in main_window: {e}", level="error", category="ui")
             raise
 
     def _on_header_section_moved(self, logicalIndex, oldVisualIndex, newVisualIndex):
@@ -5114,7 +5239,7 @@ class ImxUploadGUI(QMainWindow):
         try:
             self.save_table_settings()
         except Exception as e:
-            log(f"Exception in main_window: {e}", level="error", category="ui")
+            log(f"ERROR: Exception in main_window: {e}", level="error", category="ui")
             raise
 
     def show_header_context_menu(self, position):
@@ -5192,7 +5317,7 @@ class ImxUploadGUI(QMainWindow):
             log(f"Quick settings saved successfully",level="info", category="ui")
             
         except Exception as e:
-            log(f"Error saving settings: {str(e)}")
+            log(f"ERROR: Exception saving settings: {str(e)}")
             QMessageBox.warning(self, "Error", f"Failed to save settings: {str(e)}")
     
     def dragEnterEvent(self, event):
@@ -5257,7 +5382,7 @@ class ImxUploadGUI(QMainWindow):
                     event.ignore()
                     return
         except Exception as e:
-            log(f"Exception in main_window: {e}", level="error", category="ui")
+            log(f"ERROR: Exception in main_window: {e}", level="error", category="ui")
             raise
 
         self.save_settings()
@@ -5319,12 +5444,12 @@ class ImxUploadGUI(QMainWindow):
         # Get gallery path the same way as context menu - from name column UserRole data
         name_item = table.item(row, GalleryTableWidget.COL_NAME)
         if not name_item:
-            log(f"Mouseclick -> No item found at row {row}, column {GalleryTableWidget.COL_NAME}", category="ui", level="debug")
+            log(f"DEBUG: Mouseclick -> No item found at row {row}, column {GalleryTableWidget.COL_NAME}", category="ui", level="debug")
             return
         
         gallery_path = name_item.data(Qt.ItemDataRole.UserRole)
         if not gallery_path:
-            log(f"No UserRole data in gallery name column", category="ui", level="debug")
+            log(f"DEBUG: No UserRole data in gallery name column", category="ui", level="debug")
             return
 
         # Get current template
@@ -5352,11 +5477,11 @@ class ImxUploadGUI(QMainWindow):
                 self.update_gallery_template(row, gallery_path, new_template, None)
                 
         except Exception as e:
-            log(f"Error loading templates: {e}", category="ui", level="error")
+            log(f"ERROR: Exception loading templates: {e}", category="ui", level="error")
 
     def update_gallery_template(self, row, gallery_path, new_template, combo_widget):
         """Update template for a gallery and regenerate BBCode if needed."""
-        log(f"update_gallery_template called - row={row}, path={gallery_path}, new_template={new_template}", category="db", level="debug")
+        log(f"DEBUG: update_gallery_template called - row={row}, path={gallery_path}, new_template={new_template}", category="db", level="debug")
         try:
             
             # Get table reference
@@ -5365,20 +5490,20 @@ class ImxUploadGUI(QMainWindow):
             else:
                 table = self.gallery_table
             
-            log(f"About to update database with path: '{gallery_path}' and template: '{new_template}'", level="debug")
+            log(f"DEBUG: About to update database with path: '{gallery_path}' and template: '{new_template}'", level="debug", category="db")
             
             # Check what's actually in the database
             try:
                 all_db_items = self.queue_manager.get_all_items()
                 db_paths = [item.path for item in all_db_items[:5]]  # First 5 paths
-                log(f"Sample database paths: {db_paths}", level="debug")
-                log(f"Does our path exist in DB? {gallery_path in [item.path for item in all_db_items]}", level="debug")
+                log(f"DEBUG: Sample database paths: {db_paths}", level="debug", category="db")
+                log(f"DEBUG: Does our path exist in DB? {gallery_path in [item.path for item in all_db_items]}", level="debug", category="db")
             except Exception as e:
-                log(f"Error checking database: {e}", category="db", level="error")
+                log(f"ERROR: Exception checking database: {e}", category="db", level="error")
             
             # Update database
             success = self.queue_manager.store.update_item_template(gallery_path, new_template)
-            log(f"Database update success: {success}", category="db", level="debug")
+            log(f"DEBUG: Database update success: {success}", category="db", level="debug")
             
             # Update the table cell display
             template_item = table.item(row, GalleryTableWidget.COL_TEMPLATE)
@@ -5387,29 +5512,29 @@ class ImxUploadGUI(QMainWindow):
             else:
                 log(f"No template item found at row {row}, column {GalleryTableWidget.COL_TEMPLATE}", category="ui", level="debug")
             
-            log(f"Template update completed", category="ui", level="debug")
+            log(f"Template updated", category="ui", level="info")
             
             # Get the actual gallery item to check real status
             gallery_item = self.queue_manager.get_item(gallery_path)
             if not gallery_item:
-                log(f"Could not get gallery item from queue manager", category="ui", level="debug")
+                log(f"DEBUG: Could not get gallery item from queue manager", category="ui", level="debug")
                 status = ""
             else:
                 status = gallery_item.status
             
-            log(f"Gallery status from queue manager: '{status}'", category="ui", level="debug")
+            log(f"DEBUG: Gallery status from queue manager: '{status}'", category="ui", level="debug")
             
             if status == "completed":
-                log(f"Gallery is completed, attempting BBCode regeneration", level="debug", category="fileio")
+                log(f"DEBUG: Gallery is completed, attempting BBCode regeneration", level="debug", category="fileio")
                 # Try to regenerate BBCode from JSON artifact
                 try:
                     self.regenerate_gallery_bbcode(gallery_path, new_template)
                     log(f"Template changed to '{new_template}' and BBCode regenerated for {os.path.basename(gallery_path)}", level="info", category="fileio")
                     #print(f"DEBUG: BBCode regeneration successful")
                 except Exception as e:
-                    log(f"Template changed to '{new_template}' for {os.path.basename(gallery_path)}, but BBCode regeneration failed: {e}", category="fileio", level="error")
+                    log(f"WARNING: Template changed to '{new_template}' for {os.path.basename(gallery_path)}, but BBCode regeneration failed: {e}", category="fileio", level="warning")
             else:
-                log(f"Gallery not completed, skipping BBCode regeneration", category="fileio", level="debug")
+                log(f"Gallery not completed, skipping BBCode regeneration", category="fileio", level="info")
                 #log(f"Template changed to '{new_template}' for {os.path.basename(gallery_path)}")
             
             # Remove combo box and update display
@@ -5422,7 +5547,7 @@ class ImxUploadGUI(QMainWindow):
             # Note: refresh_gallery_display doesn't exist, removing this call
             
         except Exception as e:
-            log(f"Error updating gallery template: {e}", category="fileio", level="error")
+            log(f"ERROR: Exception updating gallery template: {e}", category="fileio", level="error")
             # Remove combo box on error
             try:
                 table = self.gallery_table.table
@@ -5449,14 +5574,14 @@ class ImxUploadGUI(QMainWindow):
 
     def regenerate_bbcode_for_gallery_multi(self, paths):
         """Regenerate BBCode for multiple completed galleries using their current templates"""
-        log(f"regenerate_bbcode_for_gallery_multi called with {len(paths)} paths", category="fileio", level="debug")
+        log(f"DEBUG: regenerate_bbcode_for_gallery_multi called with {len(paths)} paths", category="fileio", level="debug")
 
         # Find the main GUI window
         widget = self
         while widget and not hasattr(widget, 'queue_manager'):
             widget = widget.parent()
         if not widget:
-            log(f"No widget with queue_manager found", category="fileio", level="debug")
+            log(f"DEBUG: No widget with queue_manager found", category="fileio", level="debug")
             return
 
         success_count = 0
@@ -5464,14 +5589,14 @@ class ImxUploadGUI(QMainWindow):
 
         for path in paths:
             try:
-                log(f"Processing path: {path}", level="debug", category="fileio")
+                log(f"DEBUG: Processing path: {path}", level="debug", category="fileio")
                 item = widget.queue_manager.get_item(path)
                 if not item:
-                    log(f"No item found for path: {path}", category="fileio", level="debug")
+                    log(f"DEBUG: No item found for path: {path}", category="fileio", level="debug")
                     continue
 
                 if item.status != "completed":
-                    log(f"Skipping non-completed item: {item.status}", category="fileio", level="debug")
+                    log(f"DEBUG: Skipping non-completed item: {item.status}", category="fileio", level="debug")
                     continue
 
                 # Get template for this gallery (same logic as single version)
@@ -5483,11 +5608,11 @@ class ImxUploadGUI(QMainWindow):
                 # Call the existing regeneration method (force=True since this is explicit user action)
                 widget.regenerate_gallery_bbcode(path, template_name)
                 success_count += 1
-                log(f"Successfully regenerated BBCode for {path}", category="fileio", level="debug")
+                log(f"DEBUG: Successfully regenerated BBCode for {path}", category="fileio", level="debug")
 
             except Exception as e:
                 error_count += 1
-                log(f"Error regenerating BBCode for {path}: {e}", category="fileio", level="warning")
+                log(f"WARNING: Error regenerating BBCode for {path}: {e}", category="fileio", level="warning")
 
         # Show summary message
         if success_count > 0 or error_count > 0:
@@ -5551,7 +5676,11 @@ class ImxUploadGUI(QMainWindow):
             'custom1': getattr(item, 'custom1', ''),
             'custom2': getattr(item, 'custom2', ''),
             'custom3': getattr(item, 'custom3', ''),
-            'custom4': getattr(item, 'custom4', '')
+            'custom4': getattr(item, 'custom4', ''),
+            'ext1': getattr(item, 'ext1', ''),
+            'ext2': getattr(item, 'ext2', ''),
+            'ext3': getattr(item, 'ext3', ''),
+            'ext4': getattr(item, 'ext4', '')
         }
         
         # Use existing save_gallery_artifacts function to regenerate with new template
@@ -5582,7 +5711,7 @@ class ImxUploadGUI(QMainWindow):
                 # Get the actual table that contains this item (important for tabbed galleries!)
                 table = item.tableWidget()
                 if not table:
-                    log(f"Item has no parent table widget, skipping", level="warning", category="ui")
+                    log(f"WARNING: Item has no parent table widget, skipping", level="debug", category="ui")
                     return
 
                 # Skip if table signals are blocked (indicates programmatic update)
@@ -5617,7 +5746,7 @@ class ImxUploadGUI(QMainWindow):
                 # Get the new value and update the database
                 new_value = item.text() or ''
                 field_type = "ext" if is_ext else "custom"
-                log(f"{field_type.capitalize()} field changed: {field_name}={new_value} for {os.path.basename(path)}", level="debug", category="ui")
+                log(f"DEBUG: {field_type.capitalize()} field changed: {field_name}={new_value} for {os.path.basename(path)}", level="debug", category="ui")
 
                 if self.queue_manager:
                     # Block signals while updating to prevent cascade
@@ -5642,7 +5771,7 @@ class ImxUploadGUI(QMainWindow):
                 self._in_item_changed_handler = False
 
         except Exception as e:
-            log(f"Error handling table item change: {e}", category="ui", level="error")
+            log(f"ERROR: Exception handling table item change: {e}", category="ui", level="error")
             import traceback
             traceback.print_exc()
 
@@ -5706,7 +5835,7 @@ def main():
             splash.finish_and_hide()
             return
     
-    splash.set_status("Qt ")
+    splash.set_status("Qt")
     
     # Create main window with splash updates
     window = ImxUploadGUI(splash)

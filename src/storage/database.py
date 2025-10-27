@@ -1058,7 +1058,7 @@ class QueueStore:
         # Allow both custom1-4 and ext1-4 fields (ext fields added in migration)
         valid_fields = ['custom1', 'custom2', 'custom3', 'custom4', 'ext1', 'ext2', 'ext3', 'ext4']
         if field_name not in valid_fields:
-            log(f"Invalid custom field name: {field_name}, must be one of: {valid_fields}", level="warning")
+            print(f"WARNING: Invalid custom field name: {field_name}, must be one of: {valid_fields}")
             return False
             
         with _connect(self.db_path) as conn:

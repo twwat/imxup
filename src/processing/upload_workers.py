@@ -129,12 +129,13 @@ class UploadWorker(QThread):
             try:
                 from src.processing.rename_worker import RenameWorker
                 self.rename_worker = RenameWorker()
-                log("RenameWorker initialized with independent session", category="renaming")
+                log(f"UploadWorker (ID: {id(self)}) created RenameWorker (ID: {id(self.rename_worker)})", level="debug", category="renaming")
+                log("RenameWorker initialized with independent session", category="renaming", level="debug")
             except Exception as e:
-                log(f"Failed to initialize RenameWorker: {e}", level="error", category="renaming")
+                log(f"ERROR: Failed to initialize RenameWorker: {e}", level="error", category="renaming")
                 self.rename_worker = None
         else:
-            log("RenameWorker not available (import failed)", level="error", category="renaming")
+            log("RenameWorker not available (import failed)", level="info", category="renaming")
 
         # Uploader uses API ONLY - no login needed
         # RenameWorker handles its own login independently
@@ -179,7 +180,7 @@ class UploadWorker(QThread):
             # Create per-gallery counter for running average
             self.current_gallery_counter = AtomicCounter()
 
-            log(f"Starting upload: {item.name or os.path.basename(item.path)}", category="uploads")
+            log(f"Starting upload: {item.name or os.path.basename(item.path)}", category="uploads", level="info")
 
             # Update status to uploading
             self.queue_manager.update_item_status(item.path, "uploading")

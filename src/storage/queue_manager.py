@@ -811,9 +811,9 @@ class QueueManager(QObject):
             #print(f"DEBUG: Built queue data with {len(queue_data)} items to save")
             
             try:
-                #print(f"DEBUG: About to call store.bulk_upsert_async")
+                log(f"DEBUG: About to call store.bulk_upsert_async", level="debug", category="db")
                 self.store.bulk_upsert_async(queue_data)
-                log(f"SQLite: bulk_upsert_async database save completed", level="debug", category="db")
+                log(f"DEBUG: SQLite: bulk_upsert_async database save completed", level="debug", category="db")
             except Exception as e:
                 log(f"Database save failed: {e}", level="error", category="db")
                 pass
@@ -947,15 +947,13 @@ class QueueManager(QObject):
     
     def add_item(self, path: str, name: str | None = None, template_name: str = "default", tab_name: str = "Main") -> bool:
         """Add gallery to queue"""
-        log(f"QueueManager.add_item called with path={path}, tab_name={tab_name}", level="debug", category="queue")
+        log(f"DEBUG: QueueManager.add_item called with path={path}, tab_name={tab_name}", level="debug", category="queue")
         with QMutexLocker(self.mutex):
             if path in self.items:
                 return False
             
-            log(f"Using original folder name for {path}", level="debug", category="queue")
             gallery_name = name or os.path.basename(path)
-            log(f"Gallery name: {gallery_name}", level="debug", category="queue")
-            log(f"Creating GalleryQueueItem with tab_name={tab_name}...", level="debug", category="queue")
+            log(f"DEBUG: Creating GalleryQueueItem for {gallery_name} ({path}) with tab_name={tab_name}...", level="debug", category="queue")
             item = GalleryQueueItem(
                 path=path,
                 name=gallery_name,
@@ -965,13 +963,13 @@ class QueueManager(QObject):
                 template_name=template_name,
                 tab_name=tab_name
             )
-            log(f"GalleryQueueItem created successfully", level="debug", category="queue")
+            log(f"DEBUG: GalleryQueueItem created successfully", level="debug", category="queue")
             self._next_order += 1
             
             self.items[path] = item
-            log(f"Item added to dict, updating status count...", level="debug", category="queue")
+            log(f"DEBUG: Item added to dict, updating status count...", level="debug", category="queue")
             self._update_status_count("", QUEUE_STATE_VALIDATING)
-            log(f"Scheduling deferred database save...", level="debug", category="database")
+            log(f"DEBUG: Scheduling deferred database save...", level="debug", category="database")
             # Use QTimer to defer database save to prevent blocking GUI thread
             from PyQt6.QtCore import QTimer
             self._schedule_debounced_save([path])
@@ -999,12 +997,12 @@ class QueueManager(QObject):
                             for key, value in ext_fields.items():
                                 setattr(self.items[path], key, value)
                             self._schedule_debounced_save([path])
-                    log(f"Updated ext fields from added hook: {ext_fields}", level="info", category="hooks")
+                    log(f"Updated fields from 'gallery added' hook: {ext_fields}", level="info", category="hooks")
                     # Emit signal through parent if available
                     if hasattr(self, 'parent') and self.parent and hasattr(self.parent, 'on_ext_fields_updated'):
                         self.parent.on_ext_fields_updated(path, ext_fields)
             except Exception as e:
-                log(f"Error executing added hook: {e}", level="error", category="hooks")
+                log(f"Error executing added hook: {e}", level="warning", category="hooks")
 
         threading.Thread(target=run_added_hook, daemon=True).start()
 

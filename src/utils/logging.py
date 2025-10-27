@@ -97,7 +97,12 @@ class AppLogger:
     """Application-wide logger wrapper.
 
     Settings persisted in the main config file under section [LOGGING].
+
+    NOTE: TRACE level (5) is always excluded from file logging.
     """
+
+    # Custom log level for extremely verbose output (never logged to file)
+    TRACE = 5  # Below DEBUG (10)
 
     DEFAULTS = {
         "enabled": "true",
@@ -125,6 +130,8 @@ class AppLogger:
         "cats_file_fileio": "true",
         "cats_gui_general": "true",
         "cats_file_general": "true",
+        "cats_gui_hooks": "true",
+        "cats_file_hooks": "true",
         # Upload success granularity preferences per sink
         # values: none | file | gallery | both
         "upload_success_mode_gui": "gallery",
@@ -134,6 +141,7 @@ class AppLogger:
     TIME_ONLY_RE = re.compile(r"^(\d{2}:\d{2}:\d{2})\s+")
 
     LEVEL_MAP = {
+        "TRACE": 5,  # Custom level, never logged to file
         "DEBUG": logging.DEBUG,
         "INFO": logging.INFO,
         "WARNING": logging.WARNING,
@@ -147,8 +155,11 @@ class AppLogger:
         self._get_config_path = get_config_path
         self._get_central_base = get_central_store_base_path
 
+        # Add custom TRACE level to Python's logging module
+        logging.addLevelName(self.TRACE, "TRACE")
+
         self._logger = logging.getLogger("imxup")
-        self._logger.setLevel(logging.DEBUG)
+        self._logger.setLevel(self.TRACE)  # Allow TRACE level
         self._logger.propagate = False
 
         self._file_handler: Optional[logging.Handler] = None
@@ -287,7 +298,7 @@ class AppLogger:
         except Exception:
             s["max_bytes"] = 10485760
         # Normalize categories
-        for cat in ("uploads","auth","network","ui","queue","renaming","fileio","general"):
+        for cat in ("uploads","auth","network","ui","queue","renaming","fileio","general","hooks"):
             for sink in ("gui","file"):
                 key = f"cats_{sink}_{cat}"
                 s[key] = str(s.get(key, "true")).lower() == "true"
@@ -319,6 +330,10 @@ class AppLogger:
         return bool(cats.get(cat_key, True))
 
     def should_emit_file(self, category: str, level: int) -> bool:
+        # TRACE level is NEVER logged to file
+        if level <= self.TRACE:
+            return False
+
         enabled = str(self._settings.get("enabled", "true")).lower() == "true"
         if not enabled:
             return False

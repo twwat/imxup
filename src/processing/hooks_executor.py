@@ -7,6 +7,7 @@ import subprocess
 import json
 import configparser
 import concurrent.futures
+import time
 from typing import Any, Dict, List, Optional, Tuple
 from imxup import get_config_path
 from src.utils.logger import log
@@ -18,6 +19,50 @@ class HooksExecutor:
     def __init__(self):
         # Don't cache config - reload fresh each time execute_hooks is called
         pass
+
+    def _remove_temp_file_with_retry(self, file_path: str, max_retries: int = 5, initial_delay: float = 0.1) -> bool:
+        """
+        Attempt to remove a temporary file with exponential backoff retries.
+
+        On Windows, external processes may hold file handles briefly after subprocess.run() returns.
+        This method retries with increasing delays to allow processes to fully release the file.
+
+        Args:
+            file_path: Path to file to remove
+            max_retries: Maximum number of retry attempts
+            initial_delay: Initial delay in seconds (doubles each retry)
+
+        Returns:
+            True if file was removed, False if all retries failed
+        """
+        if not os.path.exists(file_path):
+            return True
+
+        delay = initial_delay
+        for attempt in range(max_retries):
+            try:
+                os.remove(file_path)
+                if attempt > 0:
+                    log(f"Successfully removed temporary file on attempt {attempt + 1}: {file_path}", level="debug", category="hooks")
+                else:
+                    log(f"Removed temporary file: {file_path}", level="debug", category="hooks")
+                return True
+            except PermissionError as e:
+                # File is locked by another process
+                if attempt < max_retries - 1:
+                    log(f"File locked (attempt {attempt + 1}/{max_retries}), waiting {delay:.2f}s: {file_path}", level="debug", category="hooks")
+                    time.sleep(delay)
+                    delay *= 2  # Exponential backoff
+                else:
+                    # Final attempt failed - log as warning but don't fail the operation
+                    log(f"Could not remove temporary file after {max_retries} attempts (file will be cleaned up by OS): {file_path}", level="warning", category="hooks")
+                    return False
+            except Exception as e:
+                # Other errors (file not found, etc.) - just log and move on
+                log(f"Error removing temporary file: {e}", level="debug", category="hooks")
+                return False
+
+        return False
 
     def _load_config(self) -> Dict:
         """Load external apps configuration from INI file"""
@@ -83,6 +128,8 @@ class HooksExecutor:
         - %t: Template name
         - %e1-%e4: ext1-4 field values
         - %c1-%c4: custom1-4 field values
+
+        Use %% to escape a literal % character (e.g., password with %j becomes %%j)
         """
         # Define substitutions - order matters for multi-char variables!
         # Process longer variable names first to avoid conflicts
@@ -109,13 +156,20 @@ class HooksExecutor:
             '%t': context.get('template_name', ''),
         }
 
-        # Sort by length (descending) to process longest matches first
+        # Step 1: Temporarily replace %% with a placeholder to protect escaped percent signs
+        ESCAPE_PLACEHOLDER = '\x00ESCAPED_PERCENT\x00'
+        result = command.replace('%%', ESCAPE_PLACEHOLDER)
+
+        # Step 2: Sort by length (descending) to process longest matches first
         # This prevents %e1 from being partially matched as %e + "1"
         sorted_vars = sorted(substitutions.items(), key=lambda x: len(x[0]), reverse=True)
 
-        result = command
+        # Step 3: Perform variable substitution
         for var, value in sorted_vars:
             result = result.replace(var, str(value))
+
+        # Step 4: Restore escaped percent signs as literal %
+        result = result.replace(ESCAPE_PLACEHOLDER, '%')
 
         return result
 
@@ -142,40 +196,62 @@ class HooksExecutor:
                     from src.processing.upload_to_filehost import create_temp_zip
                     temp_zip_path = create_temp_zip(gallery_path)
                     context['zip_path'] = temp_zip_path
-                    log(f"Created temporary ZIP for hook: {temp_zip_path}", level="info", category="hooks")
+                    log(f"Created temporary ZIP for hook: {temp_zip_path}", level="debug", category="hooks")
                 except Exception as e:
                     log(f"Failed to create temporary ZIP: {e}", level="error", category="hooks")
                     return False, None
 
         # Substitute variables
         final_command = self._substitute_variables(command, context)
-        log(f"Executing {hook_type} hook: {final_command}", level="info", category="hooks")
+        log(f"Executing {hook_type} hook: {final_command}", level="debug", category="hooks")
 
         try:
             # Determine if we should show console window
             show_console = hook_config.get('show_console', False)
             creation_flags = 0 if show_console else subprocess.CREATE_NO_WINDOW if hasattr(subprocess, 'CREATE_NO_WINDOW') else 0
 
-            # Execute the command
+            # Parse command into argument list to avoid shell escaping issues
+            # Use shlex on Unix, manual parsing on Windows (shlex doesn't handle Windows quoting well)
+            import shlex
+            import sys
+            if sys.platform == 'win32':
+                # Simple Windows-specific parsing that preserves quoted arguments
+                import re
+                # Split on spaces but preserve quoted strings
+                cmd_args = re.findall(r'(?:[^\s"]|"(?:\\.|[^"])*")+', final_command)
+                # Remove quotes from arguments
+                cmd_args = [arg.strip('"') for arg in cmd_args]
+            else:
+                cmd_args = shlex.split(final_command)
+
+            # Execute the command without shell to avoid special character issues
             result = subprocess.run(
-                final_command,
-                shell=True,
+                cmd_args,
+                shell=False,
                 capture_output=True,
                 text=True,
                 timeout=300,  # 5 minute timeout
                 creationflags=creation_flags
             )
 
-            # Log output
+            # Log combined stdout/stderr as single expandable message with \n line breaks
+            output_parts = []
             if result.stdout:
-                log(f"Hook {hook_type} stdout: {result.stdout[:500]}", level="debug", category="hooks")
+                # Replace actual newlines with literal \n for log viewer auto-expand
+                stdout_display = result.stdout.replace('\n', '\\n').rstrip('\\n')
+                output_parts.append(f"[stdout]\\n{stdout_display}")
             if result.stderr:
-                log(f"Hook {hook_type} stderr: {result.stderr[:500]}", level="info", category="hooks")
+                stderr_display = result.stderr.replace('\n', '\\n').rstrip('\\n')
+                output_parts.append(f"[stderr]\\n{stderr_display}")
+
+            combined_output = '\\n\\n'.join(output_parts) if output_parts else ""
 
             if result.returncode != 0:
-                log(f"Hook {hook_type} failed with code {result.returncode}", level="error", category="hooks")
+                log(f"Hook {hook_type} failed with code {result.returncode}\\n{combined_output}", level="error", category="hooks")
                 return False, None
-
+            else:
+                log(f"Hook '{hook_type}' output:\\n{combined_output}", level="info", category="hooks")
+        
             # Try to parse JSON from stdout
             json_data = None
             if result.stdout.strip():
@@ -186,32 +262,24 @@ class HooksExecutor:
                     log(f"Hook {hook_type} output is not valid JSON, ignoring", level="debug", category="hooks")
 
             # Clean up temporary ZIP if we created one
-            if temp_zip_path and os.path.exists(temp_zip_path):
-                try:
-                    os.remove(temp_zip_path)
-                    log(f"Removed temporary ZIP: {temp_zip_path}", level="debug", category="hooks")
-                except Exception as e:
-                    log(f"Failed to remove temporary ZIP {temp_zip_path}: {e}", level="warning", category="hooks")
+            if temp_zip_path:
+                self._remove_temp_file_with_retry(temp_zip_path)
 
+            # Log single success message for GUI
+            log(f"Hook '{hook_type}' completed successfully", level="info", category="hooks")
             return True, json_data
 
         except subprocess.TimeoutExpired:
             log(f"Hook {hook_type} timed out after 300 seconds", level="error", category="hooks")
             # Clean up temp ZIP on timeout
-            if temp_zip_path and os.path.exists(temp_zip_path):
-                try:
-                    os.remove(temp_zip_path)
-                except:
-                    pass
+            if temp_zip_path:
+                self._remove_temp_file_with_retry(temp_zip_path)
             return False, None
         except Exception as e:
             log(f"Hook {hook_type} failed with exception: {e}", level="error", category="hooks")
             # Clean up temp ZIP on error
-            if temp_zip_path and os.path.exists(temp_zip_path):
-                try:
-                    os.remove(temp_zip_path)
-                except:
-                    pass
+            if temp_zip_path:
+                self._remove_temp_file_with_retry(temp_zip_path)
             return False, None
 
     def execute_hooks(self, hook_types: List[str], context: Dict) -> Dict[str, Any]:
@@ -240,7 +308,7 @@ class HooksExecutor:
         results = {}
 
         if parallel and len(enabled_hooks) > 1:
-            log(f"Executing {len(enabled_hooks)} hooks in parallel", level="info", category="hooks")
+            log(f"Executing {len(enabled_hooks)} hooks in parallel", level="debug", category="hooks")
             with concurrent.futures.ThreadPoolExecutor(max_workers=len(enabled_hooks)) as executor:
                 futures = {executor.submit(self._execute_hook_with_config, hook_type, context, config): hook_type
                           for hook_type in enabled_hooks}
@@ -255,7 +323,7 @@ class HooksExecutor:
                     except Exception as e:
                         log(f"Hook {hook_type} raised exception: {e}", level="error", category="hooks")
         else:
-            log(f"Executing {len(enabled_hooks)} hooks sequentially", level="info", category="hooks")
+            log(f"Executing {len(enabled_hooks)} hooks sequentially", level="debug", category="hooks")
             for hook_type in enabled_hooks:
                 success, json_data = self._execute_hook_with_config(hook_type, context, config)
                 if json_data:
@@ -285,7 +353,7 @@ class HooksExecutor:
             else:
                 log(f"JSON key '{json_key}' not found in hook results for {ext_field}", level="debug", category="hooks")
 
-        log(f"Hooks execution complete. Extracted fields: {ext_fields}", level="info", category="hooks")
+        log(f"Hooks execution complete. Extracted fields: {ext_fields}", level="debug", category="hooks")
         return ext_fields
 
 

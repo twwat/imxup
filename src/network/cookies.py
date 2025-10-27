@@ -12,6 +12,7 @@ from src.utils.logger import log
 from datetime import datetime
 
 # Cookie cache to avoid repeated Firefox database access
+# Structure: {cache_key: {cookie_name: cookie_data}}
 _firefox_cookie_cache = {}
 _firefox_cache_time = 0
 _cache_duration = 300  # Cache for 5 minutes
@@ -21,20 +22,30 @@ def _timestamp() -> str:
     return datetime.now().strftime("%H:%M:%S")
 
 
-def get_firefox_cookies(domain: str = "imx.to") -> dict:
+def get_firefox_cookies(domain: str = "imx.to", cookie_names: list[str] | None = None) -> dict:
     """Extract cookies from Firefox browser for the given domain.
-    Returns a dict of name -> { value, domain, path, secure }.
+
+    Args:
+        domain: Domain to extract cookies for (default: "imx.to")
+        cookie_names: Optional list of specific cookie names to extract.
+                     If None, extracts all cookies for the domain.
+
+    Returns:
+        Dict of name -> { value, domain, path, secure }
     """
     import time
     global _firefox_cookie_cache, _firefox_cache_time
-    
+
     start_time = time.time()
-        
+
+    # Create cache key including cookie filter
+    cache_key = f"{domain}_{','.join(sorted(cookie_names)) if cookie_names else 'all'}"
+
     # Check cache first
-    if _firefox_cookie_cache and (time.time() - _firefox_cache_time) < _cache_duration:
+    if cache_key in _firefox_cookie_cache and (time.time() - _firefox_cache_time) < _cache_duration:
         elapsed = time.time() - start_time
         log(f"Using cached Firefox cookies (took {elapsed:.3f}s)", level="debug", category="auth")
-        return _firefox_cookie_cache.copy()
+        return _firefox_cookie_cache[cache_key].copy()
     
     try:
         if platform.system() == "Windows":
@@ -70,14 +81,27 @@ def get_firefox_cookies(domain: str = "imx.to") -> dict:
         
         cursor = conn.cursor()
         query_start = time.time()
-        cursor.execute(
+
+        # Build query with optional cookie name filter
+        if cookie_names:
+            # Filter for specific cookie names (and require secure cookies)
+            placeholders = ','.join(['?'] * len(cookie_names))
+            query = f"""
+                SELECT name, value, host, path, expiry, isSecure
+                FROM moz_cookies
+                WHERE host LIKE ? AND name IN ({placeholders}) AND isSecure = 1
             """
-            SELECT name, value, host, path, expiry, isSecure
-            FROM moz_cookies 
-            WHERE host LIKE ?
-            """,
-            (f'%{domain}%',),
-        )
+            params = (f'%{domain}%', *cookie_names)
+        else:
+            # Get all cookies for domain
+            query = """
+                SELECT name, value, host, path, expiry, isSecure
+                FROM moz_cookies
+                WHERE host LIKE ?
+            """
+            params = (f'%{domain}%',)
+
+        cursor.execute(query, params)
         query_time = time.time() - query_start
         #log(f"SQLite query took {query_time:.4f}s", level="debug", category="auth")
         for row in cursor.fetchall():
@@ -89,9 +113,11 @@ def get_firefox_cookies(domain: str = "imx.to") -> dict:
                 'secure': bool(secure),
             }
         conn.close()
-        
-        # Update cache
-        _firefox_cookie_cache = cookies.copy()
+
+        # Update cache (use cache key)
+        if cache_key not in _firefox_cookie_cache:
+            _firefox_cookie_cache[cache_key] = {}
+        _firefox_cookie_cache[cache_key] = cookies.copy()
         _firefox_cache_time = time.time()
         
         elapsed = time.time() - start_time
@@ -101,7 +127,7 @@ def get_firefox_cookies(domain: str = "imx.to") -> dict:
         elapsed = time.time() - start_time
         log(f"Error extracting Firefox cookies: {e} (took {elapsed:.3f}s)", level="warning", category="auth")
         # Cache empty result to avoid repeated failures
-        _firefox_cookie_cache = {}
+        _firefox_cookie_cache[cache_key] = {}
         _firefox_cache_time = time.time()
         return {}
 

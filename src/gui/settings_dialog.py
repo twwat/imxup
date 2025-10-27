@@ -237,7 +237,8 @@ class ComprehensiveSettingsDialog(QDialog):
         read_timeout_layout.addWidget(self.read_timeout_value)
         self.read_timeout_slider.valueChanged.connect(lambda v: self.read_timeout_value.setText(str(v)))
         upload_layout.addWidget(read_timeout_widget, 3, 1)
-        
+
+
         # Thumbnail settings
         thumb_group = QGroupBox("Thumbnail Settings")
         thumb_layout = QGridLayout(thumb_group)
@@ -298,15 +299,6 @@ class ComprehensiveSettingsDialog(QDialog):
         storage_group = QGroupBox("Storage Options")
         storage_layout = QGridLayout(storage_group)
         
-        # Store in uploaded folder
-        self.store_in_uploaded_check = QCheckBox("Save artifacts in '.uploaded' subfolder in gallery")
-        self.store_in_uploaded_check.setChecked(defaults.get('store_in_uploaded', True))
-        storage_layout.addWidget(self.store_in_uploaded_check, 0, 0, 1, 3)
-        
-        # Store in central location
-        self.store_in_central_check = QCheckBox("Save artifacts in central store")
-        self.store_in_central_check.setChecked(defaults.get('store_in_central', True))
-        storage_layout.addWidget(self.store_in_central_check, 1, 0, 1, 3)
         
         # Data location section
         location_label = QLabel("<b>Data location (central store)</b>:")
@@ -370,6 +362,20 @@ class ComprehensiveSettingsDialog(QDialog):
         # Initialize custom path controls state
         update_custom_path_controls()
         
+        # Artifacts group
+        artifacts_group = QGroupBox("Artifacts")
+        artifacts_layout = QVBoxLayout(artifacts_group)
+
+        # Store in uploaded folder
+        self.store_in_uploaded_check = QCheckBox("Save artifacts in '.uploaded' subfolder in gallery")
+        self.store_in_uploaded_check.setChecked(defaults.get('store_in_uploaded', True))
+        artifacts_layout.addWidget(self.store_in_uploaded_check)
+
+        # Store in central location
+        self.store_in_central_check = QCheckBox("Save artifacts in central store")
+        self.store_in_central_check.setChecked(defaults.get('store_in_central', True))
+        artifacts_layout.addWidget(self.store_in_central_check)
+
         # Theme & Display group
         theme_group = QGroupBox("Theme / Appearance")
         theme_layout = QGridLayout(theme_group)
@@ -419,7 +425,8 @@ class ComprehensiveSettingsDialog(QDialog):
         grid_layout.addWidget(general_group, 0, 1)     # Top Right
         grid_layout.addWidget(thumb_group, 1, 0)       # Bottom left
         grid_layout.addWidget(theme_group, 1, 1)       # Bottom right
-        grid_layout.addWidget(storage_group, 2, 0)
+        grid_layout.addWidget(storage_group, 2, 0)     # Row 2 left
+        grid_layout.addWidget(artifacts_group, 2, 1)   # Row 2 right
 
         # Set column stretch factors for 40/60 split
         grid_layout.setColumnStretch(0, 50)  # Left column 50%
@@ -1151,7 +1158,7 @@ class ComprehensiveSettingsDialog(QDialog):
         self._create_hook_section(layout, "On Gallery Completed", "completed")
 
         layout.addStretch()
-        self.tab_widget.addTab(external_widget, "External Apps")
+        self.tab_widget.addTab(external_widget, "Hooks")
 
         # Connect signals to mark tab as dirty (tab index 5 after hiding Tabs and Icons)
         self.hooks_parallel_radio.toggled.connect(lambda: self.mark_tab_dirty(5))
@@ -1191,7 +1198,7 @@ class ComprehensiveSettingsDialog(QDialog):
         command_layout.addWidget(QLabel("Command:"))
 
         command_input = QLineEdit()
-        command_input.setPlaceholderText(f'python script.py "%p" or multi_host_uploader.py gofile "%z"')
+        command_input.setPlaceholderText(f'python script.py "%p" or muh.py gofile "%z"')
         # Apply monospace font
         mono_font = QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont)
         command_input.setFont(mono_font)
@@ -2360,14 +2367,12 @@ class ComprehensiveSettingsDialog(QDialog):
                 command = config.get('EXTERNAL_APPS', f'hook_{hook_type}_command', fallback='')
                 show_console = config.getboolean('EXTERNAL_APPS', f'hook_{hook_type}_show_console', fallback=False)
 
-                # Unescape %% back to % (ConfigParser doubles % for escaping)
-                # config.get() with raw=False (default) automatically handles this, but being explicit
-                unescaped_command = command.replace('%%', '%')
+                # ConfigParser automatically unescapes %% to % when reading
 
-                #print(f"{timestamp()} DEBUG: Loading {hook_type}: enabled={enabled}, command='{unescaped_command}', show_console={show_console}")
+                #print(f"{timestamp()} DEBUG: Loading {hook_type}: enabled={enabled}, command='{command}', show_console={show_console}")
 
                 getattr(self, f'hook_{hook_type}_enabled').setChecked(enabled)
-                getattr(self, f'hook_{hook_type}_command').setText(unescaped_command)
+                getattr(self, f'hook_{hook_type}_command').setText(command)
                 getattr(self, f'hook_{hook_type}_show_console').setChecked(show_console)
 
                 # Load JSON key mappings
@@ -2889,7 +2894,8 @@ class ComprehensiveSettingsDialog(QDialog):
         self.batch_size_slider.setValue(defaults.get('parallel_batch_size', 4))
         self.connect_timeout_slider.setValue(defaults.get('upload_connect_timeout', 30))
         self.read_timeout_slider.setValue(defaults.get('upload_read_timeout', 120))
-        
+
+
         # Reload general settings
         self.confirm_delete_check.setChecked(defaults.get('confirm_delete', True))
         self.auto_rename_check.setChecked(defaults.get('auto_rename', True))
@@ -2958,7 +2964,8 @@ class ComprehensiveSettingsDialog(QDialog):
             # Save timeout settings
             config.set('DEFAULTS', 'upload_connect_timeout', str(self.connect_timeout_slider.value()))
             config.set('DEFAULTS', 'upload_read_timeout', str(self.read_timeout_slider.value()))
-            
+
+
             # Save general settings
             config.set('DEFAULTS', 'confirm_delete', str(self.confirm_delete_check.isChecked()))
             config.set('DEFAULTS', 'auto_rename', str(self.auto_rename_check.isChecked()))
