@@ -1211,6 +1211,11 @@ class ImxToUploader:
             # Create new curl handle for this thread
             import pycurl
             self._curl_local.curl = pycurl.Curl()
+
+            # CRITICAL: Thread safety for multi-threaded uploads
+            # NOSIGNAL prevents signal-based timeouts which don't work in multi-threaded programs
+            self._curl_local.curl.setopt(pycurl.NOSIGNAL, 1)
+
             log(f"Created new curl handle for thread {threading.current_thread().name}", level="debug", category="network")
         return self._curl_local.curl
 
