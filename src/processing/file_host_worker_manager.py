@@ -77,20 +77,10 @@ class FileHostWorkerManager(QObject):
         log(f"[File Host Manager] config_manager.hosts: {list(config_manager.hosts.keys())}", level="debug", category="file_hosts")
 
         for host_id, host_config in config_manager.hosts.items():
-            # Check enabled state from INI file with proper fallback
-            if config.has_section("FILE_HOSTS"):
-                # Use host_config.enabled as fallback (respects JSON defaults)
-                try:
-                    enabled = config.getboolean("FILE_HOSTS", f"{host_id}_enabled",
-                                               fallback=host_config.enabled)
-                    log(f"[File Host Manager] {host_id}: enabled={enabled} (from INI)", level="debug", category="file_hosts")
-                except Exception as e:
-                    log(f"[File Host Manager] {host_id}: Error reading enabled state: {e}", level="error", category="file_hosts")
-                    enabled = host_config.enabled
-            else:
-                # No FILE_HOSTS section - use JSON default
-                enabled = host_config.enabled
-                log(f"[File Host Manager] {host_id}: enabled={enabled} (from JSON default)", level="debug", category="file_hosts")
+            # Check enabled state using new API (handles INI → JSON defaults → hardcoded)
+            from src.core.file_host_config import get_file_host_setting
+            enabled = get_file_host_setting(host_id, "enabled", "bool")
+            log(f"[File Host Manager] {host_id}: enabled={enabled}", level="debug", category="file_hosts")
 
             if enabled:
                 log(
@@ -326,7 +316,7 @@ class FileHostWorkerManager(QObject):
         return list(self.workers.keys())
 
     def _persist_enabled_state(self, host_id: str, enabled: bool) -> None:
-        """Persist enabled state to INI file (manager owns this).
+        """Persist enabled state to INI file using centralized API.
 
         This ensures that on next startup, init_enabled_hosts() will spawn
         the correct workers based on the last known enabled state.
@@ -336,23 +326,8 @@ class FileHostWorkerManager(QObject):
             enabled: True if host should be enabled, False otherwise
         """
         try:
-            from imxup import get_config_path
-            import configparser
-            import os
-
-            config_file = get_config_path()
-            config = configparser.ConfigParser()
-
-            if os.path.exists(config_file):
-                config.read(config_file)
-
-            if not config.has_section("FILE_HOSTS"):
-                config.add_section("FILE_HOSTS")
-
-            config.set("FILE_HOSTS", f"{host_id}_enabled", str(enabled))
-
-            with open(config_file, "w") as f:
-                config.write(f)
+            from src.core.file_host_config import save_file_host_setting
+            save_file_host_setting(host_id, "enabled", enabled)
 
             log(
                 f"[File Host Manager] Persisted enabled state for {host_id}: {enabled}",

@@ -38,6 +38,7 @@ class GalleryQueueItem:
     current_image: str = ""
     gallery_url: str = ""
     gallery_id: str = ""
+    db_id: Optional[int] = None  # Database primary key ID
     error_message: str = ""
     start_time: Optional[float] = None
     end_time: Optional[float] = None
@@ -105,6 +106,7 @@ class QueueManager(QObject):
         self.settings = QSettings("ImxUploader", "QueueManager")
         self.store = QueueStore()
         self._next_order = 0
+        self._next_db_id = 1  # Track next database ID for predictive assignment
         self._version = 0
         
         # Batch mode for deferred database saves
@@ -827,6 +829,7 @@ class QueueManager(QObject):
             'status': item.status,
             'gallery_url': item.gallery_url,
             'gallery_id': item.gallery_id,
+            'db_id': item.db_id,
             'progress': item.progress,
             'uploaded_images': item.uploaded_images,
             'total_images': item.total_images,
@@ -880,6 +883,9 @@ class QueueManager(QObject):
             # Create item from data
             item = self._dict_to_item(data)
             self._next_order = max(self._next_order, item.insertion_order + 1)
+            # Track next db_id for predictive assignment to new galleries
+            if item.db_id:
+                self._next_db_id = max(self._next_db_id, item.db_id + 1)
             self.items[path] = item
         
         self._rebuild_status_counts()
@@ -910,6 +916,7 @@ class QueueManager(QObject):
             status=status,
             gallery_url=data.get('gallery_url', ''),
             gallery_id=data.get('gallery_id', ''),
+            db_id=data.get('db_id'),  # Load database ID from persisted data
             progress=progress,
             uploaded_images=data.get('uploaded_images', 0),
             total_images=data.get('total_images', 0),
@@ -959,12 +966,14 @@ class QueueManager(QObject):
                 name=gallery_name,
                 status=QUEUE_STATE_VALIDATING,
                 insertion_order=self._next_order,
+                db_id=self._next_db_id,  # Pre-assign predicted database ID
                 added_time=time.time(),
                 template_name=template_name,
                 tab_name=tab_name
             )
             log(f"DEBUG: GalleryQueueItem created successfully", level="debug", category="queue")
             self._next_order += 1
+            self._next_db_id += 1  # Increment for next gallery
             
             self.items[path] = item
             log(f"DEBUG: Item added to dict, updating status count...", level="debug", category="queue")
@@ -1005,6 +1014,33 @@ class QueueManager(QObject):
                 log(f"Error executing added hook: {e}", level="warning", category="hooks")
 
         threading.Thread(target=run_added_hook, daemon=True).start()
+
+        # Check for file host auto-upload triggers (on_added)
+        try:
+            from src.core.file_host_config import get_config_manager
+            config_manager = get_config_manager()
+            triggered_hosts = config_manager.get_hosts_by_trigger('added')
+
+            if triggered_hosts:
+                log(f"Gallery added trigger: Found {len(triggered_hosts)} enabled hosts with 'On Added' trigger",
+                    level="info", category="file_hosts")
+
+                for host_id, host_config in triggered_hosts.items():
+                    # Queue upload to this file host (use host_id, not display name)
+                    upload_id = self.store.add_file_host_upload(
+                        gallery_path=path,
+                        host_name=host_id,  # host_id like 'filedot', not display name
+                        status='pending'
+                    )
+
+                    if upload_id:
+                        log(f"Queued file host upload for {path} to {host_config.name} (upload_id={upload_id})",
+                            level="info", category="file_hosts")
+                    else:
+                        log(f"Failed to queue file host upload for {path} to {host_config.name}",
+                            level="error", category="file_hosts")
+        except Exception as e:
+            log(f"Error checking file host triggers on gallery added: {e}", level="error", category="file_hosts")
 
         #print(f"DEBUG: add_item returning True")
         return True

@@ -423,11 +423,11 @@ class ImxUploadGUI(QMainWindow):
         archive_service = ArchiveService(temp_dir)
         self.archive_coordinator = ArchiveCoordinator(archive_service, parent_widget=self)
         if self.splash:
-            self.splash.set_status("Queue Manager")
+            self.splash.set_status("QueueManager")
         
         # Initialize tab manager
         if self.splash:
-            self.splash.set_status("Tab Manager")
+            self.splash.set_status("TabManager")
         self.tab_manager = TabManager(self.queue_manager.store)
         
         # Connect queue status changes to update table display
@@ -450,7 +450,7 @@ class ImxUploadGUI(QMainWindow):
         try:
             from src.processing.file_host_worker_manager import FileHostWorkerManager
             self.file_host_manager = FileHostWorkerManager(self.queue_manager.store)
-
+            self.splash.set_status("Connecting FileHostWorkerManager's signals to UI handlers")
             # Connect manager signals to UI handlers
             self.file_host_manager.test_completed.connect(self.on_file_host_test_completed)
             self.file_host_manager.upload_started.connect(self.on_file_host_upload_started)
@@ -461,7 +461,7 @@ class ImxUploadGUI(QMainWindow):
 
 
             # NOTE: init_enabled_hosts() called AFTER GUI shown (see launch_gui())
-            log("FileHostWorkerManager started", level="info", category="file_hosts")
+            log("FileHost Worker Manager started", level="info", category="file_hosts")
         except Exception as e:
             log(f"Failed to start FileHostWorkerManager: {e}", level="error", category="file_hosts")
             self.file_host_manager = None
@@ -482,7 +482,7 @@ class ImxUploadGUI(QMainWindow):
         
         # Pre-cache formatting functions to avoid blocking imports during progress updates
         if self.splash:
-            self.splash.set_status("_cache_format_function()")
+            self.splash.set_status("Pre-caching formatting functions to avoid blocking")
         self._cache_format_functions()
         
         # Initialize non-blocking components
@@ -516,12 +516,12 @@ class ImxUploadGUI(QMainWindow):
         self.server.start()
         
         if self.splash:
-            self.splash.set_status("setup_ui()")
+            self.splash.set_status("Running setup_ui()")
         self.setup_ui()
         
         # Initialize context menu helper and connect to the actual table widget
         if self.splash:
-            self.splash.set_status("Context Menus")
+            self.splash.set_status("context menus")
         self.context_menu_helper = GalleryContextMenuHelper(self)
         self.context_menu_helper.set_main_window(self)
         self.context_menu_helper.template_change_requested.connect(
@@ -543,19 +543,19 @@ class ImxUploadGUI(QMainWindow):
             print(f"ERROR: Could not connect context menu helper: {e}")
         
         if self.splash:
-            self.splash.set_status("setup_menu_bar()")
+            self.splash.set_status("menu bar (setup_menu_bar())")
             self.splash.update_status("random")
         self.setup_menu_bar()
         if self.splash:
-            self.splash.set_status("setup_system_tray()")
+            self.splash.set_status("Running setup_system_tray()")
         self.setup_system_tray()
         if self.splash:
-            self.splash.set_status("restore_settings()")
+            self.splash.set_status("Restoring saved settings and galleries")
         self.restore_settings()
        
         # Easter egg - quick gremlin flash
         if self.splash:
-            self.splash.set_status("gremlins")
+            self.splash.set_status("Wiping front to back")
             QApplication.processEvents()
         
         # Initialize table update queue after table creation
@@ -670,9 +670,54 @@ class ImxUploadGUI(QMainWindow):
         # Gallery loading moved to main() with progress dialog for better perceived performance
         # Button counts and progress will be updated by refresh_filter() after filter is applied
         self.gallery_table.setFocus() # Ensure table has focus for keyboard shortcuts
+        
+        # Cache log display settings for performance (avoid dict copy on every message)
+        self._log_show_level = False
+        self._log_show_category = False
+        self._refresh_log_display_settings()
         self._initializing = False # Clear initialization flag to allow normal tooltip updates
         log(f"ImxUploadGUI.__init__ Completed", level="debug")
 
+    def _refresh_log_display_settings(self):
+        """Cache log display settings to avoid repeated lookups on every log message.
+        
+        This method is called during initialization and whenever log settings change.
+        Caching these boolean values prevents creating a new dictionary copy on every
+        log message, which is a hot path that can be called hundreds of times per second.
+        """
+        try:
+            from src.utils.logging import get_logger
+            settings = get_logger().get_settings()
+            # get_settings() already normalizes these to Python bool
+            self._log_show_level = settings.get("show_log_level_gui", False)
+            self._log_show_category = settings.get("show_category_gui", False)
+        except Exception:
+            # Fallback to defaults if settings unavailable
+            self._log_show_level = False
+            self._log_show_category = False
+    
+    def refresh_log_display(self):
+        """Re-render all log messages with current display settings.
+        
+        This method is called when log display settings change to update
+        existing messages in the GUI log list with the new formatting.
+        """
+        try:
+            # Don't refresh if log_text doesn't exist yet (during init)
+            if not hasattr(self, 'log_text'):
+                return
+            
+            # Refresh cache first
+            self._refresh_log_display_settings()
+            
+            # Get all current messages (newest to oldest)
+            # Note: Messages in log_text are already formatted, so we can't
+            # re-parse them accurately. This limitation means existing messages
+            # won't update when settings change. New messages will use new settings.
+            # Future enhancement: Store raw messages separately for re-rendering.
+            
+        except Exception:
+            pass  # Silently fail to avoid disrupting user experience
     def refresh_filter(self):
         """Refresh current tab filter on the embedded tabbed gallery widget."""
         try:
@@ -2038,6 +2083,8 @@ class ImxUploadGUI(QMainWindow):
             action_scanning.triggered.connect(lambda: self.open_comprehensive_settings(tab_index=4))
             action_external_apps = settings_menu.addAction("Hooks (External Apps)")
             action_external_apps.triggered.connect(lambda: self.open_comprehensive_settings(tab_index=5))
+            action_file_hosts = settings_menu.addAction("File Hosts")
+            action_file_hosts.triggered.connect(lambda: self.open_comprehensive_settings(tab_index=6))
 
             # Tools menu
             tools_menu = menu_bar.addMenu("Tools")
@@ -2912,9 +2959,9 @@ class ImxUploadGUI(QMainWindow):
         try:
             # Find gallery path from gallery_id
             gallery_path = None
-            for path, item in self.queue_manager.queue_items.items():
+            for item in self.queue_manager.get_all_items():
                 if item.gallery_id and str(item.gallery_id) == str(gallery_id):
-                    gallery_path = path
+                    gallery_path = item.path
                     break
 
             if not gallery_path:
@@ -3054,10 +3101,11 @@ class ImxUploadGUI(QMainWindow):
         
         # Proceed with adding
         template_name = self.template_combo.currentText()
-        # Get current tab BEFORE adding item
+        # Get current tab BEFORE adding item ("All Tabs" is virtual, default to Main)
         current_tab = self.gallery_table.current_tab if hasattr(self.gallery_table, 'current_tab') else "Main"
-        #print(f"{timestamp()} DEBUG: Single folder - adding to tab: {current_tab}")
-        result = self.queue_manager.add_item(path, template_name=template_name, tab_name=current_tab)
+        actual_tab = "Main" if current_tab == "All Tabs" else current_tab
+        #print(f"{timestamp()} DEBUG: Single folder - adding to tab: {actual_tab}")
+        result = self.queue_manager.add_item(path, template_name=template_name, tab_name=actual_tab)
         
         if result == True:
             log(f"Added to queue: {os.path.basename(path)}", category="queue", level="info")
@@ -3084,7 +3132,9 @@ class ImxUploadGUI(QMainWindow):
         else:
             gallery_name = folder_name
 
-        result = self.queue_manager.add_item(folder_path, name=gallery_name, template_name=template_name, tab_name=current_tab)
+        # "All Tabs" is virtual, default to Main
+        actual_tab = "Main" if current_tab == "All Tabs" else current_tab
+        result = self.queue_manager.add_item(folder_path, name=gallery_name, template_name=template_name, tab_name=actual_tab)
 
         if result:
             # Mark as from archive
@@ -3154,17 +3204,15 @@ class ImxUploadGUI(QMainWindow):
     
     def _force_add_gallery(self, path: str, gallery_name: str, template_name: str):
         """Force add gallery to queue and update display"""
-        self.queue_manager._force_add_item(path, gallery_name, template_name)
-        
-        # Set the item to current active tab
+        # Get current tab ("All Tabs" is virtual, default to Main)
         current_tab = self.gallery_table.current_tab if hasattr(self.gallery_table, 'current_tab') else "Main"
+        actual_tab = "Main" if current_tab == "All Tabs" else current_tab
+
+        # Add to queue with correct tab
+        self.queue_manager.add_item(path, name=gallery_name, template_name=template_name, tab_name=actual_tab)
+
+        # Get the item for display
         item = self.queue_manager.get_item(path)
-        if item and current_tab != "Main":
-            tab_info = self.tab_manager.get_tab_by_name(current_tab)
-            if tab_info:
-                item.tab_name = current_tab
-                item.tab_id = tab_info.id
-                self.queue_manager._save_single_item(item)
         
         log(f"Added to queue (user confirmed): {os.path.basename(path)}", category="queue", level="")
         # Add to table display
@@ -3186,14 +3234,16 @@ class ImxUploadGUI(QMainWindow):
             results = self.queue_manager.add_multiple_items(folder_paths, template_name)
             
             # Set all added items to current active tab
+            # "All Tabs" is virtual, filter it out for post-add tab assignment
             current_tab = self.gallery_table.current_tab if hasattr(self.gallery_table, 'current_tab') else "Main"
-            if current_tab != "Main" and results['added_paths']:
-                tab_info = self.tab_manager.get_tab_by_name(current_tab)
+            actual_tab = "Main" if current_tab == "All Tabs" else current_tab
+            if actual_tab != "Main" and results['added_paths']:
+                tab_info = self.tab_manager.get_tab_by_name(actual_tab)
                 if tab_info:
                     for path in results['added_paths']:
                         item = self.queue_manager.get_item(path)
                         if item:
-                            item.tab_name = current_tab
+                            item.tab_name = actual_tab
                             item.tab_id = tab_info.id
                             self.queue_manager._save_single_item(item)
             
@@ -3248,13 +3298,14 @@ class ImxUploadGUI(QMainWindow):
             if folders_to_add_normally:
                 #print(f"DEBUG: Adding {len(folders_to_add_normally)} folders normally")
                 template_name = self.template_combo.currentText()
-                # Get current tab BEFORE adding items
+                # Get current tab BEFORE adding items ("All Tabs" is virtual, default to Main)
                 current_tab = self.gallery_table.current_tab if hasattr(self.gallery_table, 'current_tab') else "Main"
-                log(f"Multiple folders - adding to tab: {current_tab}", level="debug", category="queue")
-                
+                actual_tab = "Main" if current_tab == "All Tabs" else current_tab
+                log(f"Multiple folders - adding to tab: {actual_tab}", level="debug", category="queue")
+
                 for folder_path in folders_to_add_normally:
                     try:
-                        result = self.queue_manager.add_item(folder_path, template_name=template_name, tab_name=current_tab)
+                        result = self.queue_manager.add_item(folder_path, template_name=template_name, tab_name=actual_tab)
                         if result:
                             # Get the created item and immediately add to table display
                             item = self.queue_manager.get_item(folder_path)
@@ -3270,18 +3321,19 @@ class ImxUploadGUI(QMainWindow):
             if folders_to_replace_in_queue:
                 log(f"Replacing {len(folders_to_replace_in_queue)} folders in queue", level="debug", category="queue")
                 template_name = self.template_combo.currentText()
-                # Get current tab for replacements too
-                if 'current_tab' not in locals():
+                # Get current tab for replacements too ("All Tabs" is virtual, default to Main)
+                if 'actual_tab' not in locals():
                     current_tab = self.gallery_table.current_tab if hasattr(self.gallery_table, 'current_tab') else "Main"
-                    log(f"DEBUG: Multiple folders replacement - adding to tab: {current_tab}", level="debug", category="queue")                
+                    actual_tab = "Main" if current_tab == "All Tabs" else current_tab
+                    log(f"DEBUG: Multiple folders replacement - adding to tab: {actual_tab}", level="debug", category="queue")
                 for folder_path in folders_to_replace_in_queue:
                     try:
                         # Remove existing item from both queue and table
                         self.queue_manager.remove_item(folder_path)
                         self._remove_gallery_from_table(folder_path)
-                        
+
                         # Add new item with correct tab
-                        result = self.queue_manager.add_item(folder_path, template_name=template_name, tab_name=current_tab)
+                        result = self.queue_manager.add_item(folder_path, template_name=template_name, tab_name=actual_tab)
                         if result:
                             # Get the created item and immediately add to table display
                             item = self.queue_manager.get_item(folder_path)
@@ -3585,8 +3637,8 @@ class ImxUploadGUI(QMainWindow):
 
         theme_mode = self._current_theme_mode
 
-        # Order number (numeric-sorting item)
-        order_item = NumericTableWidgetItem(item.insertion_order)
+        # Order number - show database ID (persistent, matches logs like "gallery 1555")
+        order_item = NumericTableWidgetItem(item.db_id if item.db_id else 0)
         order_item.setFlags(order_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
         order_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
         self.gallery_table.setItem(row, GalleryTableWidget.COL_ORDER, order_item)
@@ -3811,8 +3863,8 @@ class ImxUploadGUI(QMainWindow):
                 # Prepare all data without touching GUI
                 formatted_data = {}
                 
-                # Order number data
-                formatted_data['order'] = item.insertion_order
+                # Order number data - show database ID (persistent, matches logs)
+                formatted_data['order'] = item.db_id if item.db_id else 0
                 
                 # Time formatting (expensive datetime operations)
                 formatted_data['added_text'], formatted_data['added_tooltip'] = format_timestamp_for_display(item.added_time)
@@ -4221,14 +4273,41 @@ class ImxUploadGUI(QMainWindow):
                 item = self.queue_manager.items[path]
                 item.total_images = total_images
                 item.uploaded_images = 0
-        
+
+        # Check for file host auto-upload triggers (on_started)
+        try:
+            from src.core.file_host_config import get_config_manager
+            config_manager = get_config_manager()
+            triggered_hosts = config_manager.get_hosts_by_trigger('started')
+
+            if triggered_hosts:
+                log(f"Gallery started trigger: Found {len(triggered_hosts)} enabled hosts with 'On Started' trigger",
+                    level="info", category="file_hosts")
+
+                for host_id, host_config in triggered_hosts.items():
+                    # Queue upload to this file host (use host_id, not display name)
+                    upload_id = self.queue_manager.store.add_file_host_upload(
+                        gallery_path=path,
+                        host_name=host_id,  # host_id like 'filedot', not display name
+                        status='pending'
+                    )
+
+                    if upload_id:
+                        log(f"Queued file host upload for {path} to {host_config.name} (upload_id={upload_id})",
+                            level="info", category="file_hosts")
+                    else:
+                        log(f"Failed to queue file host upload for {path} to {host_config.name}",
+                            level="error", category="file_hosts")
+        except Exception as e:
+            log(f"Error checking file host triggers on gallery start: {e}", level="error", category="file_hosts")
+
         # Update only the specific row status instead of full table refresh
         # Also ensure settings are disabled while uploads are active
-        try:
-            self.settings_group.setEnabled(False)
-        except Exception as e:
-            log(f"ERROR: Exception in main_window: {e}", level="error", category="ui")
-            raise
+        #try:
+        #    self.settings_group.setEnabled(False)
+        #except Exception as e:
+        #    log(f"ERROR: Exception in main_window: {e}", level="error", category="ui")
+        #    raise
 
         for row in range(self.gallery_table.rowCount()):
             name_item = self.gallery_table.item(row, GalleryTableWidget.COL_NAME)
@@ -4420,7 +4499,34 @@ class ImxUploadGUI(QMainWindow):
                 except Exception as e:
                     log(f"ERROR: Exception in main_window: {e}", level="error", category="ui")
                     raise
-        
+
+        # Check for file host auto-upload triggers (on_completed)
+        try:
+            from src.core.file_host_config import get_config_manager
+            config_manager = get_config_manager()
+            triggered_hosts = config_manager.get_hosts_by_trigger('completed')
+
+            if triggered_hosts:
+                log(f"Gallery completed trigger: Found {len(triggered_hosts)} enabled hosts with 'On Completed' trigger",
+                    level="info", category="file_hosts")
+
+                for host_id, host_config in triggered_hosts.items():
+                    # Queue upload to this file host (use host_id, not display name)
+                    upload_id = self.queue_manager.store.add_file_host_upload(
+                        gallery_path=path,
+                        host_name=host_id,  # host_id like 'filedot', not display name
+                        status='pending'
+                    )
+
+                    if upload_id:
+                        log(f"Queued file host upload for {path} to {host_config.name} (upload_id={upload_id})",
+                            level="info", category="file_hosts")
+                    else:
+                        log(f"Failed to queue file host upload for {path} to {host_config.name}",
+                            level="error", category="file_hosts")
+        except Exception as e:
+            log(f"Error checking file host triggers on gallery completion: {e}", level="error", category="file_hosts")
+
         # Force final progress update to show 100% completion
         if path in self.queue_manager.items:
             final_item = self.queue_manager.items[path]
@@ -4456,7 +4562,7 @@ class ImxUploadGUI(QMainWindow):
             raise
         
         # Re-enable settings if no remaining active items (defer to avoid blocking)
-        QTimer.singleShot(5, self._check_and_enable_settings)
+        #QTimer.singleShot(5, self._check_and_enable_settings)
 
         # Update display with targeted update instead of full rebuild
         self._update_specific_gallery_display(path)
@@ -4477,15 +4583,15 @@ class ImxUploadGUI(QMainWindow):
         # Defer only the heavy stats update to avoid blocking
         QTimer.singleShot(50, lambda: self._update_stats_deferred(results))
     
-    def _check_and_enable_settings(self):
-        """Check if settings should be enabled - deferred to avoid blocking GUI"""
-        try:
-            remaining = self.queue_manager.get_all_items()
-            any_active = any(i.status in ("queued", "uploading") for i in remaining)
-            self.settings_group.setEnabled(not any_active)
-        except Exception as e:
-            log(f"ERROR: Exception in main_window: {e}", level="error", category="ui")
-            raise
+    #def _check_and_enable_settings(self):
+    #    """Check if settings should be enabled - deferred to avoid blocking GUI"""
+    #    try:
+    #        remaining = self.queue_manager.get_all_items()
+    #        any_active = any(i.status in ("queued", "uploading") for i in remaining)
+    #        self.settings_group.setEnabled(not any_active)
+    #    except Exception as e:
+    #        log(f"ERROR: Exception in main_window: {e}", level="error", category="ui")
+    #        raise
     
     def _update_unnamed_count_background(self):
         """Update unnamed gallery count in background"""
@@ -4660,13 +4766,13 @@ class ImxUploadGUI(QMainWindow):
                 item.error_message = error_message
         
         # Re-enable settings if no remaining active (queued/uploading) items
-        try:
-            remaining = self.queue_manager.get_all_items()
-            any_active = any(i.status in ("queued", "uploading") for i in remaining)
-            self.settings_group.setEnabled(not any_active)
-        except Exception as e:
-            log(f"ERROR: Exception in main_window: {e}", level="error", category="ui")
-            raise
+        #try:
+        #    remaining = self.queue_manager.get_all_items()
+        #    any_active = any(i.status in ("queued", "uploading") for i in remaining)
+        #    self.settings_group.setEnabled(not any_active)
+        #except Exception as e:
+        #    log(f"ERROR: Exception in main_window: {e}", level="error", category="ui")
+        #    raise
 
         # Update display when status changes  
         self._update_specific_gallery_display(path)
@@ -4692,11 +4798,16 @@ class ImxUploadGUI(QMainWindow):
         Add message to GUI log list (simple display only).
 
         Filtering is already done by logger.py before this is called.
-        This method just displays the message in the simple log list.
-        Log viewers are called directly by logger.py with metadata.
+        This method formats the message based on cached display settings:
+        - Strips log level prefix (DEBUG:, etc.) if show_log_level_gui=false
+        - Strips category tags ([network], etc.) if show_category_gui=false
+        - Always preserves timestamp prefix (HH:MM:SS)
+        
+        Settings are cached in _log_show_level and _log_show_category for performance.
         """
         try:
-            # Strip category tags for clean display
+            # Use cached settings instead of lookup (performance optimization)
+            # Start with the original message
             display = message
             prefix = ""
 
@@ -4708,10 +4819,19 @@ class ImxUploadGUI(QMainWindow):
             else:
                 rest = message
 
-            # Strip [category] or [category:subtype] tag if present
-            if rest.startswith("[") and "]" in rest:
-                close_idx = rest.find("]")
-                rest = rest[close_idx + 1:].lstrip()
+            # Strip log level prefix if setting is disabled (logger adds all prefixes consistently now)
+            if not self._log_show_level:
+                level_prefixes = ["TRACE: ", "DEBUG: ", "INFO: ", "WARNING: ", "ERROR: ", "CRITICAL: "]
+                for level_prefix in level_prefixes:
+                    if rest.startswith(level_prefix):
+                        rest = rest[len(level_prefix):]
+                        break
+
+            # Strip [category] or [category:subtype] tag if setting is disabled (cached value)
+            if not self._log_show_category:
+                if rest.startswith("[") and "]" in rest:
+                    close_idx = rest.find("]")
+                    rest = rest[close_idx + 1:].lstrip()
 
             display = prefix + rest
 
@@ -4884,12 +5004,72 @@ class ImxUploadGUI(QMainWindow):
             return False
 
     def _on_file_host_icon_clicked(self, gallery_path: str, host_name: str):
-        """Handle file host icon click - show details for specific host"""
-        # TODO: Show File Host Details Dialog filtered to this host
+        """Handle file host icon click - show link if completed, queue upload if not"""
+        from PyQt6.QtWidgets import QMessageBox
+        from PyQt6.QtGui import QClipboard
+        from PyQt6.QtWidgets import QApplication
+
         log(f"File host icon clicked: {host_name} for {os.path.basename(gallery_path)}", level="debug", category="file_hosts")
 
-        # For now, just open the manage dialog
-        self._on_file_hosts_manage_clicked(gallery_path)
+        # Check if upload exists and get status
+        try:
+            uploads = self.queue_manager.store.get_file_host_uploads(gallery_path)
+            upload = next((u for u in uploads if u['host_name'] == host_name), None)
+
+            if upload and upload['status'] == 'completed' and upload.get('download_url'):
+                # Show download link
+                download_link = upload['download_url']
+                msg = QMessageBox(self)
+                msg.setWindowTitle(f"{host_name} Download Link")
+                msg.setText(f"Gallery uploaded successfully!\n\nDownload link:")
+                msg.setInformativeText(download_link)
+                msg.setStandardButtons(QMessageBox.StandardButton.Ok)
+
+                # Add copy button
+                copy_btn = msg.addButton("Copy Link", QMessageBox.ButtonRole.ActionRole)
+
+                msg.exec()
+
+                # If copy button was clicked, copy to clipboard
+                if msg.clickedButton() == copy_btn:
+                    clipboard = QApplication.clipboard()
+                    clipboard.setText(download_link)
+                    log(f"Copied {host_name} link to clipboard", level="info", category="file_hosts")
+            else:
+                # Queue manual upload
+                log(f"Queueing manual upload to {host_name} for {os.path.basename(gallery_path)}", level="info", category="file_hosts")
+
+                # Get host config to confirm it exists
+                from src.core.file_host_config import get_config_manager
+                config_manager = get_config_manager()
+                host_config = config_manager.get_host(host_name)
+
+                if not host_config:
+                    QMessageBox.warning(self, "Error", f"Host configuration not found: {host_name}")
+                    return
+
+                # Queue the upload (use host_name which is the host_id, not display name)
+                upload_id = self.queue_manager.store.add_file_host_upload(
+                    gallery_path=gallery_path,
+                    host_name=host_name,  # host_id like 'filedot', not display name like 'FileDot.to'
+                    status='pending'
+                )
+
+                log(f"Queued manual upload (upload_id={upload_id}) for {os.path.basename(gallery_path)} to {host_name}",
+                    level="info", category="file_hosts")
+
+                # Refresh the row to show updated status
+                self._update_specific_gallery_display(gallery_path)
+
+                QMessageBox.information(
+                    self,
+                    "Upload Queued",
+                    f"Gallery queued for upload to {host_name}.\n\nThe upload will begin shortly."
+                )
+
+        except Exception as e:
+            log(f"Error handling file host icon click: {e}", level="error", category="file_hosts")
+            QMessageBox.critical(self, "Error", f"Failed to process click: {str(e)}")
 
     def _on_file_hosts_manage_clicked(self, gallery_path: str):
         """Handle 'Manage' button click - show File Host Details Dialog"""
@@ -5700,7 +5880,13 @@ class ImxUploadGUI(QMainWindow):
             # Update database
             success = self.queue_manager.store.update_item_template(gallery_path, new_template)
             log(f"DEBUG: Database update success: {success}", category="db", level="debug")
-            
+
+            # Update in-memory item
+            with QMutexLocker(self.queue_manager.mutex):
+                if gallery_path in self.queue_manager.items:
+                    self.queue_manager.items[gallery_path].template_name = new_template
+                    self.queue_manager._inc_version()
+
             # Update the table cell display
             template_item = table.item(row, GalleryTableWidget.COL_TEMPLATE)
             if template_item:
@@ -6008,7 +6194,7 @@ def main():
     app.setQuitOnLastWindowClosed(True)  # Exit when window closes
     
     # Show splash screen immediately
-    print(f"{timestamp()} INFO: Loading splash screen")
+    print(f"{timestamp()} Loading splash screen")
     splash = SplashScreen()
     splash.show()
     splash.update_status("Initialization sequence")
@@ -6027,7 +6213,7 @@ def main():
     else:
         # Check for existing instance even when no folders provided
         if check_single_instance():
-            print(f"{timestamp()} INFO: ImxUp GUI already running, attempting to bring existing instance to front.")
+            print(f"{timestamp()} WARNING: ImxUp GUI already running, attempting to bring existing instance to front.")
             splash.finish_and_hide()
             return
     
@@ -6045,28 +6231,28 @@ def main():
     window.show()
 
     # Load saved galleries with blocking progress dialog (moved from __init__ for better UX)
-    print(f"{timestamp()} INFO: Showing gallery loading progress dialog")
+    print(f"{timestamp()} Showing gallery loading progress dialog")
     progress = QProgressDialog("Loading saved galleries...", None, 0, 0, window)
     progress.setWindowModality(Qt.WindowModality.WindowModal)
     progress.setMinimumDuration(0)  # Show immediately
     progress.show()
     QApplication.processEvents()
 
-    print(f"{timestamp()} INFO: Calling _initialize_table_from_queue()")
+    log(f"Calling _initialize_table_from_queue()", level="debug")
     window._initialize_table_from_queue()
 
     # Process events to ensure the QTimer.singleShot(0) in _initialize_table_from_queue completes
     # This ensures the filter is applied and the table is fully updated before closing the dialog
-    print(f"{timestamp()} INFO: Processing final events before closing progress dialog")
+    log(f"Processing final events before closing progress dialog", level="debug")
     QApplication.processEvents()
 
     progress.close()
-    print(f"{timestamp()} INFO: Gallery loading complete")
+    log(f"Gallery loading complete", level="info")
 
     # Initialize file host workers AFTER GUI is loaded and displayed
     if hasattr(window, "file_host_manager") and window.file_host_manager:
         window.file_host_manager.init_enabled_hosts()
-        log("FileHostWorkerManager workers spawned", level="info", category="file_hosts")
+        log("File Host Manager workers spawned", level="debug", category="file_hosts")
     try:
         sys.exit(app.exec())
     except KeyboardInterrupt:

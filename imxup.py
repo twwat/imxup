@@ -60,7 +60,7 @@ import glob
 import winreg
 import mimetypes
 
-__version__ = "0.5.13"  # Application version number
+__version__ = "0.6.00"  # Application version number
 
 # Build User-Agent string (defer debug_print until after console allocation)
 _system = platform.system()
@@ -811,6 +811,7 @@ def apply_template(template_content, data):
         '#folderSize#': data.get('folder_size', ''),
         '#galleryLink#': data.get('gallery_link', ''),
         '#allImages#': data.get('all_images', ''),
+        '#hostLinks#': data.get('host_links', ''),
         '#custom1#': data.get('custom1', ''),
         '#custom2#': data.get('custom2', ''),
         '#custom3#': data.get('custom3', ''),
@@ -901,6 +902,15 @@ def save_gallery_artifacts(
     # All-images bbcode (space-separated)
     all_images_bbcode = "".join([(img.get('bbcode') or '') + "  " for img in results.get('images', [])]).strip()
 
+    # Get file host download links (if available)
+    host_links = ''
+    try:
+        from src.storage.database import QueueStore
+        from src.utils.template_utils import get_file_host_links_for_template
+        queue_store = QueueStore()
+        host_links = get_file_host_links_for_template(queue_store, folder_path)
+    except (sqlite3.Error, OSError) as e:
+        log(f"Failed to get file host links: {e}", level="warning", category="template")
     template_data = {
         'folder_name': gallery_name,
         'width': avg_width,
@@ -911,6 +921,7 @@ def save_gallery_artifacts(
         'folder_size': f"{total_size / (1024*1024):.1f} MB",
         'gallery_link': f"https://imx.to/g/{gallery_id}",
         'all_images': all_images_bbcode,
+        'host_links': host_links,
         'custom1': (custom_fields or {}).get('custom1', ''),
         'custom2': (custom_fields or {}).get('custom2', ''),
         'custom3': (custom_fields or {}).get('custom3', ''),
@@ -1798,10 +1809,10 @@ class ImxToUploader:
             else:
                 raise Exception(f"Network error during upload (code {error_code}): {error_msg}")
     
-    def upload_folder(self, folder_path, gallery_name=None, thumbnail_size=3, thumbnail_format=2, max_retries=3, parallel_batch_size=4, template_name="default"):
+    def upload_folder(self, folder_path, gallery_name=None, thumbnail_size=3, thumbnail_format=2, max_retries=3, parallel_batch_size=4, template_name="default", queue_store=None):
         """
         Upload all images in a folder as a gallery
-        
+    def upload_folder(self, folder_path, gallery_name=None, thumbnail_size=3, thumbnail_format=2, max_retries=3, parallel_batch_size=4, template_name="default"):
         Args:
             folder_path (str): Path to folder containing images
             gallery_name (str): Name for the gallery (optional)
@@ -2465,7 +2476,7 @@ def main():
             gallery_count = len(window.queue_manager.get_all_items())
 
             # Load saved galleries with progress dialog (window exists but not shown yet)
-            debug_print(f"{timestamp()} INFO: Loading {gallery_count} galleries with progress dialog")
+            debug_print(f"{timestamp()} Loading {gallery_count} galleries with progress dialog")
             progress = QProgressDialog("Loading saved galleries...", None, 0, gallery_count, None)
             progress.setWindowTitle("ImxUp")
             progress.setWindowModality(Qt.WindowModality.ApplicationModal)
@@ -2473,7 +2484,7 @@ def main():
             progress.show()
             QApplication.processEvents()
 
-            debug_print(f"{timestamp()} INFO: Calling _initialize_table_from_queue()")
+            debug_print(f"{timestamp()} Calling _initialize_table_from_queue()")
             window._initialize_table_from_queue(progress_callback=lambda current, total: (
                 progress.setValue(current),
                 progress.setLabelText(f"Loading gallery {current}/{total}..."),
@@ -2481,11 +2492,11 @@ def main():
             ))
 
             # Process events to ensure the QTimer.singleShot(0) in _initialize_table_from_queue completes
-            debug_print(f"{timestamp()} INFO: Processing final events before closing progress dialog")
+            debug_print(f"{timestamp()} Processing final events before closing progress dialog")
             QApplication.processEvents()
 
             progress.close()
-            debug_print(f"{timestamp()} INFO: Gallery loading complete")
+            debug_print(f"{timestamp()} Gallery loading complete")
 
             # NOW show the main window (galleries already loaded)
             window.show()
@@ -2493,9 +2504,8 @@ def main():
             # Initialize file host workers AFTER GUI is loaded and displayed
             if hasattr(window, "file_host_manager") and window.file_host_manager:
                 from src.utils.logger import log
-                log("Initializing file host workers on startup...", level="info", category="file_hosts")
+                log("Initializing file host workers on startup...", level="debug", category="file_hosts")
                 window.file_host_manager.init_enabled_hosts()
-                log("File host worker initialization complete", level="info", category="file_hosts")
 
             # Now that GUI is visible, hide the console window (unless --debug)
             if os.name == 'nt' and '--debug' not in sys.argv:
@@ -2515,11 +2525,10 @@ def main():
             sys.exit(app.exec())
 
         except ImportError as e:
-            debug_print(f"ERROR: Import error: {e}")
-            debug_print(f"CRITICAL: Could not import PyQt6, required for GUI mode. Install with: pip install PyQt6")
+            debug_print(f"{timestamp()} CRITICAL: Import error: {e}")
             sys.exit(1)
         except Exception as e:
-            debug_print(f"CRITICAL: Error launching GUI: {e}")
+            debug_print(f"{timestamp()} CRITICAL: Error launching GUI: {e}")
             import traceback
             traceback.print_exc()
             sys.exit(1)
@@ -2527,25 +2536,25 @@ def main():
     # Handle secure setup
     if args.setup_secure:
             if setup_secure_password():
-                debug_print(f"Setup complete! You can now use the script without storing passwords in plaintext.")
+                debug_print(f"{timestamp()} Setup complete! You can now use the script without storing passwords in plaintext.")
             else:
-                debug_print(f"ERROR: Setup failed. Please try again.")
+                debug_print(f"{timestamp()} ERROR: Setup failed. Please try again.")
             return
     
     # Handle context menu installation
     if args.install_context_menu:
         if create_windows_context_menu():
-            debug_print(f"Context Menu: Installed successfully")
+            debug_print(f"{timestamp()} Context Menu: Installed successfully")
         else:
-            debug_print(f"Context Menu: ERROR: Failed to install context menu.")
+            debug_print(f"{timestamp()} Context Menu: ERROR: Failed to install context menu.")
         return
     
     # Handle context menu removal
     if args.remove_context_menu:
         if remove_windows_context_menu():
-            debug_print(f"Context Menu: Removed successfully")
+            debug_print(f"{timestamp()} Context Menu: Removed successfully")
         else:
-            debug_print(f"Context Menu: Failed to removeFailed to remove context menu.")
+            debug_print(f"{timestamp()} Context Menu: Failed to removeFailed to remove context menu.")
         return
     
     # Handle gallery visibility changes
@@ -2557,16 +2566,16 @@ def main():
         
         if args.public:
             if uploader.set_gallery_visibility(gallery_id, 1):
-                debug_print(f"Gallery {gallery_id} set to public")
+                debug_print(f"{timestamp()} Gallery {gallery_id} set to public")
             else:
-                debug_print(f"ERROR: Failed to set gallery {gallery_id} to public")
+                debug_print(f"{timestamp()} ERROR: Failed to set gallery {gallery_id} to public")
         elif args.private:
             if uploader.set_gallery_visibility(gallery_id, 0):
-                debug_print(f"Gallery {gallery_id} set to private")
+                debug_print(f"{timestamp()} Gallery {gallery_id} set to private")
             else:
-                debug_print(f"ERROR: Failed to set gallery {gallery_id} to private")
+                debug_print(f"{timestamp()} ERROR: Failed to set gallery {gallery_id} to private")
         else:
-            debug_print("WARNING: Please specify --public or --private")
+            debug_print("{timestamp()} WARNING: Please specify --public or --private")
         return
     
     # Handle unnamed gallery renaming
@@ -2577,7 +2586,7 @@ def main():
             #log(f" No unnamed galleries found to rename")
             return
 
-        debug_print(f"Found {len(unnamed_galleries)} unnamed galleries to rename:")
+        debug_print(f"{timestamp()} Found {len(unnamed_galleries)} unnamed galleries to rename:")
         for gallery_id, intended_name in unnamed_galleries.items():
             debug_print(f"   {gallery_id} -> '{intended_name}'")
 
@@ -2611,7 +2620,7 @@ def main():
                 rename_worker.queue_rename(gallery_id, intended_name)
 
             # Wait for all renames to complete
-            debug_print(f"Processing {len(unnamed_galleries)} rename requests...")
+            debug_print(f"{timestamp()} Processing {len(unnamed_galleries)} rename requests...")
             while rename_worker.queue_size() > 0:
                 time.sleep(0.1)
 
@@ -2619,7 +2628,7 @@ def main():
             remaining_unnamed = get_unnamed_galleries()
             success_count = len(unnamed_galleries) - len(remaining_unnamed)
 
-            debug_print(f"Successfully renamed {success_count}/{len(unnamed_galleries)} galleries")
+            debug_print(f"{timestamp()} Successfully renamed {success_count}/{len(unnamed_galleries)} galleries")
 
             # Cleanup
             rename_worker.stop()
@@ -2627,7 +2636,7 @@ def main():
             return 0 if success_count == len(unnamed_galleries) else 1
 
         except Exception as e:
-            debug_print(f"Failed to initialize RenameWorker: {e}")
+            debug_print(f"{timestamp()} Failed to initialize RenameWorker: {e}")
             return 1
     
     # Check if folder paths are provided (required for upload)
@@ -2642,13 +2651,13 @@ def main():
             # Expand wildcards
             expanded = glob.glob(path)
             if not expanded:
-                debug_print(f"Warning: No folders found matching pattern: {path}")
+                debug_print(f"{timestamp()} Warning: No folders found matching pattern: {path}")
             expanded_paths.extend(expanded)
         else:
             expanded_paths.append(path)
     
     if not expanded_paths:
-        debug_print(f"No valid folders found to upload.")
+        debug_print(f"{timestamp()} No valid folders found to upload.")
         return 1  # No valid folders
     
     # Determine public gallery setting
@@ -2670,9 +2679,9 @@ def main():
         try:
             from src.processing.rename_worker import RenameWorker
             rename_worker = RenameWorker()
-            debug_print(f"Rename Worker: Background worker initialized")
+            debug_print(f"{timestamp()} Rename Worker: Background worker initialized")
         except Exception as e:
-            debug_print(f"Rename Worker: Error trying to initialize RenameWorker: {e}")
+            debug_print(f"{timestamp()} Rename Worker: Error trying to initialize RenameWorker: {e}")
             
         engine = UploadEngine(uploader, rename_worker)
 
@@ -2681,7 +2690,7 @@ def main():
             gallery_name = args.name if args.name else None
 
             try:
-                debug_print(f" Starting upload: {os.path.basename(folder_path)}")
+                debug_print(f"{timestamp()} Starting upload: {os.path.basename(folder_path)}")
                 results = engine.run(
                     folder_path=folder_path,
                     gallery_name=gallery_name,
@@ -2700,19 +2709,19 @@ def main():
                         template_name=args.template or "default",
                     )
                 except Exception as e:
-                    debug_print(f"WARNING: Artifact save error: {e}")
+                    debug_print(f"{timestamp()} WARNING: Artifact save error: {e}")
 
                 all_results.append(results)
 
             except KeyboardInterrupt:
-                debug_print("DEBUG: Upload interrupted by user")
+                debug_print("{timestamp()} Upload interrupted by user")
                 # Cleanup RenameWorker on interrupt
                 if rename_worker:
                     rename_worker.stop()
-                    debug_print(f" Background RenameWorker stopped")
+                    debug_print(f"{timestamp()} Background RenameWorker stopped")
                 break
             except Exception as e:
-                debug_print(f"Error uploading {folder_path}: {str(e)}")
+                debug_print(f"{timestamp()} Error uploading {folder_path}: {str(e)}")
                 continue
         
         # Display summary for all galleries
@@ -2765,16 +2774,16 @@ def main():
             # Cleanup RenameWorker
             if rename_worker:
                 rename_worker.stop()
-                debug_print(f"Rename Worker: Background worker stopped")
+                debug_print(f"{timestamp()} Rename Worker: Background worker stopped")
                 
             return 0  # Success
         else:
             # Cleanup RenameWorker
             if rename_worker:
                 rename_worker.stop()
-                debug_print(f"Background RenameWorker stopped")
+                debug_print(f"{timestamp()} Background RenameWorker stopped")
                 
-            debug_print("No galleries were successfully uploaded.")
+            debug_print("{timestamp()} No galleries were successfully uploaded.")
             return 1  # No galleries uploaded
             
     except Exception as e:
@@ -2782,17 +2791,17 @@ def main():
         try:
             if 'rename_worker' in locals() and rename_worker:
                 rename_worker.stop()
-                debug_print(f"Rename Worker: Error: Background worker stopped on exception: {e}")
+                debug_print(f"{timestamp()} ERROR: Rename Worker: Error: Background worker stopped on exception: {e}")
         except Exception:
             pass  # Ignore cleanup errors
-        debug_print(f"Rename Worker: Error: {str(e)}")
+        debug_print(f"{timestamp()} ERROR: Rename Worker: Error: {str(e)}")
         return 1  # Error occurred
 
 if __name__ == "__main__":
     try:
         main()
     except KeyboardInterrupt:
-        log("KeyboardInterrupt: Exiting gracefully...", level="debug", category="ui")
+        log("{timestamp()} KeyboardInterrupt: Exiting gracefully...", level="debug", category="ui")
         sys.exit(0)
     except SystemExit:
         # Handle argparse errors gracefully
@@ -2808,7 +2817,7 @@ if __name__ == "__main__":
             pass
         # Also try to log it normally
         try:
-            log(f"Fatal Error: {e}", level="critical", category="ui")
+            log(f"CRITICAL: Fatal Error: {e}", level="critical", category="ui")
         except:
             pass
         sys.exit(1)

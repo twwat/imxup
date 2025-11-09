@@ -6,13 +6,14 @@ from PyQt6.QtWidgets import (
     QLineEdit, QCheckBox, QFrame, QProgressBar, QScrollArea, QGroupBox,
     QSpinBox, QMessageBox, QFileDialog, QDialog
 )
-from PyQt6.QtCore import pyqtSignal, QSettings
-from PyQt6.QtGui import QFont
+from PyQt6.QtCore import pyqtSignal, QSettings, Qt
+from PyQt6.QtGui import QFont, QPixmap
 from datetime import datetime
 from typing import Dict, Any, Optional
 
 from src.utils.format_utils import format_binary_size
-from src.core.file_host_config import get_config_manager
+from src.core.file_host_config import get_config_manager, HostConfig
+from src.gui.icon_manager import get_icon_manager
 
 
 class FileHostsSettingsWidget(QWidget):
@@ -32,6 +33,9 @@ class FileHostsSettingsWidget(QWidget):
         self.settings = QSettings("ImxUploader", "ImxUploadGUI")
         self.host_widgets: Dict[str, Dict[str, Any]] = {}
 
+        # Icon manager for status icons
+        self.icon_manager = get_icon_manager()
+
         # Track storage load state
         self.storage_loaded_this_session = False
 
@@ -48,8 +52,8 @@ class FileHostsSettingsWidget(QWidget):
 
         # Intro text
         intro_label = QLabel(
-            "Configure file host uploads for galleries. Enabled hosts will automatically "
-            "create ZIPs of your galleries and upload them in parallel."
+            "Configure file hosts. Galleries will be uploaded to enabled hosts "
+            "as ZIP files (automatically or manually, as per settings)"
         )
         intro_label.setWordWrap(True)
         layout.addWidget(intro_label)
@@ -93,11 +97,12 @@ class FileHostsSettingsWidget(QWidget):
         # Create scrollable area for hosts list
         scroll_area = QScrollArea()
         scroll_area.setWidgetResizable(True)
+        scroll_area.setFrameShape(QScrollArea.Shape.NoFrame)  # Remove scroll area border
         scroll_area.setMinimumHeight(200)
 
         hosts_container = QWidget()
         self.hosts_container_layout = QVBoxLayout(hosts_container)
-        self.hosts_container_layout.setSpacing(2)
+        self.hosts_container_layout.setSpacing(8)  # Increased spacing for better separation
 
         # Load hosts and create UI
         config_manager = get_config_manager()
@@ -137,15 +142,31 @@ class FileHostsSettingsWidget(QWidget):
         # Top row: Status indicator + Configure button
         top_row = QHBoxLayout()
 
-        # Status indicator (enabled/disabled)
-        status_icon = QLabel("✓" if host_config.enabled else "○")
-        status_icon.setStyleSheet(f"font-size: 14px; color: {'green' if host_config.enabled else 'gray'};")
+        # Status indicator (enabled/disabled) - icon set by _update_status_icon
+        status_icon = QLabel()
         status_icon.setFixedWidth(20)
+        status_icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
         top_row.addWidget(status_icon)
 
         host_label = QLabel(host_config.name)
-        host_label.setStyleSheet("font-weight: bold;")
-        top_row.addWidget(host_label, 1)
+        # Apply class based on enabled/disabled state - let QSS handle all styling
+        from src.core.file_host_config import get_file_host_setting
+        host_enabled = get_file_host_setting(host_id, "enabled", "bool")
+        if not host_enabled:
+            host_label.setProperty("class", "host-name-disabled")
+        else:
+            host_label.setProperty("class", "host-name-enabled")
+        # Force style refresh
+        host_label.style().unpolish(host_label)
+        host_label.style().polish(host_label)
+        top_row.addWidget(host_label)
+
+        # Host logo (if available) - centered with spacing
+        logo_label = self._load_host_logo(host_id, host_config)
+        if logo_label:
+            top_row.addStretch(1)  # Push logo toward center
+            top_row.addWidget(logo_label)
+            top_row.addStretch(1)  # Balance on the right side
 
         # Test status label
         status_label = QLabel()
@@ -155,76 +176,15 @@ class FileHostsSettingsWidget(QWidget):
         top_row.addStretch()
         frame_layout.addLayout(top_row)
 
-        # Initialize enable button to None (created only for hosts that require auth)
-        enable_btn = None
-
-        # Credentials row (if requires auth) - READ-ONLY DISPLAY
-        if host_config.requires_auth:
-            creds_row = QHBoxLayout()
-
-            creds_label = QLabel("Credentials:")
-            creds_label.setStyleSheet("font-size: 10px; color: gray;")
-            creds_label.setFixedWidth(80)
-            creds_row.addWidget(creds_label)
-
-            # Read-only credentials display (blue dots)
-            creds_display = QLineEdit()
-            creds_display.setReadOnly(True)
-            creds_display.setEchoMode(QLineEdit.EchoMode.Password)
-            creds_display.setStyleSheet("QLineEdit { background-color: #f0f0f0; color: #1d98de; }")
-            creds_display.setPlaceholderText("Not configured")
-            
-            # Load credentials from config if available
-            from imxup import get_credential, decrypt_password
-            encrypted_creds = get_credential(f"file_host_{host_id}_credentials")
-            if encrypted_creds:
-                try:
-                    decrypted = decrypt_password(encrypted_creds)
-                    creds_display.setText(decrypted)
-                except:
-                    pass  # Invalid/corrupted credentials
-            
-            creds_row.addWidget(creds_display, 1)
-
-            # Enable/Disable button (power button paradigm)
-            enable_btn = QPushButton()
-            enable_btn.setMinimumWidth(70)
-            enable_btn.setMaximumWidth(70)
-            enable_btn.clicked.connect(lambda checked=False, hid=host_id: self._on_enable_disable_clicked(hid))
-            creds_row.addWidget(enable_btn)
-
-            # Configure button (moved here)
-            configure_btn = QPushButton("Configure")
-            configure_btn.setToolTip(f"Configure {host_config.name}")
-            configure_btn.clicked.connect(lambda: self._show_host_config_dialog(host_id, host_config))
-            configure_btn.setMaximumWidth(80)
-            creds_row.addWidget(configure_btn)
-
-            frame_layout.addLayout(creds_row)
-
-        # Auto-upload display (read-only text)
-        trigger_display = self._get_trigger_display_text(host_config)
-        if trigger_display:
-            trigger_row = QHBoxLayout()
-            trigger_label = QLabel("Auto-upload:")
-            trigger_label.setStyleSheet("font-size: 10px; color: gray;")
-            trigger_label.setFixedWidth(80)
-            trigger_row.addWidget(trigger_label)
-            
-            trigger_value = QLabel(trigger_display)
-            trigger_value.setStyleSheet("font-size: 10px;")
-            trigger_row.addWidget(trigger_value)
-            trigger_row.addStretch()
-            frame_layout.addLayout(trigger_row)
-
-        # Storage progress bar (create for ALL hosts that support storage checking)
+        # Storage progress bar (moved up - was after auto-upload before)
         storage_bar = None
         if host_config.user_info_url and (host_config.storage_left_path or host_config.storage_regex):
             storage_row = QHBoxLayout()
 
             storage_label_text = QLabel("Storage:")
-            storage_label_text.setStyleSheet("font-size: 10px; color: gray;")
-            storage_label_text.setFixedWidth(60)
+            # Use QSS class for theme-aware styling
+            storage_label_text.setProperty("class", "label-small-muted")
+            storage_label_text.setFixedWidth(80)
             storage_row.addWidget(storage_label_text)
 
             storage_bar = QProgressBar()
@@ -238,12 +198,54 @@ class FileHostsSettingsWidget(QWidget):
 
             frame_layout.addLayout(storage_row)
 
+        # Button row (Enable/Disable + Configure) for hosts that require auth
+        enable_btn = None
+        if host_config.requires_auth:
+            button_row = QHBoxLayout()
+            button_row.addSpacing(80)  # Align with labels above
+
+            # Enable/Disable button with theme-specific styling
+            enable_btn = QPushButton()
+            enable_btn.setMinimumWidth(80)
+            enable_btn.setMaximumWidth(80)
+            enable_btn.clicked.connect(lambda checked=False, hid=host_id: self._on_enable_disable_clicked(hid))
+            button_row.addWidget(enable_btn)
+
+            # Configure button
+            configure_btn = QPushButton("Configure")
+            configure_btn.setToolTip(f"Configure {host_config.name}")
+            configure_btn.clicked.connect(lambda: self._show_host_config_dialog(host_id, host_config))
+            configure_btn.setMaximumWidth(80)
+            button_row.addWidget(configure_btn)
+
+            button_row.addStretch()
+
+            frame_layout.addLayout(button_row)
+
+        # Auto-upload display (read-only text)
+        trigger_display = self._get_trigger_display_text(host_id)
+        if trigger_display:
+            trigger_row = QHBoxLayout()
+            trigger_label = QLabel("Auto-upload:")
+            # Use QSS class for theme-aware styling
+            trigger_label.setProperty("class", "label-small-muted")
+            trigger_label.setFixedWidth(80)
+            trigger_row.addWidget(trigger_label)
+
+            trigger_value = QLabel(trigger_display)
+            # Use QSS class for theme-aware styling
+            trigger_value.setProperty("class", "label-small")
+            trigger_row.addWidget(trigger_value)
+            trigger_row.addStretch()
+            frame_layout.addLayout(trigger_row)
+
         # Store widgets for later access (display-only UI)
         self.host_widgets[host_id] = {
             "frame": host_frame,
+            "status_icon": status_icon,
             "status_label": status_label,
             "storage_bar": storage_bar,
-            "creds_display": creds_display if host_config.requires_auth else None,
+            "host_label": host_label,  # Store for theme updates
             "enable_btn": enable_btn if host_config.requires_auth else None
         }
 
@@ -254,8 +256,88 @@ class FileHostsSettingsWidget(QWidget):
         if host_config.requires_auth:
             self._update_enable_button_state(host_id)
 
+        # Update status icon to reflect current enabled state
+        self._update_status_icon(host_id)
+
         # Add to layout
         self.hosts_container_layout.addWidget(host_frame)
+
+    def _load_host_logo(self, host_id: str, host_config: HostConfig) -> Optional[QLabel]:
+        """Load and create a clickable QLabel with the host's logo.
+
+        Args:
+            host_id: Host identifier (used to find logo file)
+            host_config: HostConfig instance (for referral URL)
+
+        Returns:
+            Clickable QLabel with scaled logo pixmap, or None if logo not found
+        """
+        from imxup import get_project_root
+        import os
+
+        logo_path = os.path.join(get_project_root(), "assets", "hosts", "logo", f"{host_id}.png")
+        if not os.path.exists(logo_path):
+            return None
+
+        try:
+            pixmap = QPixmap(logo_path)
+            if pixmap.isNull():
+                return None
+
+            # Scale logo to max height of 24px while maintaining aspect ratio
+            scaled_pixmap = pixmap.scaledToHeight(24, Qt.TransformationMode.SmoothTransformation)
+
+            logo_label = QLabel()
+            logo_label.setPixmap(scaled_pixmap)
+            logo_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+            # Make clickable if referral URL exists
+            if host_config.referral_url:
+                from PyQt6.QtGui import QCursor
+                logo_label.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+                logo_label.setToolTip(f"Click to visit {host_config.name}")
+
+                # Install event filter to detect clicks
+                def open_referral_url(event):
+                    if event.type() == event.Type.MouseButtonPress:
+                        from PyQt6.QtGui import QDesktopServices
+                        from PyQt6.QtCore import QUrl
+                        QDesktopServices.openUrl(QUrl(host_config.referral_url))
+                        return True
+                    return False
+
+                logo_label.mousePressEvent = open_referral_url
+
+            return logo_label
+        except Exception:
+            return None
+
+    def _update_status_icon(self, host_id: str):
+        """Update status icon pixmap based on enabled state and theme.
+
+        Args:
+            host_id: Host identifier
+        """
+        widgets = self.host_widgets.get(host_id)
+        if not widgets or not widgets.get('status_icon'):
+            return
+
+        status_icon = widgets['status_icon']
+
+        # Get current enabled state from worker_manager (source of truth)
+        is_enabled = self.worker_manager.is_enabled(host_id) if self.worker_manager else False
+
+        # Get appropriate icon (IconManager auto-detects theme from palette)
+        icon_key = 'host_enabled' if is_enabled else 'host_disabled'
+        icon = self.icon_manager.get_icon(icon_key, theme_mode=None)  # None = auto-detect
+
+        # Set pixmap (20x20 size)
+        pixmap = icon.pixmap(20, 20)
+        status_icon.setPixmap(pixmap)
+
+        # Set tooltip
+        tooltip = "Host enabled" if is_enabled else "Host disabled"
+        status_icon.setToolTip(tooltip)
 
     def _update_status_label(self, host_id: str, host_config, status_label: QLabel):
         """Update status label with test results.
@@ -267,7 +349,10 @@ class FileHostsSettingsWidget(QWidget):
         """
         if not host_config.requires_auth:
             status_label.setText("✓ No auth required")
-            status_label.setStyleSheet("color: green;")
+            # Use QSS class for theme-aware styling
+            status_label.setProperty("class", "status-success-light")
+            status_label.style().unpolish(status_label)
+            status_label.style().polish(status_label)
             return
 
         # Load test results directly from QSettings (works even if worker doesn't exist yet)
@@ -286,19 +371,27 @@ class FileHostsSettingsWidget(QWidget):
 
             if tests_passed == 4:
                 status_label.setText(f"✓ All tests passed ({time_str})")
-                status_label.setStyleSheet("color: green; font-weight: bold;")
+                # Use QSS class for theme-aware styling
+                status_label.setProperty("class", "status-success")
             elif tests_passed > 0:
                 status_label.setText(f"⚠ {tests_passed}/4 tests passed ({time_str})")
-                status_label.setStyleSheet("color: orange; font-weight: bold;")
+                # Use QSS class for theme-aware styling
+                status_label.setProperty("class", "status-warning")
             else:
                 status_label.setText("⚠ Test failed - retest needed")
-                status_label.setStyleSheet("color: red; font-weight: bold;")
+                # Use QSS class for theme-aware styling
+                status_label.setProperty("class", "status-error")
+            status_label.style().unpolish(status_label)
+            status_label.style().polish(status_label)
             return
 
         status_label.setText("⚠ Requires credentials")
-        status_label.setStyleSheet("color: orange;")
+        # Use QSS class for theme-aware styling
+        status_label.setProperty("class", "status-warning-light")
+        status_label.style().unpolish(status_label)
+        status_label.style().polish(status_label)
 
-    def _load_test_results_from_settings(self, host_id: str) -> dict:
+    def _load_test_results_from_settings(self, host_id: str) -> Optional[dict]:
         """Load test results directly from QSettings.
 
         This is used at widget initialization when workers may not exist yet.
@@ -323,16 +416,19 @@ class FileHostsSettingsWidget(QWidget):
             'error_message': self.settings.value(f"{prefix}/error_message", '', type=str)
         }
 
-    def _get_trigger_display_text(self, host_config):
-        """Get display text for auto-upload triggers."""
-        triggers = []
-        if host_config.trigger_on_added:
-            triggers.append("On Added")
-        if host_config.trigger_on_started:
-            triggers.append("On Started")
-        if host_config.trigger_on_completed:
-            triggers.append("On Completed")
-        return ", ".join(triggers) if triggers else "Disabled"
+    def _get_trigger_display_text(self, host_id):
+        """Get display text for auto-upload trigger (single string value)."""
+        from src.core.file_host_config import get_file_host_setting
+        trigger = get_file_host_setting(host_id, "trigger", "str")
+
+        if trigger == "on_added":
+            return "On Added"
+        elif trigger == "on_started":
+            return "On Started"
+        elif trigger == "on_completed":
+            return "On Completed"
+        else:  # "disabled" or any other value
+            return "Disabled"
 
     def _on_test_clicked(self, host_id: str):
         """Handle test button click - delegate to worker.
@@ -363,14 +459,17 @@ class FileHostsSettingsWidget(QWidget):
 
         if status_label:
             status_label.setText("⏳ Test started - close and re-open settings to see results")
-            status_label.setStyleSheet("color: blue; font-weight: bold;")
+            # Use QSS class for theme-aware styling
+            status_label.setProperty("class", "status-info")
+            status_label.style().unpolish(status_label)
+            status_label.style().polish(status_label)
 
         # Trigger test (result will be cached in QSettings)
         worker.test_connection()
 
     def refresh_storage_display(self, host_id: str):
         """Update storage display by reading from QSettings cache.
-        
+
         Args:
             host_id: Host identifier
         """
@@ -431,7 +530,7 @@ class FileHostsSettingsWidget(QWidget):
 
     def refresh_test_results(self, host_id: str):
         """Update test results display by reading from QSettings cache.
-        
+
         Args:
             host_id: Host identifier
         """
@@ -471,14 +570,19 @@ class FileHostsSettingsWidget(QWidget):
 
         if tests_passed == 4:
             status_label.setText(f"✓ All tests passed ({time_str})")
-            status_label.setStyleSheet("color: green; font-weight: bold;")
+            # Use QSS class for theme-aware styling
+            status_label.setProperty("class", "status-success")
         elif tests_passed > 0:
             status_label.setText(f"⚠ {tests_passed}/4 tests passed ({time_str})")
-            status_label.setStyleSheet("color: orange; font-weight: bold;")
+            # Use QSS class for theme-aware styling
+            status_label.setProperty("class", "status-warning")
         else:
             error = results.get('error_message', 'Unknown error')
             status_label.setText(f"✗ Test failed: {error}")
-            status_label.setStyleSheet("color: red; font-weight: bold;")
+            # Use QSS class for theme-aware styling
+            status_label.setProperty("class", "status-error")
+        status_label.style().unpolish(status_label)
+        status_label.style().polish(status_label)
 
     def _show_host_config_dialog(self, host_id: str, host_config):
         """Show detailed configuration dialog for a host.
@@ -501,75 +605,52 @@ class FileHostsSettingsWidget(QWidget):
             try:
                 from src.utils.logger import log
                 log(f"Config dialog accepted for {host_id}", level="debug", category="file_hosts")
-                
+
                 from imxup import encrypt_password, set_credential
                 import configparser
                 import os
-                
+
                 # Get values from dialog
                 enabled = dialog.get_enabled_state()
                 credentials = dialog.get_credentials()
-                trigger_settings = dialog.get_trigger_settings()
-                log(f"Got values: enabled={enabled}, has_creds={bool(credentials)}, triggers={trigger_settings}", 
+                trigger_value = dialog.get_trigger_settings()  # Now returns single string
+                log(f"Got values: enabled={enabled}, has_creds={bool(credentials)}, trigger={trigger_value}",
                     level="debug", category="file_hosts")
-                
-                # Load INI file
-                config_file = os.path.expanduser("~/.imxup/imxup.ini")
-                config = configparser.ConfigParser()
-                if os.path.exists(config_file):
-                    config.read(config_file)
-                log(f"Loaded config from {config_file}", level="debug", category="file_hosts")
-                
-                if "FILE_HOSTS" not in config:
-                    config.add_section("FILE_HOSTS")
-                
-                # Save enabled state and triggers to INI
-                config.set("FILE_HOSTS", f"{host_id}_enabled", str(enabled))
-                config.set("FILE_HOSTS", f"{host_id}_on_added", str(trigger_settings.get("on_added", False)))
-                config.set("FILE_HOSTS", f"{host_id}_on_started", str(trigger_settings.get("on_started", False)))
-                config.set("FILE_HOSTS", f"{host_id}_on_completed", str(trigger_settings.get("on_completed", False)))
-                log("Set INI values", level="debug", category="file_hosts")
-                
-                # Write INI file
-                with open(config_file, "w") as f:
-                    config.write(f)
-                log(f"Wrote INI file for {host_id}", level="info", category="file_hosts")
-                
+
+                # Save enabled state and trigger using new API
+                from src.core.file_host_config import save_file_host_setting
+                save_file_host_setting(host_id, "enabled", enabled)
+                save_file_host_setting(host_id, "trigger", trigger_value)
+                log(f"Saved settings for {host_id}", level="info", category="file_hosts")
+
                 # Save credentials (encrypted) to QSettings
                 if credentials:
                     encrypted = encrypt_password(credentials)
                     set_credential(f"file_host_{host_id}_credentials", encrypted)
                     log("Saved encrypted credentials", level="debug", category="file_hosts")
-                
-                # Update in-memory config
-                host_config.enabled = enabled
-                host_config.trigger_on_added = trigger_settings.get("on_added", False)
-                host_config.trigger_on_started = trigger_settings.get("on_started", False)
-                host_config.trigger_on_completed = trigger_settings.get("on_completed", False)
-                log("Updated in-memory config", level="debug", category="file_hosts")
-                
+
                 # Spawn or kill worker based on enabled state
                 if enabled:
                     self.worker_manager.enable_host(host_id)
                 else:
                     self.worker_manager.disable_host(host_id)
-                
+
                 # Refresh display in File Hosts tab
                 self._refresh_host_display(host_id, host_config, credentials)
                 log(f"Refreshed display for {host_id}", level="debug", category="file_hosts")
-                
+
                 # Mark settings as changed
                 self.settings_changed.emit()
                 log(f"Save complete for {host_id}", level="info", category="file_hosts")
-                
+
             except Exception as e:
                 log(f"Failed to save config for {host_id}: {e}", level="error", category="file_hosts")
                 import traceback
                 traceback.print_exc()
 
-    def _refresh_host_display(self, host_id: str, host_config, credentials: str = None):
+    def _refresh_host_display(self, host_id: str, host_config, credentials: Optional[str] = None):
         """Refresh display for a host after config changes.
-        
+
         Args:
             host_id: Host identifier
             host_config: Updated HostConfig
@@ -578,15 +659,15 @@ class FileHostsSettingsWidget(QWidget):
         widgets = self.host_widgets.get(host_id)
         if not widgets:
             return
-        
+
         # Update credentials display if provided
         if credentials and widgets.get("creds_display"):
             widgets["creds_display"].setText(credentials)
-        
+
         # Refresh status label and storage
         if widgets.get("status_label"):
             self._update_status_label(host_id, host_config, widgets["status_label"])
-        
+
         self.refresh_storage_display(host_id)
     def _add_custom_host(self):
         """Add a custom host from JSON file"""
@@ -627,7 +708,7 @@ class FileHostsSettingsWidget(QWidget):
 
     def _on_storage_updated(self, host_id: str, total: int, left: int):
         """Handle storage update signal from manager.
-        
+
         Args:
             host_id: Host that was updated
             total: Total storage in bytes
@@ -667,12 +748,30 @@ class FileHostsSettingsWidget(QWidget):
         enable_btn = widgets['enable_btn']
         is_enabled = self.worker_manager.is_enabled(host_id) if self.worker_manager else False
 
+        # Use QSS classes for theme-aware styling (defined in styles.qss)
         if is_enabled:
             enable_btn.setText("Disable")
-            enable_btn.setStyleSheet("QPushButton { background-color: #90EE90; }")  # Light green
+            enable_btn.setProperty("class", "host-disable-btn")
+            enable_btn.style().unpolish(enable_btn)
+            enable_btn.style().polish(enable_btn)
         else:
             enable_btn.setText("Enable")
-            enable_btn.setStyleSheet("")  # Default style
+            enable_btn.setProperty("class", "host-enable-btn")
+            enable_btn.style().unpolish(enable_btn)
+            enable_btn.style().polish(enable_btn)
+
+        # Update host name label styling based on enabled state
+        host_label = widgets.get('host_label')
+        if host_label:
+            if is_enabled:
+                host_label.setProperty("class", "host-name-enabled")
+            else:
+                host_label.setProperty("class", "host-name-disabled")
+            host_label.style().unpolish(host_label)
+            host_label.style().polish(host_label)
+
+        # Update status icon to match enabled state
+        self._update_status_icon(host_id)
 
     def _on_enable_disable_clicked(self, host_id: str):
         """Handle enable/disable button click.

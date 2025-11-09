@@ -5,7 +5,6 @@ All magic numbers, configuration values, and constant strings.
 
 # Application Info
 APP_NAME = "ImxUp"
-#APP_VERSION = "0.5.07"
 APP_AUTHOR = "twat"
 
 # Network Configuration
@@ -122,6 +121,7 @@ TEMPLATE_PLACEHOLDERS = [
     "#folderSize#",
     "#galleryLink#",
     "#allImages#",
+    "#hostLinks#",
     "#custom1#",
     "#custom2#",
     "#custom3#",

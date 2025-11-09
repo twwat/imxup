@@ -4,6 +4,7 @@ Provides specialized UI components.
 """
 
 import os
+from pathlib import Path
 from typing import Optional, List, Dict, Any
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QProgressBar,
@@ -11,13 +12,14 @@ from PyQt6.QtWidgets import (
     QHeaderView, QStyle, QMenu, QMessageBox, QTabBar, QListWidget, QApplication
 )
 from PyQt6.QtCore import Qt, pyqtSignal, QTimer, QMimeData, QPoint, QSize
-from PyQt6.QtGui import QIcon, QPixmap, QPainter, QColor, QDragEnterEvent, QDropEvent, QKeyEvent
+from PyQt6.QtGui import QIcon, QPixmap, QPainter, QColor, QPen, QDragEnterEvent, QDropEvent, QKeyEvent
 
 from src.core.constants import (
     QUEUE_STATE_READY, QUEUE_STATE_QUEUED, QUEUE_STATE_UPLOADING,
     QUEUE_STATE_COMPLETED, QUEUE_STATE_FAILED, QUEUE_STATE_PAUSED,
     QUEUE_STATE_INCOMPLETE, ICON_SIZE, TABLE_UPDATE_INTERVAL
 )
+from src.utils.logger import log
 
 
 class OverallProgressWidget(QWidget):
@@ -862,10 +864,13 @@ class FileHostsStatusWidget(QWidget):
 
         layout = self.layout()
 
-        # Clear existing buttons if reinitializing
+        # Clear existing widgets (buttons + stretch) if reinitializing
         if self._initialized:
-            for btn in self.host_buttons.values():
-                btn.deleteLater()
+            # Clear all widgets from layout
+            while layout.count():
+                item = layout.takeAt(0)
+                if item.widget():
+                    item.widget().deleteLater()
             self.host_buttons.clear()
 
         # Get all enabled hosts
@@ -883,35 +888,60 @@ class FileHostsStatusWidget(QWidget):
 
             # Get upload status
             upload = host_uploads.get(host_name, {})
-            status = upload.get('status', 'pending')
+            has_upload = bool(upload)  # Track if this gallery has an upload for this host
+            status = upload.get('status', 'not_uploaded')  # Default to 'not_uploaded' if no record
 
             # Create button
             btn = QPushButton()
             btn.setFixedSize(24, 24)
-            btn.setToolTip(f"{host_config.name}: {status}")
+
+            # Set tooltip based on upload state
+            if has_upload:
+                if status == 'completed':
+                    btn.setToolTip(f"{host_config.name}: Click to view download link")
+                else:
+                    btn.setToolTip(f"{host_config.name}: {status}")
+            else:
+                btn.setToolTip(f"{host_config.name}: Click to upload")
+
             btn.setProperty("class", "icon-btn")
 
-            # Load host icon (fallback to generic icon)
-            host_icon_path = f"hosts/{host_name}.png"
+            # Load host icon - use -dim variant for not_uploaded status
+            if status == 'not_uploaded':
+                # Try dimmed variant first for not uploaded hosts
+                host_icon_path = f"hosts/logo/{host_name}-icon-dim.png"
+            else:
+                # Full color for all other statuses
+                host_icon_path = f"hosts/logo/{host_name}-icon.png"
+
             try:
                 # Try to load host-specific icon
-                from pathlib import Path
                 icon_path = Path(icon_manager.assets_dir) / host_icon_path
                 if icon_path.exists():
                     base_icon = QIcon(str(icon_path))
                 else:
-                    # Fallback to a generic icon
-                    base_icon = icon_manager.get_icon('action_view')
-            except:
+                    # Fallback to regular icon (for not_uploaded if -dim doesn't exist)
+                    if status == 'not_uploaded':
+                        fallback_path = Path(icon_manager.assets_dir) / f"hosts/logo/{host_name}-icon.png"
+                    else:
+                        fallback_path = Path(icon_manager.assets_dir) / f"hosts/logo/{host_name}.png"
+
+                    if fallback_path.exists():
+                        base_icon = QIcon(str(fallback_path))
+                    else:
+                        # Final fallback to generic icon
+                        base_icon = icon_manager.get_icon('action_view')
+            except (OSError, IOError, ValueError) as e:
+                log(f"Failed to load icon for {host_name}: {e}", level="warning", category="file_hosts")
                 base_icon = icon_manager.get_icon('action_view')
 
             # Apply status overlay
             final_icon = self._apply_status_overlay(base_icon, status, icon_manager)
 
             btn.setIcon(final_icon)
-            btn.setIconSize(QSize(20, 20))
+            btn.setIconSize(QSize(19, 19))
 
-            # Connect click handler
+            # Connect click handler (click handler queries database for current status)
             btn.clicked.connect(lambda checked, h=host_name: self.host_clicked.emit(self.gallery_path, h))
 
             self.host_buttons[host_name] = btn
@@ -925,31 +955,34 @@ class FileHostsStatusWidget(QWidget):
 
         Args:
             base_icon: Base host icon
-            status: Upload status ('pending', 'uploading', 'completed', 'failed')
+            status: Upload status ('not_uploaded', 'pending', 'uploading', 'completed', 'failed')
             icon_manager: IconManager instance
 
         Returns:
             QIcon with status overlay applied
         """
-        # Get base pixmap
-        pixmap = base_icon.pixmap(QSize(24, 24))
+        # Get base pixmap (create copy to avoid modifying original)
+        pixmap = base_icon.pixmap(QSize(24, 24)).copy()
 
         # Create painter for overlays
         painter = QPainter(pixmap)
 
-        if status == 'pending':
-            # Very transparent overlay
+        if status == 'not_uploaded':
+            # No overlay - using pre-dimmed -icon-dim.png variant
+            pass
+        elif status == 'pending':
+            # Light grey overlay for queued uploads
             painter.setOpacity(0.3)
-            painter.fillRect(pixmap.rect(), QColor(128, 128, 128, 200))
+            painter.fillRect(pixmap.rect(), QColor(128, 128, 128, 150))
         elif status == 'uploading':
-            # Blue tint overlay
+            # Blue tint overlay for active uploads
             painter.setOpacity(0.3)
             painter.fillRect(pixmap.rect(), QColor(0, 120, 255, 100))
         elif status == 'completed':
-            # No overlay - full color
+            # No overlay - full color, ready to click for download link
             pass
         elif status == 'failed':
-            # Red X overlay
+            # Red X overlay for failed uploads
             painter.setOpacity(1.0)
             painter.setPen(QPen(QColor(255, 0, 0), 3))
             painter.drawLine(4, 4, 20, 20)

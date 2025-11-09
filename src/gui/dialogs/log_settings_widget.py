@@ -73,16 +73,21 @@ class LogSettingsWidget(QWidget):
         self.cmb_log_gui_upload_mode.addItems(["none", "file", "gallery", "both"])
         gui_grid.addWidget(self.cmb_log_gui_upload_mode, 0, 3)
 
+        # GUI display formatting options
+        self.chk_show_level_gui = QCheckBox("Show log level prefix (DEBUG:, ERROR:, etc.)")
+        self.chk_show_category_gui = QCheckBox("Show category tags ([network], [uploads], etc.)")
+        gui_grid.addWidget(self.chk_show_level_gui, 1, 0, 1, 2)
+        gui_grid.addWidget(self.chk_show_category_gui, 1, 2, 1, 2)
         # GUI categories header
         gui_cat_label = QLabel("Categories:")
         gui_cat_label.setStyleSheet("margin-top: 10px;")
-        gui_grid.addWidget(gui_cat_label, 1, 0, 1, 5)
+        gui_grid.addWidget(gui_cat_label, 2, 0, 1, 5)
 
         # GUI categories in 2 rows of 5
         for idx, (cat_key, cat_label) in enumerate(cats):
             gui_key = f"cats_gui_{cat_key}"
             chk_gui = QCheckBox(cat_label)
-            row = 2 + (idx // 5)
+            row = 3 + (idx // 5)
             col = idx % 5
             gui_grid.addWidget(chk_gui, row, col)
             self._log_cat_widgets[gui_key] = chk_gui
@@ -152,6 +157,8 @@ class LogSettingsWidget(QWidget):
         self.cmb_log_file_level.currentIndexChanged.connect(self.settings_changed.emit)
         self.cmb_log_gui_upload_mode.currentIndexChanged.connect(self.settings_changed.emit)
         self.cmb_log_file_upload_mode.currentIndexChanged.connect(self.settings_changed.emit)
+        self.chk_show_level_gui.toggled.connect(self.settings_changed.emit)
+        self.chk_show_category_gui.toggled.connect(self.settings_changed.emit)
         for widget in self._log_cat_widgets.values():
             widget.toggled.connect(self.settings_changed.emit)
 
@@ -182,6 +189,8 @@ class LogSettingsWidget(QWidget):
         self.cmb_log_file_level.blockSignals(True)
         self.cmb_log_gui_upload_mode.blockSignals(True)
         self.cmb_log_file_upload_mode.blockSignals(True)
+        self.chk_show_level_gui.blockSignals(True)
+        self.chk_show_category_gui.blockSignals(True)
         for widget in self._log_cat_widgets.values():
             widget.blockSignals(True)
 
@@ -211,6 +220,9 @@ class LogSettingsWidget(QWidget):
         self.cmb_log_gui_upload_mode.setCurrentText(str(settings.get("upload_success_mode_gui", "gallery")))
         self.cmb_log_file_upload_mode.setCurrentText(str(settings.get("upload_success_mode_file", "gallery")))
 
+        # Load GUI display formatting options (already normalized to bool by get_settings())
+        self.chk_show_level_gui.setChecked(settings.get("show_log_level_gui", False))
+        self.chk_show_category_gui.setChecked(settings.get("show_category_gui", False))
         # Re-enable signals after loading
         self.chk_log_enabled.blockSignals(False)
         self.cmb_log_rotation.blockSignals(False)
@@ -221,6 +233,8 @@ class LogSettingsWidget(QWidget):
         self.cmb_log_file_level.blockSignals(False)
         self.cmb_log_gui_upload_mode.blockSignals(False)
         self.cmb_log_file_upload_mode.blockSignals(False)
+        self.chk_show_level_gui.blockSignals(False)
+        self.chk_show_category_gui.blockSignals(False)
         for widget in self._log_cat_widgets.values():
             widget.blockSignals(False)
 
@@ -244,6 +258,8 @@ class LogSettingsWidget(QWidget):
                 level_file=self.cmb_log_file_level.currentText(),
                 upload_success_mode_gui=self.cmb_log_gui_upload_mode.currentText(),
                 upload_success_mode_file=self.cmb_log_file_upload_mode.currentText(),
+                show_log_level_gui=self.chk_show_level_gui.isChecked(),
+                show_category_gui=self.chk_show_category_gui.isChecked(),
                 **cat_kwargs,
             )
         except Exception:

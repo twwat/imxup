@@ -134,8 +134,13 @@ class AppLogger:
         "cats_file_hooks": "true",
         # Upload success granularity preferences per sink
         # values: none | file | gallery | both
+        # Upload success granularity preferences per sink
+        # values: none | file | gallery | both
         "upload_success_mode_gui": "gallery",
         "upload_success_mode_file": "gallery",
+        # GUI display formatting preferences
+        "show_log_level_gui": "false",  # Show level prefix (DEBUG:, ERROR:, etc.) in GUI log
+        "show_category_gui": "false",  # Show category tags ([network], [uploads], etc.) in GUI log
     }
 
     TIME_ONLY_RE = re.compile(r"^(\d{2}:\d{2}:\d{2})\s+")
@@ -309,6 +314,9 @@ class AppLogger:
             if val not in ("none","file","gallery","both"):
                 val = "gallery"
             s[key] = val
+        # Normalize GUI display formatting options
+        s["show_log_level_gui"] = str(s.get("show_log_level_gui", "false")).lower() == "true"
+        s["show_category_gui"] = str(s.get("show_category_gui", "false")).lower() == "true"
         return s
 
     @classmethod

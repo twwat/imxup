@@ -9,8 +9,10 @@ import time
 import re
 import base64
 import zipfile
+import threading
+import functools
 from pathlib import Path
-from typing import Dict, Any, Optional, Callable
+from typing import Dict, Any, Optional, Callable, List, Union
 from io import BytesIO
 from urllib.parse import quote
 
@@ -28,7 +30,10 @@ class FileHostClient:
         bandwidth_counter: AtomicCounter,
         credentials: Optional[str] = None,
         host_id: Optional[str] = None,
-        log_callback: Optional[Callable[[str, str], None]] = None
+        log_callback: Optional[Callable[[str, str], None]] = None,
+        session_cookies: Optional[Dict[str, str]] = None,
+        session_token: Optional[str] = None,
+        session_timestamp: Optional[float] = None
     ):
         """Initialize file host client.
 
@@ -38,6 +43,9 @@ class FileHostClient:
             credentials: Optional credentials (username:password or api_key)
             host_id: Optional host identifier for token caching
             log_callback: Optional logging callback from worker
+            session_cookies: Optional existing session cookies to reuse
+            session_token: Optional existing session token (sess_id) to reuse
+            session_timestamp: Optional timestamp when session was created
         """
         self.config = host_config
         self.bandwidth_counter = bandwidth_counter
@@ -55,12 +63,22 @@ class FileHostClient:
         # Session cookies (for session-based auth)
         self.cookie_jar: Dict[str, str] = {}
 
+        # Session token lifecycle tracking
+        self._session_token_timestamp: Optional[float] = None  # When sess_id was extracted
+
+        # Thread safety for token operations
+        self._token_lock = threading.Lock()
+
         # Opportunistically cached storage from login (avoids extra API call)
         self._cached_storage_from_login: Optional[Dict[str, Any]] = None
 
         # Login if credentials provided and auth required
         if self.config.requires_auth and credentials:
-            if self.config.auth_type == "token_login":
+            if self.config.auth_type == "api_key":
+                # Use credentials directly as permanent API key (no login needed)
+                self.auth_token = credentials
+                if self._log_callback: self._log_callback(f"Using permanent API key for {self.config.name}", "debug")
+            elif self.config.auth_type == "token_login":
                 # Try to use cached token first
                 if host_id:
                     from src.network.token_cache import get_token_cache
@@ -78,7 +96,21 @@ class FileHostClient:
                     # No host_id provided, just login without caching
                     self.auth_token = self._login_token_based(credentials)
             elif self.config.auth_type == "session":
-                self._login_session_based(credentials)
+                # Check if session was injected (reuse existing session)
+                if session_cookies:
+                    # Reuse existing session (no login needed!)
+                    self.cookie_jar = session_cookies.copy()
+                    self.auth_token = session_token
+                    self._session_token_timestamp = session_timestamp
+                    if self._log_callback:
+                        age = time.time() - (session_timestamp or 0) if session_timestamp else 0
+                        self._log_callback(
+                            f"Reusing existing session for {self.config.name} (age: {age:.0f}s)",
+                            "debug"
+                        )
+                else:
+                    # Fresh login (first time only)
+                    self._login_session_based(credentials)
 
     def _login_token_based(self, credentials: str) -> str:
         """Login to get authentication token.
@@ -168,11 +200,9 @@ class FileHostClient:
                 self._cached_storage_from_login = storage_info
 
                 storage_formatted = json.dumps(storage_info, indent=2).replace(chr(10), '\\n')
-                log(
+                if self._log_callback: self._log_callback(
                     f"Opportunistically cached storage from login: {storage_formatted}",
-                    level="debug",
-                    category="file_hosts"
-                )
+                    "info" )
 
             if self._log_callback: self._log_callback(f"Successfully logged in to {self.config.name}", "info")
             return token
@@ -233,7 +263,7 @@ class FileHostClient:
             
             if self._log_callback: self._log_callback(f"Extracted hidden fields: {list(hidden_fields.keys())}", "debug")
             
-            # Extract captcha if configured
+            # Extract captcha if configured 
             captcha_code = None
             if self.config.captcha_regex:
                 captcha_match = re.search(self.config.captcha_regex, page_html, re.DOTALL)
@@ -273,11 +303,11 @@ class FileHostClient:
                         else:
                             captcha_code = captcha_raw
                         
-                        if self._log_callback: self._log_callback(f"Solved captcha: {captcha_raw} -> {captcha_code} (sorted by CSS position)", "debug")
+                        if self._log_callback: self._log_callback(f"Successfully solved CAPTCHA: {captcha_raw} -> {captcha_code} (sorted by 'padding-left' CSS position)", "info")
                     else:
-                        if self._log_callback: self._log_callback(f"Warning: Could not extract captcha digits from matched area", "warning")
+                        if self._log_callback: self._log_callback(f"WARNING: Unable to solve matched CAPTCHA, upload may fail...", "warning")
                 else:
-                    if self._log_callback: self._log_callback(f"Warning: Could not extract captcha using regex", "warning")
+                    if self._log_callback: self._log_callback(f"No CAPTCHA found, all good", "debug")
 
         finally:
             get_curl.close()
@@ -332,7 +362,7 @@ class FileHostClient:
             if not self.cookie_jar:
                 raise ValueError("Login failed: No session cookies received")
 
-            if self._log_callback: self._log_callback(f"Successfully logged in to {self.config.name}", "info")
+            if self._log_callback: self._log_callback(f"Client successfully logged in.", "info")
 
         finally:
             post_curl.close()
@@ -352,16 +382,299 @@ class FileHostClient:
                 md5_hash.update(chunk)
         return md5_hash.hexdigest()
 
-    def _extract_from_json(self, data: Any, path: list) -> Any:
+    def _get_clean_filename(self, filename: str) -> str:
+        """Extract clean filename without internal ID prefix.
+
+        Removes 'imxup_{id}_' prefix from ZIP filenames before uploading to hosts.
+        This keeps local temp files unique while sending clean names externally.
+
+        Examples:
+            'imxup_1555_Test70e.zip' → 'Test70e.zip'
+            'imxup_999_My_Gallery-2024.zip' → 'My_Gallery-2024.zip'
+            'normal_file.zip' → 'normal_file.zip' (unchanged)
+            'imxup_gallery_1555.zip' → 'imxup_gallery_1555.zip' (fallback pattern, unchanged)
+
+        Args:
+            filename: Original filename (possibly with imxup prefix)
+
+        Returns:
+            Cleaned filename suitable for external hosts
+        """
+        # Match "imxup_<numbers>_<rest>" and extract <rest>
+        match = re.match(r'^imxup_\d+_(.+)$', filename)
+        if match:
+            return match.group(1)
+
+        # No prefix found, return as-is (safe fallback)
+        return filename
+
+    def _refresh_auth_token(self) -> None:
+        """Refresh authentication token based on auth type.
+
+        Automatically handles token refresh for all auth types:
+        - api_key: No refresh (permanent tokens)
+        - token_login: Refresh via login and update cache
+        - session: Extract fresh sess_id from upload page
+        """
+        if self.config.auth_type == "api_key":
+            # API keys are permanent, no refresh needed
+            return
+
+        elif self.config.auth_type == "token_login":
+            # Token-based auth refresh (existing pattern)
+            if not self.credentials:
+                if self._log_callback:
+                    self._log_callback(f"Cannot refresh token: no credentials available", "error")
+                return
+
+            from src.network.token_cache import get_token_cache
+            token_cache = get_token_cache()
+            if self.host_id:
+                token_cache.clear_token(self.host_id)
+
+            if self._log_callback:
+                self._log_callback(f"Refreshing authentication token for {self.config.name}...", "debug")
+
+            new_token = self._login_token_based(self.credentials)
+
+            # Thread-safe token update
+            with self._token_lock:
+                self.auth_token = new_token
+
+            if new_token and self.host_id:
+                token_cache.store_token(self.host_id, new_token, self.config.token_ttl)
+
+        elif self.config.auth_type == "session":
+            # Session-based auth: extract fresh sess_id from upload page
+
+            # Check credentials availability (same pattern as token_login)
+            if not self.credentials:
+                if self._log_callback:
+                    self._log_callback(f"Cannot refresh session: no credentials available", "warning")
+                return
+
+            if not self.config.session_id_regex:
+                if self._log_callback:
+                    self._log_callback(f"No session_id_regex configured for {self.config.name}, cannot refresh", "warning")
+                return
+
+            # Log token age for TTL discovery
+            with self._token_lock:
+                old_timestamp = self._session_token_timestamp
+
+            if old_timestamp:
+                age = time.time() - old_timestamp
+                if self._log_callback:
+                    self._log_callback(
+                        f"Refreshing session token for {self.config.name} (token age: {age:.0f}s)",
+                        "debug"
+                    )
+                    # Suggest TTL if not configured
+                    if not self.config.session_token_ttl:
+                        self._log_callback(
+                            f"Session token age: {age:.0f}s when stale detected - "
+                            f"consider setting session_token_ttl to {int(age * 0.9)}s",
+                            "info"
+                        )
+            else:
+                if self._log_callback:
+                    self._log_callback(f"Refreshing session token for {self.config.name}...", "debug")
+
+            upload_page_url = self.config.upload_page_url
+            if not upload_page_url:
+                # Derive upload page URL from upload endpoint
+                import re
+                base_url = re.sub(r'/[^/]*$', '', self.config.upload_endpoint)
+                upload_page_url = f"{base_url}/upload"
+
+            curl = pycurl.Curl()
+            buffer = BytesIO()
+            try:
+                curl.setopt(pycurl.URL, upload_page_url)
+                curl.setopt(pycurl.WRITEDATA, buffer)
+                curl.setopt(pycurl.TIMEOUT, 30)
+
+                # Send session cookies for authentication
+                if self.cookie_jar:
+                    cookie_str = "; ".join(f"{k}={v}" for k, v in self.cookie_jar.items())
+                    curl.setopt(pycurl.COOKIE, cookie_str)
+
+                curl.perform()
+                page_html = buffer.getvalue().decode('utf-8')
+
+                # Extract fresh sess_id
+                import re
+                match = re.search(self.config.session_id_regex, page_html)
+                if match:
+                    new_token = match.group(1)
+                    new_timestamp = time.time()
+
+                    # Thread-safe token update
+                    with self._token_lock:
+                        self.auth_token = new_token
+                        self._session_token_timestamp = new_timestamp
+
+                    if self._log_callback:
+                        token_preview = new_token[:20] if new_token else "None"
+                        self._log_callback(f"Refreshed session token: {token_preview}...", "debug")
+                else:
+                    if self._log_callback:
+                        self._log_callback(f"Failed to extract session token from upload page", "warning")
+            finally:
+                curl.close()
+
+    def _is_token_stale(self) -> bool:
+        """Check if current token is likely stale based on TTL.
+
+        Returns:
+            True if token should be refreshed proactively
+        """
+        # API keys don't expire
+        if self.config.auth_type == "api_key":
+            return False
+
+        # Check session token TTL (thread-safe read)
+        if self.config.auth_type == "session" and self.config.session_token_ttl:
+            with self._token_lock:
+                timestamp = self._session_token_timestamp
+
+            if timestamp:
+                age = time.time() - timestamp
+                if age >= self.config.session_token_ttl:
+                    if self._log_callback:
+                        self._log_callback(f"Session token expired (age: {age:.0f}s, TTL: {self.config.session_token_ttl}s)", "debug")
+                    return True
+
+        # token_login TTL is handled by TokenCache.get_token()
+        # If we get here with a token, it's still valid
+        return False
+
+    def _detect_stale_token_error(self, response_text: str, response_code: int) -> bool:
+        """Detect if response indicates stale/expired token.
+
+        Args:
+            response_text: Response body text
+            response_code: HTTP status code
+
+        Returns:
+            True if stale token detected
+        """
+        # HTTP status codes indicating auth failure
+        if response_code in [401, 403]:
+            if self._log_callback:
+                self._log_callback(f"Stale token detected: HTTP {response_code}", "debug")
+            return True
+
+        # Pattern matching (e.g., "Anti-CSRF check failed" on HTTP 200)
+        if self.config.stale_token_patterns and response_text:
+            for pattern in self.config.stale_token_patterns:
+                if re.search(pattern, response_text, re.IGNORECASE | re.DOTALL):
+                    if self._log_callback:
+                        self._log_callback(f"Stale token detected: matched pattern '{pattern}'", "debug")
+                    return True
+
+        return False
+
+    def _with_token_retry(self, operation_func, *args, **kwargs):
+        """Execute operation with automatic token refresh on failure.
+
+        Implements two-layer token validation:
+        1. Proactive: Check TTL before operation, refresh if expired
+        2. Reactive: Detect stale token errors, refresh and retry once
+
+        Args:
+            operation_func: Function to execute
+            *args: Positional arguments for operation_func
+            **kwargs: Keyword arguments for operation_func
+
+        Returns:
+            Result from operation_func
+
+        Raises:
+            pycurl.error: Network/upload errors
+            ValueError: Invalid response or configuration
+            ConnectionError: Connection failures
+            Exception: Other operation-specific errors
+        """
+        # Check if we've already retried (prevent infinite loop)
+        if kwargs.get('_retry_attempted'):
+            # Already retried once, don't retry again
+            return operation_func(*args, **kwargs)
+
+        # Layer 1: Proactive TTL check
+        if self._is_token_stale():
+            if self._log_callback:
+                self._log_callback(f"Token TTL expired, refreshing proactively before operation", "debug")
+            try:
+                self._refresh_auth_token()
+            except (pycurl.error, ConnectionError) as e:
+                # Transient network error during refresh - continue with old token
+                if self._log_callback:
+                    self._log_callback(f"Proactive token refresh failed (network error): {e}", "warning")
+            except (ValueError, KeyError) as e:
+                # Credential/configuration error - this is serious, raise it
+                if self._log_callback:
+                    self._log_callback(f"Proactive token refresh failed (credential error): {e}", "error")
+                raise
+
+        # Attempt operation
+        try:
+            return operation_func(*args, **kwargs)
+        except (pycurl.error, ConnectionError, ValueError) as e:
+            # Layer 2: Reactive error detection (only for network/auth errors)
+            error_text = str(e)
+            response_code = 0
+
+            # Try to extract HTTP code from pycurl exception
+            if isinstance(e, pycurl.error):
+                # pycurl errors are tuples (error_code, error_message)
+                if len(e.args) > 0 and isinstance(e.args[0], int):
+                    # Map pycurl error codes to HTTP codes if possible
+                    # For HTTP response codes, check if "401" or "403" is in message
+                    pass
+
+            # Fallback: extract from error message text
+            if "401" in error_text or "Unauthorized" in error_text:
+                response_code = 401
+            elif "403" in error_text or "Forbidden" in error_text:
+                response_code = 403
+
+            # Check if this is a stale token error
+            if self._detect_stale_token_error(error_text, response_code):
+                if self._log_callback:
+                    self._log_callback(f"Stale token detected in error response, refreshing and retrying...", "debug")
+
+                # Refresh token
+                try:
+                    self._refresh_auth_token()
+                except (pycurl.error, ConnectionError, ValueError, OSError) as refresh_error:
+                    # If refresh fails (network/auth error), raise the original error
+                    if self._log_callback:
+                        self._log_callback(f"Token refresh failed: {refresh_error}", "warning")
+                    raise e
+                # Any other exception (AttributeError, TypeError, etc.) propagates immediately
+
+                # Retry operation ONCE (mark as retried to prevent infinite loop)
+                if self._log_callback:
+                    self._log_callback(f"Retrying operation with refreshed token...", "debug")
+                kwargs['_retry_attempted'] = True
+                return operation_func(*args, **kwargs)
+            else:
+                # Not a token error, re-raise original exception
+                raise
+
+    def _extract_from_json(self, data: Any, path: Optional[List[Union[str, int]]]) -> Any:
         """Extract value from JSON using path (supports dict keys and array indices).
 
         Args:
             data: JSON data
-            path: List of keys/indices to traverse
+            path: List of keys/indices to traverse (can be None)
 
         Returns:
             Extracted value or None
         """
+        if path is None:
+            return None
         result = data
         for key in path:
             if isinstance(result, dict):
@@ -427,29 +740,9 @@ class FileHostClient:
 
         if self._log_callback: self._log_callback(f"Uploading {file_path.name} to {self.config.name}...", "info")
 
-        # Handle multi-step uploads (like RapidGator)
+        # Handle multi-step uploads (like RapidGator) with automatic token retry
         if self.config.upload_init_url:
-            try:
-                return self._upload_multistep(file_path)
-            except Exception as e:
-                # If we get a 401 error and we're using token auth, try refreshing the token
-                if "401" in str(e) and self.config.auth_type == "token_login" and self.host_id and self.credentials:
-                    if self._log_callback: self._log_callback(f"Got 401 error, refreshing token and retrying...", "warning")
-
-                    # Clear cached token
-                    from src.network.token_cache import get_token_cache
-                    token_cache = get_token_cache()
-                    token_cache.clear_token(self.host_id)
-
-                    # Login fresh
-                    self.auth_token = self._login_token_based(self.credentials)
-                    if self.auth_token:
-                        token_cache.store_token(self.host_id, self.auth_token, self.config.token_ttl)
-
-                    # Retry upload
-                    return self._upload_multistep(file_path)
-                else:
-                    raise
+            return self._with_token_retry(self._upload_multistep, file_path)
 
         # Standard upload
         return self._upload_standard(file_path)
@@ -539,9 +832,13 @@ class FileHostClient:
                         match = re.search(self.config.session_id_regex, page_html)
                         if match:
                             sess_id = match.group(1)
+                            # Store in auth_token for reuse in delete and other operations
+                            self.auth_token = sess_id
+                            # Track when this token was acquired for TTL management
+                            self._session_token_timestamp = time.time()
                             if self._log_callback: self._log_callback(f"Extracted session ID: {sess_id[:20]}...", "debug")
                         else:
-                            if self._log_callback: self._log_callback(f"Warning: Could not extract session ID from upload page", "warning")
+                            if self._log_callback: self._log_callback(f"Could not extract session ID from upload page", "debug")
                     finally:
                         page_curl.close()
 
@@ -559,7 +856,7 @@ class FileHostClient:
                 form_fields = [
                     (self.config.file_field, (
                         pycurl.FORM_FILE, str(file_path),
-                        pycurl.FORM_FILENAME, file_path.name
+                        pycurl.FORM_FILENAME, self._get_clean_filename(file_path.name)
                     )),
                     *[(k, v) for k, v in self.config.extra_fields.items()]
                 ]
@@ -582,11 +879,12 @@ class FileHostClient:
         finally:
             curl.close()
 
-    def _upload_multistep(self, file_path: Path) -> Dict[str, Any]:
+    def _upload_multistep(self, file_path: Path, **kwargs) -> Dict[str, Any]:
         """Perform multi-step upload (init → upload → poll).
 
         Args:
             file_path: Path to file
+            **kwargs: Additional arguments (including _retry_attempted flag)
 
         Returns:
             Upload result dictionary
@@ -596,31 +894,50 @@ class FileHostClient:
         # Step 1: Calculate hash if required
         file_hash = None
         if self.config.require_file_hash:
-            log("Calculating file hash...", "debug")
             file_hash = self._calculate_file_hash(file_path)
+            if self._log_callback: self._log_callback(f"Calculated file hash for {file_path.name}: {file_hash}", "debug")
 
         # Step 2: Initialize upload
         init_url = self.config.upload_init_url
-        replacements = {
-            "filename": file_path.name,
-            "size": str(file_size),
-            "token": self.auth_token or "",
-            "hash": file_hash or ""
-        }
 
-        for key, value in replacements.items():
-            init_url = init_url.replace(f"{{{key}}}", value)
-
-        log("Initializing upload...", "debug")
+        if self._log_callback: self._log_callback(f"Initializing upload of {file_path.name}...", "debug")
 
         curl = pycurl.Curl()
         response_buffer = BytesIO()
 
         try:
-            curl.setopt(pycurl.URL, init_url)
-            curl.setopt(pycurl.WRITEDATA, response_buffer)
-            curl.setopt(pycurl.TIMEOUT, 30)
-            curl.perform()
+            # Check if we need POST with JSON body (K2S-style) or GET with query params (RapidGator-style)
+            if self.config.init_method == "POST" and self.config.init_body_json:
+                # POST with JSON body (K2S-style)
+                body = {
+                    "access_token": self.auth_token or "",
+                    "parent_id": "/"  # Default to root folder
+                }
+                body_json = json.dumps(body)
+
+                curl.setopt(pycurl.URL, init_url)
+                curl.setopt(pycurl.POST, 1)
+                curl.setopt(pycurl.POSTFIELDS, body_json)
+                curl.setopt(pycurl.HTTPHEADER, ["Content-Type: application/json"])
+                curl.setopt(pycurl.WRITEDATA, response_buffer)
+                curl.setopt(pycurl.TIMEOUT, 30)
+                curl.perform()
+            else:
+                # GET with URL template replacement (RapidGator-style)
+                replacements = {
+                    "filename": self._get_clean_filename(file_path.name),
+                    "size": str(file_size),
+                    "token": self.auth_token or "",
+                    "hash": file_hash or ""
+                }
+
+                for key, value in replacements.items():
+                    init_url = init_url.replace(f"{{{key}}}", value)
+
+                curl.setopt(pycurl.URL, init_url)
+                curl.setopt(pycurl.WRITEDATA, response_buffer)
+                curl.setopt(pycurl.TIMEOUT, 30)
+                curl.perform()
 
             response_code = curl.getinfo(pycurl.RESPONSE_CODE)
 
@@ -628,7 +945,7 @@ class FileHostClient:
             response_text = response_buffer.getvalue().decode('utf-8')
             try:
                 init_data = json.loads(response_text)
-            except:
+            except json.JSONDecodeError:
                 init_data = {}
 
             if response_code != 200:
@@ -639,47 +956,61 @@ class FileHostClient:
                                self._extract_from_json(init_data, ["error"]) or \
                                response_text[:200]  # First 200 chars of response
 
-                raise Exception(f"Upload init failed (HTTP {response_code}, API status {api_status}): {error_details}")
+                raise Exception(f"Upload init failed for {file_path.name} (HTTP {response_code}, API status {api_status}): {error_details}")
 
-            # Check API status even if HTTP was 200
+            # Check API status even if HTTP was 200 (support both integer 200 and string "success")
             api_status = init_data.get("status")
-            if api_status and api_status != 200:
+            if api_status and api_status not in [200, "success"]:
                 error_msg = self._extract_from_json(init_data, ["response", "details"]) or \
                            self._extract_from_json(init_data, ["response", "msg"]) or \
                            f"API returned status {api_status}"
-                raise Exception(f"Upload initialization failed: {error_msg}")
+                raise Exception(f"Upload initialization failed for {file_path.name}: {error_msg}")
 
             # Extract upload URL and ID
             upload_url = self._extract_from_json(init_data, self.config.upload_url_path)
             upload_id = self._extract_from_json(init_data, self.config.upload_id_path)
             upload_state = self._extract_from_json(init_data, ["response", "upload", "state"])
 
+            # Extract dynamic file field (K2S-specific)
+            file_field = self.config.file_field  # Default from config
+            if self.config.file_field_path:
+                dynamic_field = self._extract_from_json(init_data, self.config.file_field_path)
+                if dynamic_field:
+                    file_field = dynamic_field
+
+            # Extract form data (K2S-specific: ajax, params, signature)
+            form_data = {}
+            if self.config.form_data_path:
+                form_data = self._extract_from_json(init_data, self.config.form_data_path) or {}
+
             # Check for deduplication (file already exists)
             if upload_state == 2 or (upload_url is None and upload_state is not None):
                 existing_url = self._extract_from_json(init_data, ["response", "upload", "file", "url"])
                 if existing_url:
-                    log("File already exists on server (deduplication)", "info")
+                    if self._log_callback: self._log_callback("File already exists on server (deduplication)", "warning")
+                    # Extract file_id from dedup response
+                    file_id = self._extract_from_json(init_data, self.config.file_id_path) or upload_id
                     return {
                         "status": "success",
                         "url": existing_url,
                         "upload_id": upload_id,
+                        "file_id": file_id,
                         "deduplication": True,
                         "raw_response": init_data
                     }
 
             if not upload_url:
-                raise Exception("Failed to get upload URL from initialization response")
+                raise Exception(f"Failed to get upload URL from initialization response for {file_path.name}")
 
-            if not upload_id:
-                raise Exception("Failed to get upload ID from initialization response")
-
-            if self._log_callback: self._log_callback(f"Got upload ID: {upload_id}", "debug")
+            # upload_id is optional (K2S returns it in upload response, not init response)
+            if upload_id and self._log_callback:
+                self._log_callback(f"Got upload ID for {file_path.name}: {upload_id}", "debug")
 
         finally:
             curl.close()
 
         # Step 3: Upload file
-        log("Uploading file...", "debug")
+        if self._log_callback: self._log_callback("Uploading {file_path.name}...", "debug")
 
         curl = pycurl.Curl()
         response_buffer = BytesIO()
@@ -692,25 +1023,39 @@ class FileHostClient:
                 curl.setopt(pycurl.NOPROGRESS, False)
                 curl.setopt(pycurl.XFERINFOFUNCTION, self._xferinfo_callback)
 
-                curl.setopt(pycurl.HTTPPOST, [
-                    (self.config.file_field, (
+                # Build form fields: file + form_data (ajax, params, signature for K2S)
+                form_fields: List[Any] = [
+                    (file_field, (
                         pycurl.FORM_FILE, str(file_path),
-                        pycurl.FORM_FILENAME, file_path.name
+                        pycurl.FORM_FILENAME, self._get_clean_filename(file_path.name)
                     ))
-                ])
+                ]
+
+                # Add form_data fields if present (K2S: ajax, params, signature)
+                for key, value in form_data.items():
+                    form_fields.append((key, str(value)))
+
+                curl.setopt(pycurl.HTTPPOST, form_fields)
 
                 curl.perform()
 
                 response_code = curl.getinfo(pycurl.RESPONSE_CODE)
                 if response_code not in [200, 201]:
-                    raise Exception(f"File upload failed with status {response_code}")
+                    raise Exception(f"File upload for {file_path.name} failed with status {response_code}")
+
+                # Parse upload response (K2S returns URL directly here)
+                upload_response_text = response_buffer.getvalue().decode('utf-8')
+                try:
+                    upload_data = json.loads(upload_response_text)
+                except json.JSONDecodeError:
+                    upload_data = {}
 
         finally:
             curl.close()
 
         # Step 4: Poll for completion
         if self.config.upload_poll_url:
-            log("Waiting for upload processing...", "debug")
+            if self._log_callback: self._log_callback("Waiting for upload processing for {file_path.name}...", "debug")
             time.sleep(self.config.upload_poll_delay)
 
             poll_url = self.config.upload_poll_url.replace("{upload_id}", upload_id).replace("{token}", self.auth_token or "")
@@ -722,22 +1067,24 @@ class FileHostClient:
                 try:
                     curl.setopt(pycurl.URL, poll_url)
                     curl.setopt(pycurl.WRITEDATA, response_buffer)
-                    curl.setopt(pycurl.TIMEOUT, 30)
+                    curl.setopt(pycurl.TIMEOUT, 120)
                     curl.perform()
 
                     poll_data = json.loads(response_buffer.getvalue().decode('utf-8'))
 
-                    if self._log_callback: self._log_callback(f"Poll attempt {attempt + 1}/{self.config.upload_poll_retries}, response: {json.dumps(poll_data)[:200]}", "debug")
+                    if self._log_callback: self._log_callback(f"{file_path.name}: Poll attempt {attempt + 1}/{self.config.upload_poll_retries}, response: {json.dumps(poll_data)[:200]}", "debug")
 
                     # Check for final URL
                     final_url = self._extract_from_json(poll_data, self.config.link_path)
                     if final_url:
-                        log("Upload complete!", "info")
+                        if self._log_callback: self._log_callback(f"{file_path.name}: Upload complete!", "info")
+                        # Extract file_id from poll response
+                        file_id = self._extract_from_json(poll_data, self.config.file_id_path) or upload_id
                         return {
                             "status": "success",
                             "url": final_url,
                             "upload_id": upload_id,
-                            "file_id": upload_id,
+                            "file_id": file_id,
                             "raw_response": poll_data
                         }
 
@@ -751,7 +1098,7 @@ class FileHostClient:
                             alternate_url = self._extract_from_json(poll_data, ["response", "upload", "file_url"])
 
                         if alternate_url:
-                            if self._log_callback: self._log_callback(f"Upload complete (state 2, alternate path)!", "info")
+                            if self._log_callback: self._log_callback(f"{file_path.name}: Upload complete (state 2, alternate path)!", "info")
                             return {
                                 "status": "success",
                                 "url": alternate_url,
@@ -768,15 +1115,22 @@ class FileHostClient:
                     curl.close()
 
             # If we got here, polling timed out - log the last response
-            if self._log_callback: self._log_callback(f"Upload polling timeout. Last response: {json.dumps(poll_data) if 'poll_data' in locals() else 'No response'}", "warning")
-            raise Exception(f"Upload processing timeout - file may still be uploading (got upload_id: {upload_id})")
+            if self._log_callback: self._log_callback(f"{file_path.name}: Upload polling timeout. Last response: {json.dumps(poll_data) if 'poll_data' in locals() else 'No response'}", "warning")
+            raise Exception(f"{file_path.name}: Upload processing timeout - file may still be uploading (got upload_id: {upload_id})")
 
-        # No polling configured
+        # No polling configured - parse upload response directly (K2S-style)
+        # Extract URL from upload response
+        url = self._extract_from_json(upload_data, self.config.link_path) or ""
+
+        # Extract file_id from upload response using configured path
+        file_id = self._extract_from_json(upload_data, self.config.file_id_path) or upload_id
+
         return {
             "status": "success",
-            "url": "",
+            "url": url,
             "upload_id": upload_id,
-            "raw_response": init_data
+            "file_id": file_id,
+            "raw_response": upload_data
         }
 
     def _get_upload_server(self) -> str:
@@ -867,6 +1221,12 @@ class FileHostClient:
                         if match and match.groups():
                             result["url"] = self.config.link_prefix + match.group(1) + self.config.link_suffix
 
+            # Extract file_id for delete operations
+            if self.config.file_id_path:
+                file_id = self._extract_from_json(data, self.config.file_id_path)
+                if file_id:
+                    result["file_id"] = str(file_id)
+
         elif self.config.response_type == "text":
             result["raw_response"] = response_text
 
@@ -875,6 +1235,9 @@ class FileHostClient:
                 if match:
                     extracted = match.group(1) if match.groups() else match.group(0)
                     result["url"] = self.config.link_prefix + extracted + self.config.link_suffix
+                    # For text responses with regex, use the extracted value as file_id
+                    # This allows delete operations to work with session-based hosts
+                    result["file_id"] = extracted
             else:
                 result["url"] = response_text.strip()
 
@@ -884,8 +1247,32 @@ class FileHostClient:
 
         return result
 
+    def _is_same_origin(self, url1: str, url2: str) -> bool:
+        """Check if two URLs have the same origin (scheme + domain).
+
+        Used for validating redirects to prevent CSRF attacks.
+
+        Args:
+            url1: First URL
+            url2: Second URL
+
+        Returns:
+            True if same origin, False otherwise
+        """
+        from urllib.parse import urlparse
+        try:
+            parsed1 = urlparse(url1)
+            parsed2 = urlparse(url2)
+            return (parsed1.scheme == parsed2.scheme and
+                    parsed1.netloc == parsed2.netloc)
+        except Exception:
+            # If URL parsing fails, assume different origin for safety
+            return False
+
     def delete_file(self, file_id: str) -> Dict[str, Any]:
         """Delete a file from the host.
+
+        Automatically refreshes stale tokens and retries on auth failures.
 
         Args:
             file_id: File ID to delete
@@ -897,198 +1284,300 @@ class FileHostClient:
             Exception: If delete fails or not supported
         """
         if not self.config.delete_url:
-            raise Exception(f"{self.config.name} does not support file deletion")
+            raise ValueError(f"{self.config.name} does not support file deletion")
 
-        # Build delete URL with parameters
-        delete_url = self.config.delete_url
-        replacements = {
-            "file_id": file_id,
-            "token": self.auth_token or ""
-        }
+        if self._log_callback:
+            self._log_callback(f"Deleting file {file_id} from {self.config.name}...", "debug")
 
-        for key, value in replacements.items():
-            delete_url = delete_url.replace(f"{{{key}}}", value)
+        def _delete_impl(**kwargs) -> Dict[str, Any]:
+            """Core delete implementation (wrapped for retry)."""
+            curl = pycurl.Curl()
+            response_buffer = BytesIO()
 
-        if self._log_callback: self._log_callback(f"Deleting file {file_id} from {self.config.name}...", "debug")
+            try:
+                # Initialize delete_url (needed for redirect validation)
+                delete_url = self.config.delete_url or ""
 
-        curl = pycurl.Curl()
-        response_buffer = BytesIO()
+                # Check if we need POST with JSON body (K2S-style)
+                if self.config.delete_body_json:
+                    body = {
+                        "ids": [file_id],
+                        "access_token": self.auth_token or ""
+                    }
+                    body_json = json.dumps(body)
 
-        try:
-            curl.setopt(pycurl.URL, delete_url)
-            curl.setopt(pycurl.WRITEDATA, response_buffer)
-            curl.setopt(pycurl.TIMEOUT, 30)
+                    curl.setopt(pycurl.URL, self.config.delete_url)
+                    curl.setopt(pycurl.POST, 1)
+                    curl.setopt(pycurl.POSTFIELDS, body_json)
+                    curl.setopt(pycurl.HTTPHEADER, ["Content-Type: application/json"])
+                    curl.setopt(pycurl.WRITEDATA, response_buffer)
+                    curl.setopt(pycurl.TIMEOUT, 30)
 
-            if self.config.delete_method == "DELETE":
-                curl.setopt(pycurl.CUSTOMREQUEST, "DELETE")
+                    # Send session cookies for session-based auth
+                    if self.config.auth_type == "session" and self.cookie_jar:
+                        cookie_str = "; ".join(f"{k}={v}" for k, v in self.cookie_jar.items())
+                        curl.setopt(pycurl.COOKIE, cookie_str)
 
-            curl.perform()
-            response_code = curl.getinfo(pycurl.RESPONSE_CODE)
+                    curl.perform()
+                else:
+                    # Traditional GET/DELETE/POST with URL template replacement
+                    replacements = {
+                        "file_id": file_id,
+                        "token": self.auth_token or ""
+                    }
 
-            if response_code not in [200, 204]:
-                raise Exception(f"Delete failed with status {response_code}")
+                    # Check if we need POST with form parameters
+                    if self.config.delete_method == "POST" and self.config.delete_params:
+                        # POST with form data (for hosts that need sess_id as POST param)
+                        from urllib.parse import urlencode
 
-            response_text = response_buffer.getvalue().decode('utf-8')
+                        known_params = {"del_code", "sess_id", "file_id"}
+                        form_data = {}
+                        for param in self.config.delete_params:
+                            if param not in known_params:
+                                if self._log_callback:
+                                    self._log_callback(f"Unknown delete parameter '{param}' in config - skipping", "warning")
+                                continue
 
-            if self._log_callback: self._log_callback(f"Successfully deleted file {file_id} from {self.config.name}", "info")
+                            if param == "del_code":
+                                form_data["del_code"] = file_id
+                            elif param == "sess_id":
+                                form_data["sess_id"] = self.auth_token or ""
+                            elif param == "file_id":
+                                form_data["file_id"] = file_id
 
-            return {
-                "status": "success",
-                "file_id": file_id,
-                "raw_response": response_text
-            }
+                        post_data = urlencode(form_data)
 
-        finally:
-            curl.close()
+                        curl.setopt(pycurl.URL, delete_url)
+                        curl.setopt(pycurl.POST, 1)
+                        curl.setopt(pycurl.POSTFIELDS, post_data)
+                        curl.setopt(pycurl.WRITEDATA, response_buffer)
+                        curl.setopt(pycurl.TIMEOUT, 30)
+                    else:
+                        # GET/DELETE with URL template replacement
+                        for key, value in replacements.items():
+                            delete_url = delete_url.replace(f"{{{key}}}", value)
+
+                        curl.setopt(pycurl.URL, delete_url)
+                        curl.setopt(pycurl.WRITEDATA, response_buffer)
+                        curl.setopt(pycurl.TIMEOUT, 30)
+
+                        if self.config.delete_method == "DELETE":
+                            curl.setopt(pycurl.CUSTOMREQUEST, "DELETE")
+
+                    # Send session cookies for session-based auth
+                    if self.config.auth_type == "session" and self.cookie_jar:
+                        cookie_str = "; ".join(f"{k}={v}" for k, v in self.cookie_jar.items())
+                        curl.setopt(pycurl.COOKIE, cookie_str)
+
+                    curl.perform()
+
+                response_code = curl.getinfo(pycurl.RESPONSE_CODE)
+                response_text = response_buffer.getvalue().decode('utf-8')
+
+                # Check for stale token errors based on HTTP status and config
+                if response_code in [200, 204]:
+                    # Direct success - check for stale token patterns if configured
+                    if self.config.check_body_on_success and self._detect_stale_token_error(response_text, response_code):
+                        raise ValueError(f"Stale token error: {response_text[:200]}")
+                elif response_code in [301, 302]:
+                    # Redirect - validate it's same-origin to prevent CSRF attacks
+                    final_url = curl.getinfo(pycurl.EFFECTIVE_URL)
+                    if not self._is_same_origin(delete_url, final_url):
+                        raise ValueError(f"Delete redirected to different origin: {final_url}")
+                    # Check for stale token patterns even on redirect
+                    if self.config.check_body_on_success and self._detect_stale_token_error(response_text, response_code):
+                        raise ValueError(f"Stale token error: {response_text[:200]}")
+                else:
+                    # Non-success status - always check for stale token errors
+                    if self._detect_stale_token_error(response_text, response_code):
+                        raise ValueError(f"Stale token error: {response_text[:200]}")
+                    raise ValueError(f"Delete failed with status {response_code}")
+
+                if self._log_callback:
+                    self._log_callback(f"Successfully deleted file {file_id} from {self.config.name}", "info")
+
+                return {
+                    "status": "success",
+                    "file_id": file_id,
+                    "raw_response": response_text
+                }
+
+            finally:
+                curl.close()
+
+        # Wrap delete operation with automatic token refresh/retry
+        return self._with_token_retry(_delete_impl)
 
     def get_user_info(self) -> Dict[str, Any]:
         """Get user info including storage and premium status.
+
+        Automatically refreshes stale tokens and retries on auth failures.
 
         Returns:
             Dictionary with user info
 
         Raises:
-            Exception: If user info retrieval fails or not supported
+            ValueError: If user info retrieval fails or not supported
         """
         if not self.config.user_info_url:
-            raise Exception(f"{self.config.name} does not support user info retrieval")
+            raise ValueError(f"{self.config.name} does not support user info retrieval")
 
-        # Check authentication based on auth type
-        if self.config.auth_type == "token_login":
-            if not self.auth_token:
-                raise Exception("Authentication token required for user info")
-            # Build user info URL with token
-            info_url = self.config.user_info_url.replace("{token}", self.auth_token)
-        elif self.config.auth_type == "session":
-            if not self.cookie_jar:
-                raise Exception("Session cookies required for user info")
-            # Use URL as-is (no token placeholder)
-            info_url = self.config.user_info_url
-        else:
-            raise Exception(f"Unsupported auth type for user info: {self.config.auth_type}")
+        if self._log_callback:
+            self._log_callback(f"Retrieving user info from {self.config.name}...", "debug")
 
-        if self._log_callback: self._log_callback(f"Retrieving user info from {self.config.name}...", "debug")
-
-        curl = pycurl.Curl()
-        response_buffer = BytesIO()
-
-        try:
-            curl.setopt(pycurl.URL, info_url)
-            curl.setopt(pycurl.WRITEDATA, response_buffer)
-            curl.setopt(pycurl.TIMEOUT, 30)
-
-            # Send session cookies for session-based auth
-            if self.config.auth_type == "session" and self.cookie_jar:
-                cookie_str = "; ".join(f"{k}={v}" for k, v in self.cookie_jar.items())
-                curl.setopt(pycurl.COOKIE, cookie_str)
-
-            curl.perform()
-
-            response_code = curl.getinfo(pycurl.RESPONSE_CODE)
-
-            if response_code != 200:
-                # If we get a 401 error and we're using token auth, try refreshing the token
-                if response_code == 401 and self.config.auth_type == "token_login" and self.host_id and self.credentials:
-                    curl.close()
-                    if self._log_callback: self._log_callback(f"Got 401 error, refreshing token and retrying...", "warning")
-
-                    # Clear cached token
-                    from src.network.token_cache import get_token_cache
-                    token_cache = get_token_cache()
-                    token_cache.clear_token(self.host_id)
-
-                    # Login fresh
-                    self.auth_token = self._login_token_based(self.credentials)
-                    if self.auth_token:
-                        token_cache.store_token(self.host_id, self.auth_token, self.config.token_ttl)
-
-                    # Retry with new token
-                    info_url = self.config.user_info_url.replace("{token}", self.auth_token)
-                    curl = pycurl.Curl()
-                    response_buffer = BytesIO()
-
-                    curl.setopt(pycurl.URL, info_url)
-                    curl.setopt(pycurl.WRITEDATA, response_buffer)
-                    curl.setopt(pycurl.TIMEOUT, 30)
-                    curl.perform()
-
-                    response_code = curl.getinfo(pycurl.RESPONSE_CODE)
-
-                    if response_code != 200:
-                        raise Exception(f"User info retrieval failed with status {response_code} (after token refresh)")
-                else:
-                    raise Exception(f"User info retrieval failed with status {response_code}")
-
-            response_text = response_buffer.getvalue().decode('utf-8')
-
-            # Check if we need HTML parsing (storage_regex) or JSON parsing
-            if self.config.storage_regex:
-                # HTML response - extract storage using regex
-                result = {"raw_response": "HTML response (not logged)"}
-
-                if self._log_callback: self._log_callback(f"Parsing HTML for storage (response length: {len(response_text)} bytes)", "debug")
-
-                match = re.search(self.config.storage_regex, response_text, re.DOTALL)
-                if match:
-                    # Regex should capture: (used, total) in GB
-                    # Example: "566.87 of 10240 GB" -> groups (566.87, 10240)
-                    used_gb = float(match.group(1))
-                    total_gb = float(match.group(2))
-
-                    # Convert to bytes
-                    total_bytes = int(total_gb * 1024 * 1024 * 1024)
-                    used_bytes = int(used_gb * 1024 * 1024 * 1024)
-                    left_bytes = total_bytes - used_bytes
-
-                    result['storage_total'] = total_bytes
-                    result['storage_used'] = used_bytes
-                    result['storage_left'] = left_bytes
-
-                    if self._log_callback: self._log_callback(
-                        f"Extracted storage from HTML: {used_gb} of {total_gb} GB (left: {(left_bytes / 1024 / 1024 / 1024):.2f} GB)",
-                        "debug"
-                    )
-                else:
-                    # Regex didn't match - log entire HTML response for debugging
-                    # Escape newlines for log viewer auto-expand (replace \n with literal \\n)
-                    response_escaped = response_text.replace('\n', '\\n').replace('\r', '')
-                    if self._log_callback: self._log_callback(
-                        f"Storage regex did not match HTML response (full response): {response_escaped}",
-                        "warning"
-                    )
+        def _get_user_info_impl(**kwargs) -> Dict[str, Any]:
+            """Core user info implementation (wrapped for retry)."""
+            # Check authentication based on auth type (must be inside for token refresh)
+            if self.config.auth_type == "api_key":
+                if not self.auth_token:
+                    raise ValueError("API key required for user info")
+                info_url = self.config.user_info_url
+            elif self.config.auth_type == "token_login":
+                # Thread-safe token read
+                with self._token_lock:
+                    token = self.auth_token
+                if not token:
+                    raise ValueError("Authentication token required for user info")
+                # Build user info URL with token (must use fresh token after refresh)
+                info_url = self.config.user_info_url.replace("{token}", token)
+            elif self.config.auth_type == "session":
+                if not self.cookie_jar:
+                    raise ValueError("Session cookies required for user info")
+                # Use URL as-is (no token placeholder)
+                info_url = self.config.user_info_url
             else:
-                # JSON response - extract using JSON paths
-                data = json.loads(response_text)
-                result = {"raw_response": data}
+                raise ValueError(f"Unsupported auth type for user info: {self.config.auth_type}")
 
-                if self.config.storage_total_path:
-                    result['storage_total'] = self._extract_from_json(data, self.config.storage_total_path)
-                    log(
-                        f"DEBUG: Extracted storage_total={result.get('storage_total')} using path {self.config.storage_total_path}",
-                        level="debug",
-                        category="file_hosts"
-                    )
+            curl = pycurl.Curl()
+            response_buffer = BytesIO()
 
-                if self.config.storage_left_path:
-                    result['storage_left'] = self._extract_from_json(data, self.config.storage_left_path)
-                    log(
-                        f"DEBUG: Extracted storage_left={result.get('storage_left')} using path {self.config.storage_left_path}",
-                        level="debug",
-                        category="file_hosts"
-                    )
+            try:
+                curl.setopt(pycurl.URL, info_url)
+                curl.setopt(pycurl.WRITEDATA, response_buffer)
+                curl.setopt(pycurl.TIMEOUT, 30)
 
-                if self.config.storage_used_path:
-                    result['storage_used'] = self._extract_from_json(data, self.config.storage_used_path)
+                # Check if we need POST with JSON body (K2S-style)
+                if self.config.user_info_method == "POST" and self.config.user_info_body_json:
+                    with self._token_lock:
+                        token = self.auth_token
+                    body = {"access_token": token}
+                    body_json = json.dumps(body)
+                    curl.setopt(pycurl.POST, 1)
+                    curl.setopt(pycurl.POSTFIELDS, body_json)
+                    curl.setopt(pycurl.HTTPHEADER, ["Content-Type: application/json"])
+                elif self.config.auth_type == "session" and self.cookie_jar:
+                    # Send session cookies for session-based auth
+                    cookie_str = "; ".join(f"{k}={v}" for k, v in self.cookie_jar.items())
+                    curl.setopt(pycurl.COOKIE, cookie_str)
 
-                if self.config.premium_status_path:
-                    result['is_premium'] = self._extract_from_json(data, self.config.premium_status_path)
+                curl.perform()
 
-            if self._log_callback: self._log_callback(f"Successfully retrieved user info from {self.config.name}", "info")
+                response_code = curl.getinfo(pycurl.RESPONSE_CODE)
 
-            return result
+                # Raise ValueError on auth errors (caught by _with_token_retry)
+                if response_code == 401:
+                    raise ValueError(f"Unauthorized: Authentication failed (401)")
+                elif response_code == 403:
+                    raise ValueError(f"Forbidden: Access denied (403)")
+                elif response_code != 200:
+                    raise ValueError(f"User info retrieval failed with status {response_code}")
 
-        finally:
-            curl.close()
+                response_text = response_buffer.getvalue().decode('utf-8')
+
+                # For JSON responses, check API status field (K2S-style)
+                if not self.config.storage_regex:
+                    try:
+                        data = json.loads(response_text)
+                        api_status = data.get("status")
+                        if api_status:
+                            # Accept common success indicators
+                            success_values = ["success", "ok", "OK", "200", 200, "true", True]
+                            if api_status not in success_values:
+                                error_msg = data.get("message", "Unknown API error")
+                                raise ValueError(f"API returned status '{api_status}': {error_msg}")
+                    except json.JSONDecodeError:
+                        pass  # Not JSON, will be handled below
+
+                # Check if we need HTML parsing (storage_regex) or JSON parsing
+                if self.config.storage_regex:
+                    # HTML response - extract storage using regex
+                    result: Dict[str, Any] = {"raw_response": "HTML response (not logged)"}
+
+                    if self._log_callback: self._log_callback(f"Parsing HTML for storage (response length: {len(response_text)} bytes)", "debug")
+
+                    match = re.search(self.config.storage_regex, response_text, re.DOTALL)
+                    if match:
+                        # Regex should capture: (used, total) in GB
+                        # Example: "566.87 of 10240 GB" -> groups (566.87, 10240)
+                        used_gb = float(match.group(1))
+                        total_gb = float(match.group(2))
+
+                        # Convert to bytes
+                        total_bytes = int(total_gb * 1024 * 1024 * 1024)
+                        used_bytes = int(used_gb * 1024 * 1024 * 1024)
+                        left_bytes = total_bytes - used_bytes
+
+                        result['storage_total'] = total_bytes
+                        result['storage_used'] = used_bytes
+                        result['storage_left'] = left_bytes
+
+                        if self._log_callback: self._log_callback(
+                            f"Extracted storage from HTML: {used_gb} of {total_gb} GB (left: {(left_bytes / 1024 / 1024 / 1024):.2f} GB)",
+                            "debug"
+                        )
+                    else:
+                        # Regex didn't match - log entire HTML response for debugging
+                        # Escape newlines for log viewer auto-expand (replace \n with literal \\n)
+                        response_escaped = response_text.replace('\n', '\\n').replace('\r', '')
+                        if self._log_callback: self._log_callback(
+                            f"Storage regex did not match HTML response (full response): {response_escaped}",
+                            "warning"
+                        )
+                else:
+                    # JSON response - extract using JSON paths
+                    data = json.loads(response_text)
+                    result = {"raw_response": data}
+
+                    if self.config.storage_total_path:
+                        result['storage_total'] = self._extract_from_json(data, self.config.storage_total_path)
+                        if self._log_callback: self._log_callback(
+                            f"Extracted storage_total={result.get('storage_total')} using path {self.config.storage_total_path}",
+                            "debug" )
+
+                    if self.config.storage_left_path:
+                        result['storage_left'] = self._extract_from_json(data, self.config.storage_left_path)
+                        if self._log_callback: self._log_callback(
+                            f"Extracted storage_left={result.get('storage_left')} using path {self.config.storage_left_path}",
+                            "debug" )
+
+                    if self.config.storage_used_path:
+                        result['storage_used'] = self._extract_from_json(data, self.config.storage_used_path)
+
+                    if self.config.premium_status_path:
+                        result['is_premium'] = self._extract_from_json(data, self.config.premium_status_path)
+
+                if self._log_callback: self._log_callback(f"Successfully retrieved user info from {self.config.name}", "debug")
+
+                return result
+
+            finally:
+                curl.close()
+
+        # Wrap user info operation with automatic token refresh/retry
+        return self._with_token_retry(_get_user_info_impl)
+
+    def get_session_state(self) -> Dict[str, Any]:
+        """Extract current session state for persistence by worker.
+
+        Returns:
+            Dictionary with cookies, token, timestamp for worker to persist
+        """
+        return {
+            'cookies': self.cookie_jar.copy(),
+            'token': self.auth_token,
+            'timestamp': self._session_token_timestamp
+        }
 
     def test_credentials(self) -> Dict[str, Any]:
         """Test if credentials are valid.
@@ -1119,7 +1608,7 @@ class FileHostClient:
                     user_info = self.get_user_info()
                     return {
                         "success": True,
-                        "message": "Credentials validated successfully",
+                        "message": "Successfully validated credentials",
                         "user_info": user_info
                     }
                 else:
@@ -1168,7 +1657,8 @@ class FileHostClient:
             result = self.upload_file(test_zip_path)
 
             if result.get('status') == 'success':
-                file_id = result.get('upload_id') or result.get('file_id')
+                # Use proper file_id extraction (consistent with upload flow)
+                file_id = result.get('file_id') or result.get('upload_id')
                 download_url = result.get('url', '')
 
                 # Cleanup: delete the test file if requested and delete is supported

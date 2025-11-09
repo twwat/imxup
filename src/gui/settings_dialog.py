@@ -164,7 +164,7 @@ class HostTestDialog(QDialog):
         self.close_btn.setVisible(False)
         layout.addWidget(self.close_btn)
 
-    def update_test_status(self, test_id: str, status: str, message: str = None):
+    def update_test_status(self, test_id: str, status: str, message: Optional[str] = None):
         """Update status of a test
 
         Args:
@@ -1245,7 +1245,7 @@ class ComprehensiveSettingsDialog(QDialog):
         self.avg_mean_radio.toggled.connect(lambda: self.mark_tab_dirty(4))
         self.avg_median_radio.toggled.connect(lambda: self.mark_tab_dirty(4))
         
-        self.tab_widget.addTab(scanning_widget, "Image Scanning")
+        self.tab_widget.addTab(scanning_widget, "Image Scan")
 
     def setup_external_apps_tab(self):
         """Setup the External Apps tab for running external programs on gallery events"""
@@ -2568,20 +2568,14 @@ class ComprehensiveSettingsDialog(QDialog):
             # Load per-host settings
             config_manager = get_config_manager()
             for host_id in config_manager.hosts.keys():
-                host_settings = {
-                    'enabled': False,
-                    'credentials': '',
-                    'trigger_on_added': False,
-                    'trigger_on_started': False,
-                    'trigger_on_completed': False
-                }
+                # Use new API for layered config (INI → JSON defaults → hardcoded)
+                from src.core.file_host_config import get_file_host_setting
 
-                # Load from INI (enabled state and triggers)
-                if 'FILE_HOSTS' in config:
-                    host_settings['enabled'] = config.getboolean('FILE_HOSTS', f'{host_id}_enabled', fallback=False)
-                    host_settings['trigger_on_added'] = config.getboolean('FILE_HOSTS', f'{host_id}_on_added', fallback=False)
-                    host_settings['trigger_on_started'] = config.getboolean('FILE_HOSTS', f'{host_id}_on_started', fallback=False)
-                    host_settings['trigger_on_completed'] = config.getboolean('FILE_HOSTS', f'{host_id}_on_completed', fallback=False)
+                host_settings = {
+                    'enabled': get_file_host_setting(host_id, 'enabled', 'bool'),
+                    'credentials': '',
+                    'trigger': get_file_host_setting(host_id, 'trigger', 'str')  # Single string value
+                }
 
                 # Load encrypted credentials from QSettings
                 encrypted_creds = get_credential(f'file_host_{host_id}_credentials')
@@ -2625,13 +2619,12 @@ class ComprehensiveSettingsDialog(QDialog):
             config.set('FILE_HOSTS', 'global_limit', str(widget_settings['global_limit']))
             config.set('FILE_HOSTS', 'per_host_limit', str(widget_settings['per_host_limit']))
 
-            # Save per-host settings
+            # Save per-host settings using new API
+            from src.core.file_host_config import save_file_host_setting
             for host_id, host_settings in widget_settings['hosts'].items():
-                # Save enabled state and triggers to INI
-                config.set('FILE_HOSTS', f'{host_id}_enabled', str(host_settings['enabled']))
-                config.set('FILE_HOSTS', f'{host_id}_on_added', str(host_settings['trigger_on_added']))
-                config.set('FILE_HOSTS', f'{host_id}_on_started', str(host_settings['trigger_on_started']))
-                config.set('FILE_HOSTS', f'{host_id}_on_completed', str(host_settings['trigger_on_completed']))
+                # Save enabled state and trigger (single string value)
+                save_file_host_setting(host_id, 'enabled', host_settings['enabled'])
+                save_file_host_setting(host_id, 'trigger', host_settings['trigger'])
 
                 # Save encrypted credentials to QSettings
                 creds_text = host_settings.get('credentials', '')
@@ -3573,6 +3566,9 @@ class ComprehensiveSettingsDialog(QDialog):
         try:
             if hasattr(self, 'log_settings_widget'):
                 self.log_settings_widget.save_settings()
+                # Refresh main window's log display settings cache
+                if self.parent and hasattr(self.parent, '_refresh_log_display_settings'):
+                    self.parent._refresh_log_display_settings()
             return True
         except Exception as e:
             print(f"{timestamp()} WARNING: Error saving logs tab: {e}")

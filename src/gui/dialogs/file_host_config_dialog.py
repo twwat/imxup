@@ -5,10 +5,12 @@ Provides credential setup, testing, and configuration for file host uploads
 """
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QFormLayout, QLabel, QGroupBox,
-    QPushButton, QLineEdit, QCheckBox, QProgressBar, QComboBox, QWidget
+    QPushButton, QLineEdit, QCheckBox, QProgressBar, QComboBox, QWidget, QListWidget, QSplitter
 )
-from PyQt6.QtCore import QSettings, QTimer
+from PyQt6.QtCore import QSettings, QTimer, Qt
+from PyQt6.QtGui import QPixmap
 from datetime import datetime
+from typing import Optional
 import time
 
 from src.utils.format_utils import format_binary_size
@@ -33,89 +35,91 @@ class FileHostConfigDialog(QDialog):
         self.main_widgets = main_widgets
         self.worker_manager = worker_manager
         self.worker = worker_manager.get_worker(host_id) if worker_manager else None
-        
+
         # Connect to spinup_complete signal for credential failures
         if self.worker_manager:
             self.worker_manager.spinup_complete.connect(self._on_spinup_complete)
-            
+
         self.settings = QSettings("ImxUploader", "ImxUploadGUI")
 
-        # Initialize saved values EARLY (updated by widget change signals)
-        self.saved_enabled = host_config.enabled
-        self.saved_credentials = None
-        self.saved_trigger_settings = {
-            "on_added": host_config.trigger_on_added,
-            "on_started": host_config.trigger_on_started,
-            "on_completed": host_config.trigger_on_completed
-        }
+        # Initialize saved values for cache (updated when Apply/Enable/Disable clicked)
+        # These values are returned by get_*() methods when dialog closes
+        from src.core.file_host_config import get_file_host_setting
+        self.saved_enabled = get_file_host_setting(host_id, "enabled", "bool")
+        self.saved_credentials = None  # Updated in setup_ui() if host requires auth
 
-        self.setWindowTitle(f"Configure {host_config.name}")
+        # Load trigger setting from INI (single string value, not three booleans)
+        self.saved_trigger = get_file_host_setting(host_id, "trigger", "str")
+
+        # Track dirty state (unsaved changes)
+        self.has_unsaved_changes = False
+
+        self.setWindowTitle(f"File Host Configuration: {host_config.name}")
         self.setModal(True)
-        self.resize(700, 650)
+        self.resize(900, 650)  # Wider for horizontal split
 
-        # Connect to worker signals if available
-        if self.worker:
-            self.worker.test_completed.connect(self._on_worker_test_completed)
-            self.worker.storage_updated.connect(self._on_worker_storage_updated)
+        # Connect to worker signals if available (using helper to prevent duplicates)
+        self._connect_worker_signals()
 
         self.setup_ui()
-    
+
     def setup_ui(self):
         """Setup the dialog UI"""
         # Get actual enabled state from manager (source of truth)
         actual_enabled = self.worker_manager.is_enabled(self.host_id) if self.worker_manager else False
 
-        # Load settings from INI file for triggers
-        from imxup import get_config_path
-        import configparser
-        import os
-        config_file = get_config_path()  # Use dynamic path, not hardcoded
-        config = configparser.ConfigParser()
-        if os.path.exists(config_file):
-            config.read(config_file)
+        # Load trigger setting from INI (single string value)
+        from src.core.file_host_config import get_file_host_setting
+        current_trigger = get_file_host_setting(self.host_id, "trigger", "str")
 
-        # Read triggers from INI (NOT enabled state - manager is source of truth)
-        if config.has_section("FILE_HOSTS"):
-            trigger_on_added = config.getboolean("FILE_HOSTS", f"{self.host_id}_on_added", fallback=False)
-            trigger_on_started = config.getboolean("FILE_HOSTS", f"{self.host_id}_on_started", fallback=False)
-            trigger_on_completed = config.getboolean("FILE_HOSTS", f"{self.host_id}_on_completed", fallback=False)
-        else:
-            trigger_on_added = False
-            trigger_on_started = False
-            trigger_on_completed = False
-        
-        
+
         layout = QVBoxLayout(self)
 
-        # Host info header
+        # Host info header with logo
+        header_layout = QHBoxLayout()
+
+        # Host name and description (left side)
         info_label = QLabel(f"<h2>{self.host_config.name}</h2><p>Configure host settings, credentials, and test connection</p>")
-        layout.addWidget(info_label)
+        header_layout.addWidget(info_label, 1)
+
+        # Host logo (if available) - positioned in top right corner with spacing
+        logo_label = self._load_host_logo(self.host_id)
+        if logo_label:
+            header_layout.addWidget(logo_label)
+            header_layout.addSpacing(100)  # 100px empty space to the right of logo
+
+        layout.addLayout(header_layout)
 
         # Enable/Disable button - power button paradigm
         button_row = QHBoxLayout()
-        
+
         self.enable_button = QPushButton()
         self.enable_button.setMinimumWidth(200)
         self.enable_button.clicked.connect(self._on_enable_button_clicked)
         button_row.addWidget(self.enable_button)
-        
+
         # Error label beside button
         self.enable_error_label = QLabel()
-        self.enable_error_label.setStyleSheet("color: red; font-weight: bold;")
+        # Use QSS class for theme-aware styling
+        self.enable_error_label.setProperty("class", "status-error")
         self.enable_error_label.setWordWrap(True)
         button_row.addWidget(self.enable_error_label, 1)
-        
+
         layout.addLayout(button_row)
-        
+
+        # Create splitter for resizable horizontal split between controls and logs
+        self.content_splitter = QSplitter(Qt.Orientation.Horizontal)
+        self.content_container = self.content_splitter  # Alias for compatibility with disable logic
+        layout.addWidget(self.content_splitter)
+
         # Update button text based on whether worker is running
         self._update_enable_button_state(actual_enabled)
-        
-        # Create container for all content (to be disabled when host is disabled)
-        self.content_container = QWidget()
-        content_layout = QVBoxLayout(self.content_container)
+
+        # Left column for existing widgets
+        left_widget = QWidget()
+        content_layout = QVBoxLayout(left_widget)  # Keep this name for minimal changes below
         content_layout.setContentsMargins(0, 0, 0, 0)
-        layout.addWidget(self.content_container)
-        
+
         # Credentials section
         # Credentials section
         self.creds_input = None
@@ -123,12 +127,12 @@ class FileHostConfigDialog(QDialog):
             creds_group = QGroupBox("Credentials")
             creds_layout = QVBoxLayout(creds_group)
 
-            # Format info
-            if self.host_config.auth_type == "token_login":
-                format_text = "Format: username:password"
+            # Format info based on auth type
+            if self.host_config.auth_type == "api_key":
+                format_text = "Format: API key"
             elif self.host_config.auth_type == "bearer":
-                format_text = "Format: api_key"
-            else:
+                format_text = "Format: Bearer token"
+            else:  # token_login, session, or other
                 format_text = "Format: username:password"
 
             creds_layout.addWidget(QLabel(format_text))
@@ -137,25 +141,34 @@ class FileHostConfigDialog(QDialog):
             self.creds_input = QLineEdit()
             self.creds_input.setEchoMode(QLineEdit.EchoMode.Password)
             self.creds_input.setPlaceholderText("Enter credentials...")
+            self.creds_input.setProperty("class", "console")
 
             # Load current credentials from encrypted storage
             from imxup import get_credential, decrypt_password
             from src.utils.logger import log
-            
+
             encrypted_creds = get_credential(f"file_host_{self.host_id}_credentials")
-            
+
+            decrypted = None  # Track for cache initialization
             if encrypted_creds:
                 try:
                     decrypted = decrypt_password(encrypted_creds)
                     if decrypted:  # Only set if we got valid credentials
+                        # Block signals during initial load to prevent false dirty state
+                        self.creds_input.blockSignals(True)
                         self.creds_input.setText(decrypted)
+                        self.creds_input.blockSignals(False)
                 except Exception as e:
                     log(f"Failed to load credentials for {self.host_id}: {e}", level="error", category="file_hosts")
-            
+
+            # Initialize cached credentials with loaded value (fix for stale cache bug)
+            # This ensures get_credentials() returns correct value even if dialog closed without edits
+            self.saved_credentials = decrypted if decrypted else None
+
             # Add show/hide button
             creds_row = QHBoxLayout()
             creds_row.addWidget(self.creds_input, 1)
-            
+
             show_creds_btn = QPushButton("👁")
             show_creds_btn.setMaximumWidth(30)
             show_creds_btn.setCheckable(True)
@@ -166,7 +179,7 @@ class FileHostConfigDialog(QDialog):
                 )
             )
             creds_row.addWidget(show_creds_btn)
-            
+
             creds_layout.addLayout(creds_row)
             content_layout.addWidget(creds_group)
         # Storage section
@@ -192,40 +205,52 @@ class FileHostConfigDialog(QDialog):
         # Trigger settings - SINGLE DROPDOWN (not checkboxes)
         triggers_group = QGroupBox("Auto-Upload Trigger")
         triggers_layout = QVBoxLayout(triggers_group)
-        
+
         triggers_layout.addWidget(QLabel(
             "Select when to automatically upload galleries to this host:"
         ))
-        
+
         self.trigger_combo = QComboBox()
         self.trigger_combo.addItem("Disabled / Manual", None)
         self.trigger_combo.addItem("On Added", "on_added")
         self.trigger_combo.addItem("On Started", "on_started")
         self.trigger_combo.addItem("On Completed", "on_completed")
-        
-        # Select current trigger (from INI file)
-        if trigger_on_added:
+
+        # Select current trigger (from INI file - single string value)
+        # Block signals during initial load to prevent false dirty state
+        self.trigger_combo.blockSignals(True)
+        if current_trigger == "on_added":
             self.trigger_combo.setCurrentIndex(1)
-        elif trigger_on_started:
+        elif current_trigger == "on_started":
             self.trigger_combo.setCurrentIndex(2)
-        elif trigger_on_completed:
+        elif current_trigger == "on_completed":
             self.trigger_combo.setCurrentIndex(3)
-        else:
+        else:  # "disabled" or any other value
             self.trigger_combo.setCurrentIndex(0)  # Disabled
-        
+        self.trigger_combo.blockSignals(False)
+
         triggers_layout.addWidget(self.trigger_combo)
         content_layout.addWidget(triggers_group)
 
+        # Connect change signals to mark dirty state
+        if self.creds_input:
+            self.creds_input.textChanged.connect(self._mark_dirty)
+        self.trigger_combo.currentIndexChanged.connect(self._mark_dirty)
 
-        # Host info (read-only)
+        # Host info (read-only) - Read from settings layer
         info_group = QGroupBox("Host Information")
         info_layout = QFormLayout(info_group)
 
-        info_layout.addRow("Auto-retry:", QLabel("✓ Enabled" if self.host_config.auto_retry else "○ Disabled"))
-        info_layout.addRow("Max retries:", QLabel(str(self.host_config.max_retries)))
-        info_layout.addRow("Max connections:", QLabel(str(self.host_config.max_connections)))
-        if self.host_config.max_file_size_mb:
-            info_layout.addRow("Max file size:", QLabel(f"{self.host_config.max_file_size_mb} MB"))
+        auto_retry = get_file_host_setting(self.host_id, "auto_retry", "bool")
+        max_retries = get_file_host_setting(self.host_id, "max_retries", "int")
+        max_connections = get_file_host_setting(self.host_id, "max_connections", "int")
+        max_file_size_mb = get_file_host_setting(self.host_id, "max_file_size_mb", "int")
+
+        info_layout.addRow("Auto-retry:", QLabel("✓ Enabled" if auto_retry else "○ Disabled"))
+        info_layout.addRow("Max retries:", QLabel(str(max_retries)))
+        info_layout.addRow("Max connections:", QLabel(str(max_connections)))
+        if max_file_size_mb:
+            info_layout.addRow("Max file size:", QLabel(f"{max_file_size_mb} MB"))
 
         content_layout.addWidget(info_group)
 
@@ -234,6 +259,34 @@ class FileHostConfigDialog(QDialog):
 
         content_layout.addStretch()
 
+        # Add left column to splitter
+        self.content_splitter.addWidget(left_widget)
+
+        # Right column: Worker logs
+        logs_group = QGroupBox("Worker Logs")
+        logs_layout = QVBoxLayout(logs_group)
+
+        self.log_list = QListWidget()
+        self.log_list.setProperty("class", "console")
+        logs_layout.addWidget(self.log_list)
+
+        clear_btn = QPushButton("Clear")
+        clear_btn.clicked.connect(self.log_list.clear)
+        logs_layout.addWidget(clear_btn)
+
+        # Add logs to splitter
+        self.content_splitter.addWidget(logs_group)
+
+        # Set initial splitter sizes (50/50 split) and restore saved state
+        self.content_splitter.setSizes([450, 450])  # Initial equal split
+        settings = QSettings("ImxUploader", "ImxUploadGUI")
+        splitter_state = settings.value(f"FileHostConfigDialog/{self.host_id}/splitter_state")
+        if splitter_state:
+            self.content_splitter.restoreState(splitter_state)
+
+        # Load initial logs (signal connection handled by _connect_worker_signals in constructor)
+        self._load_initial_logs()
+
         # Button layout
         button_layout = QHBoxLayout()
         button_layout.addStretch()
@@ -241,6 +294,11 @@ class FileHostConfigDialog(QDialog):
         cancel_btn = QPushButton("Cancel")
         cancel_btn.clicked.connect(self.reject)
         button_layout.addWidget(cancel_btn)
+
+        self.apply_btn = QPushButton("Apply")
+        self.apply_btn.clicked.connect(self._on_apply_clicked)
+        self.apply_btn.setEnabled(False)  # Disabled until changes made
+        button_layout.addWidget(self.apply_btn)
 
         save_btn = QPushButton("Save")
         save_btn.clicked.connect(self._on_save_clicked)
@@ -258,6 +316,8 @@ class FileHostConfigDialog(QDialog):
         test_button_layout = QHBoxLayout()
         self.test_connection_btn = QPushButton("Test Connection")
         self.test_connection_btn.setToolTip("Run full test: credentials, user info, upload, and delete")
+        # Set initial state: disabled if host is not enabled (worker is None)
+        self.test_connection_btn.setEnabled(self.worker is not None)
         test_button_layout.addWidget(self.test_connection_btn)
         test_button_layout.addStretch()
         test_group_layout.addLayout(test_button_layout)
@@ -273,7 +333,8 @@ class FileHostConfigDialog(QDialog):
         self.test_delete_label = QLabel("○ Not tested")
         self.test_error_label = QLabel("")
         self.test_error_label.setWordWrap(True)
-        self.test_error_label.setStyleSheet("color: red; font-size: 10px;")
+        # Use QSS class for theme-aware styling
+        self.test_error_label.setProperty("class", "error-small")
 
         test_results_layout.addRow("Last tested:", self.test_timestamp_label)
         test_results_layout.addRow("Credentials:", self.test_credentials_label)
@@ -291,37 +352,128 @@ class FileHostConfigDialog(QDialog):
         # Connect test button
         self.test_connection_btn.clicked.connect(self.run_full_test)
 
+    def _load_host_logo(self, host_id: str) -> Optional[QLabel]:
+        """Load and create a clickable QLabel with the host's logo.
+
+        Args:
+            host_id: Host identifier (used to find logo file)
+
+        Returns:
+            Clickable QLabel with scaled logo pixmap, or None if logo not found
+        """
+        from imxup import get_project_root
+        import os
+
+        logo_path = os.path.join(get_project_root(), "assets", "hosts", "logo", f"{host_id}.png")
+        if not os.path.exists(logo_path):
+            return None
+
+        try:
+            pixmap = QPixmap(logo_path)
+            if pixmap.isNull():
+                return None
+
+            # Scale logo to max height of 40px for dialog header
+            scaled_pixmap = pixmap.scaledToHeight(40, Qt.TransformationMode.SmoothTransformation)
+
+            logo_label = QLabel()
+            logo_label.setPixmap(scaled_pixmap)
+            logo_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+            # Make clickable if referral URL exists
+            if self.host_config.referral_url:
+                from PyQt6.QtGui import QCursor, QDesktopServices
+                from PyQt6.QtCore import QUrl
+
+                logo_label.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+                logo_label.setToolTip(f"Click to visit {self.host_config.name}")
+
+                # Install event handler to detect clicks
+                def open_referral_url(event):
+                    if event.type() == event.Type.MouseButtonPress:
+                        QDesktopServices.openUrl(QUrl(self.host_config.referral_url))
+                        return True
+                    return False
+
+                logo_label.mousePressEvent = open_referral_url
+
+            return logo_label
+        except Exception:
+            return None
+
     def _update_enable_button_state(self, enabled: bool):
         """Update button text and style based on worker state"""
+        # Use QSS classes for theme-aware styling (defined in styles.qss)
         if enabled:
             self.enable_button.setText(f"Disable {self.host_config.name}")
-            self.enable_button.setStyleSheet("QPushButton { background-color: #90EE90; }")  # Light green
+            self.enable_button.setProperty("class", "host-disable-btn")
+            self.enable_button.style().unpolish(self.enable_button)
+            self.enable_button.style().polish(self.enable_button)
+            # Only enable Test Connection button when worker is enabled
+            if hasattr(self, 'test_connection_btn'):
+                self.test_connection_btn.setEnabled(True)
         else:
             self.enable_button.setText(f"Enable {self.host_config.name}")
-            self.enable_button.setStyleSheet("")  # Default style
-    
+            self.enable_button.setProperty("class", "host-enable-btn")
+            self.enable_button.style().unpolish(self.enable_button)
+            self.enable_button.style().polish(self.enable_button)
+            # Only disable Test Connection button - user needs to edit credentials to enable!
+            if hasattr(self, 'test_connection_btn'):
+                self.test_connection_btn.setEnabled(False)
+
     def _on_enable_button_clicked(self):
         """Handle enable/disable button click - power button paradigm"""
+        # Warn about unsaved changes
+        if not self._check_unsaved_changes("Enabling/disabling the host"):
+            return
+
         # Check if worker is currently running
         is_enabled = self.worker_manager.is_enabled(self.host_id) if self.worker_manager else False
 
         if is_enabled:
+            # Disconnect ALL worker signals before disable
+            if self.worker:
+                try:
+                    self.worker.log_message[str, str].disconnect(self._add_log)
+                except TypeError:
+                    pass
+                try:
+                    self.worker.test_completed.disconnect(self._on_worker_test_completed)
+                except TypeError:
+                    pass
+                try:
+                    self.worker.storage_updated.disconnect(self._on_worker_storage_updated)
+                except TypeError:
+                    pass
+
             # Disable: Manager handles worker shutdown AND INI persistence
             self.worker_manager.disable_host(self.host_id)
             self._update_enable_button_state(False)
             self.enable_error_label.setText("")
+
+            # UPDATE CACHED VALUE - Critical for stale cache bug fix
+            self.saved_enabled = False
+
+            # Clear logs (worker is stopped)
+            self.log_list.clear()
+            self.worker = None
         else:
             # Enable: Manager handles worker spinup AND INI persistence on success
             self.worker_manager.enable_host(self.host_id)
+
+            # Get worker from pending_workers (not workers yet) to catch ALL startup logs
+            self.worker = self.worker_manager.pending_workers.get(self.host_id)
+            if self.worker:
+                self._connect_worker_signals()
 
             # Show enabling state - wait for spinup_complete signal
             self.enable_button.setText(f"Enabling {self.host_config.name}...")
             self.enable_button.setEnabled(False)
             self.enable_error_label.setText("")
-    
+
     def _on_spinup_complete(self, host_id: str, error: str) -> None:
         """Handle worker spinup result from manager signal.
-        
+
         Args:
             host_id: Host that completed spinup
             error: Error message (empty = success)
@@ -329,60 +481,102 @@ class FileHostConfigDialog(QDialog):
         # Only handle if this is our host
         if host_id != self.host_id:
             return
-        
+
         # Re-enable button
         self.enable_button.setEnabled(True)
-        
+
         if error:
-            # Spinup failed
+            # Spinup failed - disconnect signals and clear logs
+            if self.worker:
+                try:
+                    self.worker.log_message[str, str].disconnect(self._add_log)
+                    self.worker.test_completed.disconnect(self._on_worker_test_completed)
+                    self.worker.storage_updated.disconnect(self._on_worker_storage_updated)
+                except TypeError:
+                    pass
+
             self._update_enable_button_state(False)
+            #self.log_list.clear()  # Clear failed spinup logs
+            self.worker = None
+
+            # UPDATE CACHED VALUE - Critical for stale cache bug fix
+            self.saved_enabled = False
+
             MAX_ERROR_LENGTH = 150
             display_error = error if len(error) <= MAX_ERROR_LENGTH else error[:MAX_ERROR_LENGTH] + "..."
             self.enable_error_label.setText(f"Failed to enable: {display_error}")
             self.enable_error_label.setToolTip(f"Failed to enable: {error}")
         else:
-            # Spinup succeeded - Manager already persisted enabled state
+            # Spinup succeeded - ensure worker reference is set and signals connected
+            # Bug fix: Set worker reference after spinup succeeds
+            # Without this, test connection fails with "Host not enabled"
+            if not self.worker:
+                self.worker = self.worker_manager.get_worker(self.host_id)
+                if self.worker:
+                    self._connect_worker_signals()
+                else:
+                    from src.utils.logging import get_logger
+                    get_logger().warning(f"Worker spinup succeeded but get_worker returned None for {self.host_id}")
+
             self._update_enable_button_state(True)
             self.enable_error_label.setText("")
             self.enable_error_label.setToolTip("")
-    
-    
-    
+
+            # UPDATE CACHED VALUE - Critical for stale cache bug fix
+            self.saved_enabled = True
+
+
+
     def _load_storage_from_cache(self):
         """Load and display storage from cache if available"""
         if not self.storage_bar:
             return
 
-        # Load from worker's cache if available
-        cache = None
-        if self.worker:
-            cache = self.worker._load_storage_cache()
+        # Read from QSettings cache directly (same as File Hosts tab)
+        # Bug fix: Use QSettings instead of worker cache to avoid dependency on worker existence
+        total_str = self.settings.value(f"FileHosts/{self.host_id}/storage_total", "0")
+        left_str = self.settings.value(f"FileHosts/{self.host_id}/storage_left", "0")
 
-        if cache and cache.get('total') and cache.get('left'):
-            try:
-                total = int(cache['total'])
-                left = int(cache['left'])
-                used = total - left
-                percent_used = int((used / total) * 100) if total > 0 else 0
-                percent_free = 100 - percent_used
+        try:
+            total = int(total_str) if total_str else 0
+            left = int(left_str) if left_str else 0
+        except (ValueError, TypeError) as e:
+            from src.utils.logging import get_logger
+            get_logger().debug(f"Failed to parse cached storage for {self.host_id}: {e}")
+            return
 
-                total_str = format_binary_size(total)
-                left_str = format_binary_size(left)
+        # Only update if we have valid cached data
+        if total == 0 and left == 0:
+            from src.utils.logging import get_logger
+            get_logger().debug(f"No cached storage data for {self.host_id}")
+            return
 
-                self.storage_bar.setValue(percent_free)
-                self.storage_bar.setFormat(f"{left_str} / {total_str} free ({percent_free}%)")
+        if total <= 0 or left < 0 or left > total:
+            from src.utils.logging import get_logger
+            get_logger().warning(f"Invalid cached storage for {self.host_id}: total={total}, left={left}")
+            return
 
-                if percent_used >= 90:
-                    self.storage_bar.setProperty("storage_status", "low")
-                elif percent_used >= 75:
-                    self.storage_bar.setProperty("storage_status", "medium")
-                else:
-                    self.storage_bar.setProperty("storage_status", "plenty")
+        # Calculate percentages
+        used = total - left
+        percent_used = int((used / total) * 100) if total > 0 else 0
+        percent_free = 100 - percent_used
 
-                self.storage_bar.style().unpolish(self.storage_bar)
-                self.storage_bar.style().polish(self.storage_bar)
-            except:
-                pass
+        # Format with already-imported format_binary_size
+        total_str = format_binary_size(total)
+        left_str = format_binary_size(left)
+
+        self.storage_bar.setValue(percent_free)
+        self.storage_bar.setFormat(f"{left_str} / {total_str} free ({percent_free}%)")
+
+        if percent_used >= 90:
+            self.storage_bar.setProperty("storage_status", "low")
+        elif percent_used >= 75:
+            self.storage_bar.setProperty("storage_status", "medium")
+        else:
+            self.storage_bar.setProperty("storage_status", "plenty")
+
+        self.storage_bar.style().unpolish(self.storage_bar)
+        self.storage_bar.style().polish(self.storage_bar)
 
     def load_and_display_test_results(self):
         """Load and display existing test results from QSettings cache"""
@@ -416,12 +610,15 @@ class FileHostConfigDialog(QDialog):
             timestamp_text = f"{time_str} ({passed}/{total} tests passed)"
             self.test_timestamp_label.setText(timestamp_text)
 
+            # Use QSS classes for theme-aware styling
             if passed == total:
-                self.test_timestamp_label.setStyleSheet("color: green; font-weight: bold;")
+                self.test_timestamp_label.setProperty("class", "status-success")
             elif passed == 0:
-                self.test_timestamp_label.setStyleSheet("color: red; font-weight: bold;")
+                self.test_timestamp_label.setProperty("class", "status-error")
             else:
-                self.test_timestamp_label.setStyleSheet("color: orange; font-weight: bold;")
+                self.test_timestamp_label.setProperty("class", "status-warning")
+            self.test_timestamp_label.style().unpolish(self.test_timestamp_label)
+            self.test_timestamp_label.style().polish(self.test_timestamp_label)
 
             # Set individual test labels with Pass/Fail/Unknown
             self._set_test_label(self.test_credentials_label, test_results.get('credentials_valid'))
@@ -433,7 +630,10 @@ class FileHostConfigDialog(QDialog):
                 self._set_test_label(self.test_delete_label, True)
             elif test_results.get('upload_success') and not test_results.get('delete_success'):
                 self.test_delete_label.setText("Unknown")
-                self.test_delete_label.setStyleSheet("color: orange;")
+                # Use QSS class for theme-aware styling
+                self.test_delete_label.setProperty("class", "status-warning-light")
+                self.test_delete_label.style().unpolish(self.test_delete_label)
+                self.test_delete_label.style().polish(self.test_delete_label)
             else:
                 self._set_test_label(self.test_delete_label, False)
 
@@ -442,30 +642,46 @@ class FileHostConfigDialog(QDialog):
             else:
                 self.test_error_label.setText("")
 
-    def _set_test_label(self, label, passed: bool):
+    def _set_test_label(self, label, passed: Optional[bool]):
         """Helper to set test label with color"""
-        if passed:
+        # Use QSS classes for theme-aware styling
+        if passed is True:
             label.setText("Pass")
-            label.setStyleSheet("color: green; font-weight: bold;")
-        else:
+            label.setProperty("class", "status-success")
+        elif passed is False:
             label.setText("Fail")
-            label.setStyleSheet("color: red; font-weight: bold;")
+            label.setProperty("class", "status-error")
+        else:
+            label.setText("Unknown")
+            label.setProperty("class", "status-warning-light")
+        label.style().unpolish(label)
+        label.style().polish(label)
 
     def run_full_test(self):
         """Run complete test sequence via worker: credentials, user info, upload, delete"""
+        # Warn about unsaved changes
+        if not self._check_unsaved_changes("Testing connection"):
+            return
+
         if not self.creds_input:
             return
 
         credentials = self.creds_input.text().strip()
         if not credentials:
             self.test_timestamp_label.setText("Error: No credentials entered")
-            self.test_timestamp_label.setStyleSheet("color: red;")
+            # Use QSS class for theme-aware styling
+            self.test_timestamp_label.setProperty("class", "status-error")
+            self.test_timestamp_label.style().unpolish(self.test_timestamp_label)
+            self.test_timestamp_label.style().polish(self.test_timestamp_label)
             return
 
         # Check if worker available
         if not self.worker:
             self.test_timestamp_label.setText("Error: Host not enabled")
-            self.test_timestamp_label.setStyleSheet("color: red;")
+            # Use QSS class for theme-aware styling
+            self.test_timestamp_label.setProperty("class", "status-error")
+            self.test_timestamp_label.style().unpolish(self.test_timestamp_label)
+            self.test_timestamp_label.style().polish(self.test_timestamp_label)
             return
 
         # Update UI to show testing
@@ -477,11 +693,9 @@ class FileHostConfigDialog(QDialog):
         self.test_delete_label.setText("⏳ Waiting...")
         self.test_error_label.setText("")
 
-        # Update worker credentials for testing (before they're saved)
-        self.worker.update_credentials(credentials)
-        
-        # Delegate to worker (results come via signal)
-        self.worker.test_connection()
+        # Queue test request to be processed in worker's run() loop (non-blocking)
+        # This ensures test executes in worker thread context where it belongs
+        self.worker.queue_test_request(credentials)
 
     def _on_worker_test_completed(self, host_id: str, results: dict):
         """Handle test completion from worker"""
@@ -526,12 +740,15 @@ class FileHostConfigDialog(QDialog):
 
         self.test_timestamp_label.setText(f"{time_str} ({tests_passed}/4 tests passed)")
 
+        # Use QSS classes for theme-aware styling
         if tests_passed == 4:
-            self.test_timestamp_label.setStyleSheet("color: green; font-weight: bold;")
+            self.test_timestamp_label.setProperty("class", "status-success")
         elif tests_passed == 0:
-            self.test_timestamp_label.setStyleSheet("color: red; font-weight: bold;")
+            self.test_timestamp_label.setProperty("class", "status-error")
         else:
-            self.test_timestamp_label.setStyleSheet("color: orange; font-weight: bold;")
+            self.test_timestamp_label.setProperty("class", "status-warning")
+        self.test_timestamp_label.style().unpolish(self.test_timestamp_label)
+        self.test_timestamp_label.style().polish(self.test_timestamp_label)
 
     def _on_worker_storage_updated(self, host_id: str, total, left):
         """Handle storage update from worker"""
@@ -557,52 +774,282 @@ class FileHostConfigDialog(QDialog):
             self.storage_bar.setProperty("storage_status", "plenty")
 
     def get_trigger_settings(self):
-        """Get trigger setting from dropdown (only ONE selected)"""
+        """Get trigger setting from dropdown as single string value"""
         # Return saved value if dialog already closed, otherwise read from widget
-        if hasattr(self, 'saved_trigger_settings'):
-            return self.saved_trigger_settings
-        
+        if hasattr(self, 'saved_trigger'):
+            return self.saved_trigger
+
         selected_trigger = self.trigger_combo.currentData()
-        return {
-            "on_added": selected_trigger == "on_added",
-            "on_started": selected_trigger == "on_started",
-            "on_completed": selected_trigger == "on_completed"
-        }
+        # Return the trigger string ("disabled", "on_added", "on_started", "on_completed")
+        return selected_trigger if selected_trigger else "disabled"
 
     def get_credentials(self):
         """Get entered credentials"""
         # Return saved value if dialog already closed, otherwise read from widget
         if hasattr(self, 'saved_credentials'):
             return self.saved_credentials
-        
+
         if self.creds_input:
             return self.creds_input.text().strip()
         return None
 
-    
+
     def get_enabled_state(self):
         """Get enabled checkbox state"""
         # Return saved value if dialog already closed, otherwise read from widget
         if hasattr(self, 'saved_enabled'):
             return self.saved_enabled
-        
+
         return self.worker_manager.is_enabled(self.host_id) if self.worker_manager else False
 
+    def _load_initial_logs(self):
+        """Load existing worker logs from file (called once on dialog open).
+
+        Limits to 100 most recent entries from current session to prevent memory bloat.
+        """
+        try:
+            from src.utils.logging import get_logger
+            logger = get_logger()
+            log_content = logger.read_current_log()
+
+            # Find most recent "GUI loaded" to mark session start
+            lines = log_content.splitlines()
+            session_start_index = None
+            for i in range(len(lines) - 1, -1, -1):  # Search backwards
+                if "GUI loaded" in lines[i]:
+                    session_start_index = i
+                    break
+
+            # Only process lines from session start onwards (or last 1000 if no marker)
+            if session_start_index is not None:
+                lines = lines[session_start_index:]
+            else:
+                lines = lines[-1000:]  # Fallback limit to prevent unbounded loading
+
+            # Filter for this worker's messages (limit to most recent 100)
+            worker_identifier = f"{self.host_config.name} Worker"
+            matching_lines = [line for line in lines if worker_identifier in line]
+
+            # Take only last 100 (most recent) and insert in reverse order (newest first)
+            for line in matching_lines[-100:]:
+                # Strip log level prefixes and category tags for cleaner display
+                cleaned_line = line.replace("DEBUG: ", "").replace("[file_hosts] ", "")
+                self.log_list.insertItem(0, cleaned_line)  # Most recent at top
+        except Exception:
+            pass  # Silent fail if logging disabled
+
+    def _add_log(self, level: str, message: str):
+        """Add new log message from worker signal"""
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        # Replace escaped newlines with actual newlines for proper display
+        message = message.replace("\\n", "\n")
+        self.log_list.insertItem(0, f"{timestamp} {message}")
+
+        # Limit to 100 entries
+        while self.log_list.count() > 100:
+            self.log_list.takeItem(100)
+
+    def _connect_worker_signals(self):
+        """Connect to worker signals (disconnects first to prevent duplicates).
+
+        This method is idempotent - safe to call multiple times.
+        Used in both constructor (initial connection) and spinup callback (reconnection to new worker).
+        """
+        if not self.worker:
+            return
+
+        # Disconnect old connections (prevents duplicate signal connections)
+        try:
+            self.worker.log_message[str, str].disconnect(self._add_log)
+        except TypeError:
+            pass  # Not connected yet
+
+        try:
+            self.worker.test_completed.disconnect(self._on_worker_test_completed)
+        except TypeError:
+            pass  # Not connected yet
+
+        try:
+            self.worker.storage_updated.disconnect(self._on_worker_storage_updated)
+        except TypeError:
+            pass  # Not connected yet
+
+        # Connect to current worker with explicit QueuedConnection
+        self.worker.log_message[str, str].connect(self._add_log, Qt.ConnectionType.QueuedConnection)
+        self.worker.test_completed.connect(self._on_worker_test_completed, Qt.ConnectionType.QueuedConnection)
+        self.worker.storage_updated.connect(self._on_worker_storage_updated, Qt.ConnectionType.QueuedConnection)
+
+    def _mark_dirty(self):
+        """Mark dialog as having unsaved changes"""
+        self.has_unsaved_changes = True
+        self.apply_btn.setEnabled(True)
+
+    def _check_unsaved_changes(self, action_name: str) -> bool:
+        """Check for unsaved changes and warn user.
+
+        Returns:
+            True if should proceed (no changes or user confirmed), False otherwise
+        """
+        if not self.has_unsaved_changes:
+            return True
+
+        from PyQt6.QtWidgets import QMessageBox
+        reply = QMessageBox.warning(
+            self,
+            "Unsaved Changes",
+            f"You have unsaved changes. {action_name} will use the currently saved settings.\n\n"
+            f"Click 'Apply' first to use the new settings, or click 'Proceed' to continue with saved settings.",
+            QMessageBox.StandardButton.Apply | QMessageBox.StandardButton.Cancel |
+            QMessageBox.StandardButton.Yes,  # Yes = "Proceed"
+            QMessageBox.StandardButton.Apply
+        )
+
+        if reply == QMessageBox.StandardButton.Apply:
+            self._on_apply_clicked()  # Apply changes then proceed
+            return True
+        elif reply == QMessageBox.StandardButton.Yes:  # Proceed without applying
+            return True
+        else:  # Cancel
+            return False
+
+    def _on_apply_clicked(self):
+        """Apply changes without closing dialog.
+
+        Saves credentials to encrypted storage and trigger settings to INI file.
+        Only resets dirty flag if all operations succeed. Reports granular errors
+        to distinguish partial vs complete failures.
+        """
+        from PyQt6.QtWidgets import QMessageBox
+
+        # Disable Apply button during save to prevent rapid clicks
+        self.apply_btn.setEnabled(False)
+        errors = []  # Collect all errors for granular reporting
+
+        # Save credentials (separate try-except)
+        if self.creds_input:
+            credentials = self.creds_input.text().strip()
+            if credentials:
+                try:
+                    # Bug fix: Correct function name is set_credential, not store_credential
+                    from imxup import set_credential, encrypt_password
+                    encrypted = encrypt_password(credentials)
+                    set_credential(f"file_host_{self.host_id}_credentials", encrypted)
+
+                    # Update worker with new credentials (thread-safe via signal)
+                    if self.worker:
+                        self.worker.credentials_update_requested.emit(credentials)
+                except (ValueError, TypeError) as e:
+                    errors.append(f"Credentials encryption failed: {str(e)}")
+                except IOError as e:
+                    errors.append(f"Credentials storage failed: {str(e)}")
+                except Exception as e:
+                    errors.append(f"Credentials: {str(e)}")
+
+        # Save trigger settings to INI (separate try-except)
+        try:
+            from src.core.file_host_config import save_file_host_setting
+
+            selected = self.trigger_combo.currentData()
+            trigger_value = selected if selected else "disabled"
+            save_file_host_setting(self.host_id, "trigger", trigger_value)
+        except IOError as e:
+            errors.append(f"Trigger settings file I/O failed: {str(e)}")
+        except Exception as e:
+            errors.append(f"Trigger settings: {str(e)}")
+
+        # Handle results
+        if errors:
+            # Partial or complete failure - keep dirty flag and re-enable Apply for retry
+            self.apply_btn.setEnabled(True)
+            error_details = "\n".join(f"• {err}" for err in errors)
+            QMessageBox.critical(
+                self,
+                "Save Failed",
+                f"Failed to save the following settings:\n\n{error_details}\n\n"
+                f"Your changes have been only partially applied. Please try again or check logs for details.",
+                QMessageBox.StandardButton.Ok
+            )
+            from src.utils.logger import log
+            log(f"Failed to apply settings for {self.host_id}: {errors}", level="error", category="file_hosts")
+        else:
+            # Complete success - mark clean and leave button disabled
+            self.has_unsaved_changes = False
+            self.apply_btn.setEnabled(False)
+
+            # UPDATE CACHED VALUES - Critical fix for stale cache bug!
+            # Parent widget calls get_*() methods which return these cached values.
+            # If we don't update them, parent will overwrite INI with stale data.
+            if self.creds_input:
+                self.saved_credentials = self.creds_input.text().strip()
+
+            selected = self.trigger_combo.currentData()
+            self.saved_trigger = selected if selected else "disabled"
+
+            # saved_enabled is updated by enable button click, not here
+            # (enable button directly calls worker_manager.enable/disable_host)
+
+            #QMessageBox.information(self, "Settings Applied", "Settings have been applied successfully.", QMessageBox.StandardButton.Ok)
+
     def _on_save_clicked(self):
-        """Handle Save button click - read values BEFORE dialog destruction starts"""
-        # Read all values directly (no existence checks - they lie!)
-        self.saved_enabled = self.worker_manager.is_enabled(self.host_id) if self.worker_manager else False
-        self.saved_credentials = self.creds_input.text().strip() if self.creds_input is not None else ""
-        selected = self.trigger_combo.currentData()
-        self.saved_trigger_settings = {
-            "on_added": selected == "on_added",
-            "on_started": selected == "on_started",
-            "on_completed": selected == "on_completed"
-        }
-        # Now accept the dialog (widgets may be destroyed after this)
-        self.accept()
-    
+        """Handle Save button click - apply changes and close"""
+        self._on_apply_clicked()  # Apply changes first
+        self.accept()  # Then close
+
     def accept(self):
         """Override accept to prevent double-saving (values already saved in _on_save_clicked)"""
         # Just close the dialog, values were already saved by _on_save_clicked
         super().accept()
+
+    def closeEvent(self, event):
+        """Clean up signal connections when dialog closes"""
+        # Check for unsaved changes before closing
+        if self.has_unsaved_changes:
+            from PyQt6.QtWidgets import QMessageBox
+            reply = QMessageBox.warning(
+                self,
+                "Unsaved Changes",
+                "You have unsaved changes. Do you want to save them before closing?",
+                QMessageBox.StandardButton.Save | QMessageBox.StandardButton.Discard | QMessageBox.StandardButton.Cancel,
+                QMessageBox.StandardButton.Save
+            )
+
+            if reply == QMessageBox.StandardButton.Save:
+                self._on_apply_clicked()  # Save changes
+                # Only close if save succeeded (no errors)
+                if self.has_unsaved_changes:
+                    event.ignore()  # Save failed, don't close
+                    return
+            elif reply == QMessageBox.StandardButton.Cancel:
+                event.ignore()  # User canceled, don't close
+                return
+            # Discard falls through to close normally
+
+        # Disconnect ALL worker signals to prevent multiple connections if dialog reopened
+        if self.worker:
+            try:
+                self.worker.log_message[str, str].disconnect(self._add_log)
+            except TypeError:
+                pass  # Already disconnected or never connected
+
+            try:
+                self.worker.test_completed.disconnect(self._on_worker_test_completed)
+            except TypeError:
+                pass
+
+            try:
+                self.worker.storage_updated.disconnect(self._on_worker_storage_updated)
+            except TypeError:
+                pass
+
+        # Disconnect manager signal
+        if self.worker_manager:
+            try:
+                self.worker_manager.spinup_complete.disconnect(self._on_spinup_complete)
+            except TypeError:
+                pass  # Already disconnected or never connected
+
+        # Save splitter state to preserve user's layout preference
+        settings = QSettings("ImxUploader", "ImxUploadGUI")
+        settings.setValue(f"FileHostConfigDialog/{self.host_id}/splitter_state", self.content_splitter.saveState())
+
+        super().closeEvent(event)

@@ -252,21 +252,22 @@ def log(message: str,
                 subtype = None
             cleaned_msg = message
 
-        # Add log level prefix for non-info messages (unless already present)
+        # Add log level prefix (unless already present)
         level_prefix = ""
-        if level != "info":
-            # Check if message already has the level prefix anywhere in first 50 chars
-            msg_upper = cleaned_msg.upper()[:50]
-            if level == "trace" and "TRACE:" not in msg_upper:
-                level_prefix = "TRACE: "
-            elif level == "debug" and "DEBUG:" not in msg_upper:
-                level_prefix = "DEBUG: "
-            elif level == "warning" and "WARNING:" not in msg_upper and "WARN:" not in msg_upper:
-                level_prefix = "WARNING: "
-            elif level == "error" and "ERROR:" not in msg_upper:
-                level_prefix = "ERROR: "
-            elif level == "critical" and "CRITICAL:" not in msg_upper:
-                level_prefix = "CRITICAL: "
+        # Check if message already has the level prefix anywhere in first 50 chars
+        msg_upper = cleaned_msg.upper()[:50]
+        if level == "trace" and "TRACE:" not in msg_upper:
+            level_prefix = "TRACE: "
+        elif level == "debug" and "DEBUG:" not in msg_upper:
+            level_prefix = "DEBUG: "
+        elif level == "info" and "INFO:" not in msg_upper:
+            level_prefix = "INFO: "
+        elif level == "warning" and "WARNING:" not in msg_upper and "WARN:" not in msg_upper:
+            level_prefix = "WARNING: "
+        elif level == "error" and "ERROR:" not in msg_upper:
+            level_prefix = "ERROR: "
+        elif level == "critical" and "CRITICAL:" not in msg_upper:
+            level_prefix = "CRITICAL: "
 
         # Ensure timestamp
         if not (cleaned_msg and len(cleaned_msg) > 8 and cleaned_msg[2] == ":" and cleaned_msg[5] == ":"):

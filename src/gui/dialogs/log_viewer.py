@@ -12,7 +12,7 @@ from PyQt6.QtWidgets import (
     QComboBox, QSpinBox, QLabel, QPushButton, QTabWidget, QWidget,
     QTableWidget, QTableWidgetItem, QLineEdit, QDialogButtonBox, QHeaderView, QAbstractItemView
 )
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QSettings
 from PyQt6.QtGui import QFont
 from src.gui.widgets.custom_widgets import CopyableLogTableWidget
 
@@ -52,7 +52,6 @@ class LogViewerDialog(QDialog):
         self.btn_clear = QPushButton("Clear View")
         self.find_input = QLineEdit()
         self.find_input.setPlaceholderText("Find...")
-        self.btn_find = QPushButton("Find Next")
         toolbar.addWidget(QLabel("File:"))
         toolbar.addWidget(self.cmb_file_select, 2)
         toolbar.addWidget(QLabel("Tail:"))
@@ -62,7 +61,6 @@ class LogViewerDialog(QDialog):
         toolbar.addWidget(self.btn_refresh)
         toolbar.addWidget(self.btn_clear)
         toolbar.addWidget(self.find_input, 1)
-        toolbar.addWidget(self.btn_find)
         logs_vbox.addLayout(toolbar)
 
         # Filters row
@@ -92,8 +90,15 @@ class LogViewerDialog(QDialog):
         filters_bar.addWidget(QLabel("  Level:"))
         self.cmb_level_filter = QComboBox()
         self.cmb_level_filter.addItems(["All", "TRACE+", "DEBUG+", "INFO+", "WARNING+", "ERROR+"])
-        self.cmb_level_filter.setCurrentText("INFO+")
         self.cmb_level_filter.setToolTip("Filter by minimum log level")
+        
+        # Load saved level filter from QSettings
+        settings = QSettings("imxup", "imxup")
+        settings.beginGroup("log_viewer")
+        saved_level = settings.value("level_filter", "INFO+")
+        settings.endGroup()
+        self.cmb_level_filter.setCurrentText(saved_level)
+        
         filters_bar.addWidget(self.cmb_level_filter)
 
         filters_bar.addStretch()
@@ -356,6 +361,9 @@ class LogViewerDialog(QDialog):
                     self.log_view.setItem(row, 2, QTableWidgetItem(category))
                     self.log_view.setItem(row, 3, QTableWidgetItem(_decode_unicode(message)))
                     row_num += 1
+            
+            # Apply find filter to maintain search during refresh
+            self._apply_find_filter_to_all_rows()
 
         self.btn_refresh.clicked.connect(on_refresh)
         self.cmb_file_select.currentIndexChanged.connect(on_refresh)
@@ -371,8 +379,18 @@ class LogViewerDialog(QDialog):
                 cb.toggled.connect(on_filter_changed)
             except Exception:
                 pass
-        # Bind level dropdown
-        self.cmb_level_filter.currentTextChanged.connect(on_filter_changed)
+        # Bind level dropdown with QSettings save
+        def on_level_filter_changed(_=None):
+            # Save to QSettings with group structure
+            settings = QSettings("imxup", "imxup")
+            settings.beginGroup("log_viewer")
+            settings.setValue("level_filter", self.cmb_level_filter.currentText())
+            settings.endGroup()
+            settings.sync()  # Ensure immediate write
+            # Apply filter
+            on_filter_changed()
+        
+        self.cmb_level_filter.currentTextChanged.connect(on_level_filter_changed)
 
         def on_clear():
             self.log_view.setRowCount(0)
@@ -382,35 +400,13 @@ class LogViewerDialog(QDialog):
             self.follow_enabled = self.chk_follow.isChecked()
         self.chk_follow.toggled.connect(on_follow_toggle)
 
-        # Find functionality - search through table rows
-        self._last_find_row = -1
-        def on_find_next():
-            pattern = (self.find_input.text() or "").strip().lower()
-            if not pattern:
-                return
-
-            # Start from next row after last find, or from top
-            start_row = self._last_find_row + 1
-            if start_row >= self.log_view.rowCount():
-                start_row = 0
-
-            # Search through all rows starting from start_row
-            for i in range(self.log_view.rowCount()):
-                row = (start_row + i) % self.log_view.rowCount()
-                # Check all columns for match
-                for col in range(4):  # Now 4 columns
-                    item = self.log_view.item(row, col)
-                    if item and pattern in item.text().lower():
-                        # Found match - select row and scroll to it
-                        self.log_view.selectRow(row)
-                        self.log_view.scrollToItem(item)
-                        self._last_find_row = row
-                        return
-            # No match found - wrap to beginning
-            self._last_find_row = -1
-
-        self.btn_find.clicked.connect(on_find_next)
-        self.find_input.returnPressed.connect(on_find_next)
+        # Find functionality - live filtering as user types
+        def on_find_text_changed():
+            """Filter table rows based on search text"""
+            self._apply_find_filter_to_all_rows()
+        
+        # Connect to textChanged for live filtering
+        self.find_input.textChanged.connect(on_find_text_changed)
 
         # Bottom button row
         button_layout = QHBoxLayout()
@@ -438,7 +434,7 @@ class LogViewerDialog(QDialog):
 
             if main_window:
                 # Open settings to Log tab (index 5) - keep this dialog open
-                main_window.open_comprehensive_settings(tab_index=5)
+                main_window.open_comprehensive_settings(tab_index=3)
         except Exception as e:
             # Debug: print error if settings don't open
             print(f"Error opening log settings: {e}")
@@ -507,6 +503,10 @@ class LogViewerDialog(QDialog):
             # Scroll to top if follow enabled
             if self.follow_enabled:
                 self.log_view.scrollToTop()
+            
+            # Apply find filter to newly inserted row (critical for live filtering)
+            pattern = (self.find_input.text() or "").strip().lower()
+            self._apply_find_filter_to_row(0, pattern)
         except Exception:
             pass
 
@@ -550,6 +550,30 @@ class LogViewerDialog(QDialog):
         except Exception:
             return True  # Show by default if error
 
+    def _apply_find_filter_to_row(self, row: int, pattern: str) -> None:
+        """Apply search filter to a single row.
+        
+        Args:
+            row: Row index to filter
+            pattern: Lowercase search pattern (already stripped)
+        """
+        if not pattern:
+            self.log_view.setRowHidden(row, False)
+            return
+        
+        match_found = False
+        for col in range(4):  # 4 columns: timestamp, level, category, message
+            item = self.log_view.item(row, col)
+            if item and pattern in item.text().lower():
+                match_found = True
+                break
+        self.log_view.setRowHidden(row, not match_found)
+
+    def _apply_find_filter_to_all_rows(self) -> None:
+        """Apply current search filter to all rows."""
+        pattern = (self.find_input.text() or "").strip().lower()
+        for row in range(self.log_view.rowCount()):
+            self._apply_find_filter_to_row(row, pattern)
     def _on_selection_changed(self):
         """Handle row selection changes - enable word wrap and line breaks for selected rows"""
         try:

@@ -1,0 +1,42 @@
+{
+  "name": "FileSpace",
+  "icon": "filespace.png",
+  "referral_url": "https://filespace.com/free399849.html",
+  "requires_auth": true,
+  "auth_type": "session",
+  "upload": {
+    "endpoint": "https://phoebe.filespace.com/cgi-bin/upload.cgi?upload_id=",
+    "method": "POST",
+    "file_field": "file",
+    "extra_fields": {}
+  },
+  "response": {
+    "type": "text",
+    "link_regex": "https://filespace\\.com/([a-z0-9]+)",
+    "link_prefix": "https://filespace.com/"
+  },
+  "auth": {
+    "login_url": "https://filespace.com/",
+    "login_fields": {
+      "op": "login",
+      "redirect": "/",
+      "login": "{username}",
+      "password": "{password}"
+    },
+    "session_cookie_name": "xfss"
+  },
+  "defaults": {
+    "max_file_size_mb": null,
+    "max_connections": 2,
+    "auto_retry": true,
+    "max_retries": 3
+  },
+  "delete": {
+    "url": "https://filespace.com/?op=my_files&del_code={file_id}",
+    "method": "GET"
+  },
+  "user_info": {
+    "url": "https://filespace.com/?op=my_account",
+    "storage_regex": "Used space:?\\s*</td>\\s*<td>\\s*<(?:b|strong)>\\s*([\\d.]+)\\s+of\\s+([\\d.]+)\\s+GB\\s*</(?:b|strong)>"
+  }
+}

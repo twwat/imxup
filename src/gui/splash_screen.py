@@ -38,14 +38,7 @@ class SplashScreen(QSplashScreen):
             self.version = f"{APP_VERSION} "
         except:
             self.version = "unknown"
-            
-        self.random_statuses = [
-            "initializing", "activating actuators", "establishing an alibi", "connecting to skynet",
-            "fabricating evidence", "concocting plan", "devising exit strategy", "planning improvisation strategy",
-            "conspiring", "mobilizing", "arousing", "linking to mothership", "replicating replicants",
-            "configuring", "populating microverse", 
-            "rebooting microverse", "stabilizing mood", "flipping a table", "all glory to the hypnotoad"
-            "exorcising demons", "wiping back to front", "counting sheep", "taking a nap", "making you wait for no reason"]
+        self.random_statuses = ['Establishing alibi...', 'Flicking bean...', 'Wiping front to back...']
         #self.status_text = random.choice(self.init_action_words).title()
                
         # Random action words and objects
@@ -130,12 +123,17 @@ class SplashScreen(QSplashScreen):
         
         # Draw copyright and license info
         painter.setPen(QColor(170, 170, 170))
-        license_font = QFont("Courier", 8)
+        license_font = QFont("Courier", 9)
         painter.setFont(license_font)
 
         license_lines = [
-            "Distributed on an \"as is\" basis without warranties ",
-            "or conditions of any kind, express or implied.",
+            #"THIS SOFTWARE IS DISTRIBUTED ON AN \"AS IS\" BASIS, WITHOUT",
+            #"WARRANTIES OR CONDITIONS OF ANY KIND, EXPRESS OR IMPLIED"
+            #"SOFTWARE DISTRIBUTED UNDER THE LICENSE IS DISTRIBUTED ON",
+            #"AN \"AS IS\" BASIS, WITHOUT WARRANTIES OR CONDITIONS",
+            #"OF ANY KIND, EXPRESS OR IMPLIED"
+            "DISTRIBUTED ON AN \"AS IS\" BASIS, WITHOUT WARRANTIES",
+            "OR CONDITIONS OF ANY KIND, EXPRESS OR IMPLIED."
         ]
 
         y_pos = y_offset
@@ -181,8 +179,9 @@ class SplashScreen(QSplashScreen):
     def set_status(self, text):
         """Set status text with random action word and add progress dot"""
         #self.random_timer.stop()
-        action = random.choice(self.action_words).title()
-        self.status_text = f"{action} {text}"
+        #action = random.choice(self.action_words).title()
+        #self.status_text = f"{action} {text}"
+        self.status_text = f"{text}"
         
         self.progress_dots += "•"
         self.repaint()

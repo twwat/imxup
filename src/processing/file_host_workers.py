@@ -7,18 +7,20 @@ upload to hosts, and emit progress signals to the GUI.
 
 import time
 import json
+import threading
 from pathlib import Path
 from typing import Optional, Dict, Any
 
-from PyQt6.QtCore import QThread, pyqtSignal, QSettings
+from PyQt6.QtCore import QThread, pyqtSignal, pyqtSlot, QSettings, Qt
 
 from src.core.engine import AtomicCounter
-from src.core.file_host_config import get_config_manager, HostConfig
+from src.core.file_host_config import get_config_manager, HostConfig, get_file_host_setting
 from src.network.file_host_client import FileHostClient
 from src.processing.file_host_coordinator import get_coordinator
 from src.storage.database import QueueStore
 from src.utils.logger import log
 from src.utils.zip_manager import get_zip_manager
+from src.utils.format_utils import format_binary_size
 
 
 class FileHostWorker(QThread):
@@ -33,12 +35,13 @@ class FileHostWorker(QThread):
     upload_completed = pyqtSignal(int, str, dict)  # gallery_id, host_name, result_dict
     upload_failed = pyqtSignal(int, str, str)  # gallery_id, host_name, error_message
     bandwidth_updated = pyqtSignal(float)  # Instantaneous KB/s from pycurl
-    log_message = pyqtSignal(str)
+    log_message = pyqtSignal([str], [str, str])  # Overloaded: (message) or (level, message) for backward compatibility
 
     # New signals for testing and storage
     storage_updated = pyqtSignal(str, object, object)  # host_id, total_bytes, left_bytes (use object for large ints)
     test_completed = pyqtSignal(str, dict)  # host_id, results_dict
     spinup_complete = pyqtSignal(str, str)  # host_id, error_message (empty = success)
+    credentials_update_requested = pyqtSignal(str)  # credentials (for updating credentials from dialog)
 
     def __init__(self, host_id: str, queue_store: QueueStore):
         """Initialize file host worker for a specific host.
@@ -58,7 +61,7 @@ class FileHostWorker(QThread):
 
         # Get display name for logs (e.g., "RapidGator" instead of "rapidgator")
         host_config = self.config_manager.get_host(host_id)
-        self.log_prefix = f"{host_config.name} worker" if host_config else f"{host_id} worker"
+        self.log_prefix = f"{host_config.name} Worker" if host_config else f"{host_id} Worker"
 
         self.running = True
         self.paused = False
@@ -73,11 +76,24 @@ class FileHostWorker(QThread):
         self.host_credentials: Dict[str, str] = {}
         self._load_credentials()
 
+        # Persistent session state (shared across all client instances)
+        self._session_cookies: Dict[str, str] = {}  # Persists across operations
+        self._session_token: Optional[str] = None    # For session_id_regex hosts
+        self._session_timestamp: Optional[float] = None
+        self._session_lock = threading.Lock()        # Thread safety for session access
+
+        # Test request queue (processed in run() loop to execute in worker thread)
+        self._test_queue: list[str] = []  # List of credentials to test
+        self._test_queue_lock = threading.Lock()
+
         # Current upload tracking
         self.current_upload_id: Optional[int] = None
         self.current_host: Optional[str] = None
         self.current_gallery_id: Optional[int] = None
         self._should_stop_current = False
+
+        # Connect credentials update signal
+        self.credentials_update_requested.connect(self._update_credentials)
 
     def _log(self, message: str, level: str = "info") -> None:
         """Helper to log with host name prefix.
@@ -86,6 +102,10 @@ class FileHostWorker(QThread):
             message: Log message
             level: Log level (info, debug, warning, error)
         """
+        # Emit signal for any connected dialogs (specify two-argument overload)
+        self.log_message[str, str].emit(level, message)
+
+        # Write to file logger
         log(f"{self.log_prefix}: {message}", level=level, category="file_hosts")
 
     def _load_credentials(self) -> None:
@@ -98,30 +118,107 @@ class FileHostWorker(QThread):
                 credentials = decrypt_password(encrypted_creds)
                 if credentials:
                     self.host_credentials[self.host_id] = credentials
-                    self._log("Loaded credentials", level="debug")
+                    self._log("Loaded credentials")
             except Exception as e:
-                self._log(f"Failed to decrypt credentials: {e}", level="error")
+                self._log(f"Failed to decrypt credentials: {e}")
 
-    def update_credentials(self, credentials: str) -> None:
-        """Update credentials (for testing with unsaved credentials)."""
+    @pyqtSlot(str)
+    def _update_credentials(self, credentials: str) -> None:
+        """Update credentials for this host (called via signal from dialog).
+
+        Args:
+            credentials: New credentials string (username:password or api_key)
+        """
         if credentials:
             self.host_credentials[self.host_id] = credentials
-            self._log("Updated credentials for testing", level="debug")
+            self._log("Credentials updated from dialog", level="debug")
+        else:
+            # Empty credentials = remove
+            self.host_credentials.pop(self.host_id, None)
+            self._log("Credentials cleared", level="debug")
+
+    def _create_client(self, host_config: HostConfig) -> FileHostClient:
+        """Create FileHostClient with session reuse.
+
+        Thread-safe: Reads session state under lock, injects into new client.
+
+        Args:
+            host_config: Host configuration
+
+        Returns:
+            Configured FileHostClient instance with session reuse
+        """
+        credentials = self.host_credentials.get(self.host_id)
+
+        # Thread-safe read of session state
+        with self._session_lock:
+            session_cookies = self._session_cookies.copy() if self._session_cookies else None
+            session_token = self._session_token
+            session_timestamp = self._session_timestamp
+
+        # Create client with session injection (no login if session exists)
+        client = FileHostClient(
+            host_config=host_config,
+            bandwidth_counter=self.bandwidth_counter,
+            credentials=credentials,
+            host_id=self.host_id,
+            log_callback=self._log,
+            # NEW: Inject session (reuse if exists, fresh login if None)
+            session_cookies=session_cookies,
+            session_token=session_token,
+            session_timestamp=session_timestamp
+        )
+
+        return client
+
+    def _update_session_from_client(self, client: FileHostClient) -> None:
+        """Extract and persist session state from client.
+
+        Thread-safe: Writes session state under lock.
+
+        Args:
+            client: FileHostClient instance to extract session from
+        """
+        session_state = client.get_session_state()
+
+        with self._session_lock:
+            self._session_cookies = session_state['cookies']
+            self._session_token = session_state['token']
+            self._session_timestamp = session_state['timestamp']
+
+        if session_state['timestamp']:
+            age = time.time() - session_state['timestamp']
+            self._log(f"Session state persisted (age: {age:.0f}s, cookies: {len(session_state['cookies'])})", level="debug")
+
+    def queue_test_request(self, credentials: str) -> None:
+        """Queue a test request to be processed in the worker thread.
+
+        This method is called from the GUI thread and queues the request
+        for processing in the worker's run() loop where it executes in
+        the worker thread context (non-blocking).
+
+        Args:
+            credentials: Credentials to test with
+        """
+        with self._test_queue_lock:
+            self._test_queue.append(credentials)
+            self._log("Test request queued", level="debug")
+
     def stop(self) -> None:
         """Stop the worker thread."""
-        log("Stopping file host worker...", level="info")
+        self._log("Stopping file host worker...", level="debug")
         self.running = False
         self.wait()
 
     def pause(self) -> None:
         """Pause processing new uploads."""
         self.paused = True
-        log("File host worker paused", level="info")
+        self._log("File host worker paused", level="info")
 
     def resume(self) -> None:
         """Resume processing uploads."""
         self.paused = False
-        log("File host worker resumed", level="info")
+        self._log("File host worker resumed", level="info")
 
     def cancel_current_upload(self) -> None:
         """Cancel the current upload."""
@@ -147,46 +244,50 @@ class FileHostWorker(QThread):
                 return
 
             self._log("Testing credentials during spinup...", level="info")
-            client = FileHostClient(
-                host_config=host_config,
-                bandwidth_counter=self.bandwidth_counter,
-                credentials=credentials,
-                host_id=self.host_id,
-                log_callback=self._log
-            )
+
+            spinup_success = False
+            spinup_error = ""
 
             try:
+                client = self._create_client(host_config)
                 cred_result = client.test_credentials()
                 if not cred_result.get('success'):
-                    error = cred_result.get('message', 'Credential validation failed')
-                    self._log(f"Credential test failed: {error}", level="warning")
-                    self.spinup_complete.emit(self.host_id, error)
-                    self.running = False
-                    return
+                    spinup_error = cred_result.get('message', 'Credential validation failed')
+                    self._log(f"Credential test failed: {spinup_error}", level="warning")
+                else:
+                    # Save storage if available
+                    user_info = cred_result.get('user_info', {})
+                    if user_info:
+                        storage_total = user_info.get('storage_total')
+                        storage_left = user_info.get('storage_left')
+                        if storage_total is not None and storage_left is not None:
+                            try:
+                                total = int(storage_total)
+                                left = int(storage_left)
+                                self._save_storage_cache(total, left)
+                                self.storage_updated.emit(self.host_id, total, left)
+                                self._log(f"Cached storage during spinup: {format_binary_size(left)}/{format_binary_size(total)}", level="debug")
+                            except (ValueError, TypeError) as e:
+                                self._log(f"Failed to parse storage: {e}", level="debug")
 
-                # Save storage if available
-                user_info = cred_result.get('user_info', {})
-                if user_info:
-                    storage_total = user_info.get('storage_total')
-                    storage_left = user_info.get('storage_left')
-                    if storage_total is not None and storage_left is not None:
-                        try:
-                            total = int(storage_total)
-                            left = int(storage_left)
-                            self._save_storage_cache(total, left)
-                            self.storage_updated.emit(self.host_id, total, left)
-                            self._log(f"Cached storage during spinup: {left}/{total} bytes", level="info")
-                        except (ValueError, TypeError) as e:
-                            self._log(f"Failed to parse storage: {e}", level="warning")
+                    self._log("Successfully validated credentials; spinup complete!", level="info")
+                    spinup_success = True
 
-                self._log("Credentials validated successfully", level="info")
-                # Emit success (empty error message)
-                self.spinup_complete.emit(self.host_id, "")
+                    # Persist session from first login
+                    self._update_session_from_client(client)
+
             except Exception as e:
                 import traceback
-                error = f"Credential test exception: {str(e)}"
-                self._log(f"{error}\n{traceback.format_exc()}", level="error")
-                self.spinup_complete.emit(self.host_id, error)
+                spinup_error = f"Credential test exception: {str(e)}"
+                self._log(f"{spinup_error}\n{traceback.format_exc()}", level="error")
+
+            finally:
+                # ALWAYS emit spinup_complete signal - manager depends on this for cleanup
+                # Emit success (empty error) or failure (with error message)
+                self.spinup_complete.emit(self.host_id, "" if spinup_success else spinup_error)
+
+            # If spinup failed, stop worker thread
+            if not spinup_success:
                 self.running = False
                 return
 
@@ -194,6 +295,20 @@ class FileHostWorker(QThread):
             try:
                 if self.paused:
                     time.sleep(0.5)
+                    continue
+
+                # Check for test requests (process in worker thread)
+                test_credentials = None
+                with self._test_queue_lock:
+                    if self._test_queue:
+                        test_credentials = self._test_queue.pop(0)
+
+                if test_credentials:
+                    # Update credentials and run test in worker thread
+                    self.host_credentials[self.host_id] = test_credentials
+                    self._log("Processing test request in worker thread", level="debug")
+                    self.test_connection()
+                    # Continue loop to check for more tests or uploads
                     continue
 
                 # Get next pending upload for THIS host only
@@ -214,7 +329,8 @@ class FileHostWorker(QThread):
 
                 # Check if host is enabled (should always be true since worker exists)
                 host_config = self.config_manager.get_host(host_name)
-                if not host_config or not host_config.enabled:
+                host_enabled = get_file_host_setting(host_name, "enabled", "bool")
+                if not host_config or not host_enabled:
                     self._log(
                         f"Host {host_name} is disabled, skipping upload for gallery {gallery_id}",
                         level="warning")
@@ -251,7 +367,7 @@ class FileHostWorker(QThread):
                     time.sleep(1.0)
 
             except Exception as e:
-                log(f"Error in file host worker loop: {e}", level="error")
+                self._log(f"Error in file host worker loop: {e}", level="error")
                 import traceback
                 traceback.print_exc()
                 time.sleep(1.0)
@@ -318,17 +434,8 @@ class FileHostWorker(QThread):
                 total_bytes=zip_size
             )
 
-            # Step 2: Get credentials for this host
-            credentials = self.host_credentials.get(host_name)
-
-            # Step 3: Create client and upload
-            client = FileHostClient(
-                host_config=host_config,
-                bandwidth_counter=self.bandwidth_counter,
-                credentials=credentials,
-                host_id=self.host_id,
-                log_callback=self._log
-            )
+            # Step 2: Create client and upload (reuses session if available)
+            client = self._create_client(host_config)
 
             def on_progress(uploaded: int, total: int):
                 """Progress callback from pycurl."""
@@ -380,6 +487,16 @@ class FileHostWorker(QThread):
                 self._log(
                     f"Successfully uploaded to {host_name}: {download_url}",
                     level="info")
+                
+                # Log raw server response for debugging (with linebreaks as \n text)
+                raw_resp = result.get('raw_response', {})
+                if raw_resp:
+                    resp_str = json.dumps(raw_resp, ensure_ascii=False).replace('\n', '\\n')
+                    self._log(f"Server response: {resp_str}", level="debug")
+                    
+                # Update session after successful upload (in case tokens refreshed)
+                self._update_session_from_client(client)
+                
             else:
                 raise Exception(result.get('error', 'Upload failed'))
 
@@ -395,9 +512,11 @@ class FileHostWorker(QThread):
             retry_count = current_upload['retry_count'] if current_upload else 0
 
             # Check if we should retry
+            auto_retry = get_file_host_setting(host_name, "auto_retry", "bool")
+            max_retries = get_file_host_setting(host_name, "max_retries", "int")
             should_retry = (
-                host_config.auto_retry and
-                retry_count < host_config.max_retries and
+                auto_retry and
+                retry_count < max_retries and
                 not self._should_stop_current
             )
 
@@ -411,7 +530,7 @@ class FileHostWorker(QThread):
                 )
 
                 self._log(
-                    f"Will retry upload to {host_name} (attempt {retry_count + 1}/{host_config.max_retries})",
+                    f"Will retry upload to {host_name} (attempt {retry_count + 1}/{max_retries})",
                     level="info"
                 )
             else:
@@ -518,16 +637,8 @@ class FileHostWorker(QThread):
             if not host_config:
                 raise Exception(f"Host config not found: {self.host_id}")
 
-            credentials = self.host_credentials.get(self.host_id)
-
-            # Create client - this triggers login which opportunistically caches storage
-            client = FileHostClient(
-                host_config=host_config,
-                bandwidth_counter=self.bandwidth_counter,
-                credentials=credentials,
-                host_id=self.host_id,
-                log_callback=self._log
-            )
+            # Create client (reuses session if available)
+            client = self._create_client(host_config)
 
             # Check if storage was cached during login (saves an API call!)
             cached_storage = client.get_cached_storage_from_login()
@@ -580,12 +691,16 @@ class FileHostWorker(QThread):
                 f"Storage updated: {left}/{total} bytes free",
                 level="info")
 
+            # Update session after storage check (in case tokens refreshed)
+            self._update_session_from_client(client)
+
         except Exception as e:
             self._log(
                 f"Storage check failed: {e}",
                 level="error")
             # Do NOT emit signal with bad data
 
+    @pyqtSlot()
     def test_connection(self) -> None:
         """Run full test suite: credentials → user_info → upload → delete.
 
@@ -610,16 +725,8 @@ class FileHostWorker(QThread):
             if not host_config:
                 raise Exception(f"Host config not found: {self.host_id}")
 
-            credentials = self.host_credentials.get(self.host_id)
-
-            # Create client (bypasses coordinator)
-            client = FileHostClient(
-                host_config=host_config,
-                bandwidth_counter=self.bandwidth_counter,
-                credentials=credentials,
-                host_id=self.host_id,
-                log_callback=self._log
-            )
+            # Create client (reuses session if available)
+            client = self._create_client(host_config)
 
             # Test 1: Credentials
             self._log("Testing credentials...", level="debug")
@@ -656,13 +763,13 @@ class FileHostWorker(QThread):
                         left = int(storage_left or 0)
                         self._save_storage_cache(total, left)
                         self.storage_updated.emit(self.host_id, total, left)
-                        self._log(f"✓ Cached storage during test: {left}/{total} bytes", level="info")
+                        self._log(f"Cached storage during test: {left}/{total} bytes", level="info")
                     except (ValueError, TypeError) as e:
-                        self._log(f"Failed to parse storage during test: {e}", level="warning")
+                        self._log(f"Failed to parse storage during test: {e}", level="debug")
                 else:
                     self._log(
                         f"Storage data missing in test response (total={storage_total}, left={storage_left})",
-                        level="warning"
+                        level="debug"
                     )
             else:
                 self._log("No user_info in test credentials response", level="warning")
@@ -688,18 +795,20 @@ class FileHostWorker(QThread):
                     client.delete_file(file_id)
                     results['delete_success'] = True
                 except Exception as e:
-                    self._log(
-                        f"Delete test failed for {self.host_id}: {e}",
-                        level="warning")
+                    self._log(f"Delete test failed for {self.host_id}: {e}", level="warning")
                     # Don't fail entire test if delete fails
                     results['delete_success'] = False
 
             # All tests passed (or delete not supported)
             self._save_test_results(results)
+
+            # Update session after test completes (in case tokens refreshed)
+            self._update_session_from_client(client)
+
             self.test_completed.emit(self.host_id, results)
 
             self._log(
-                f"Connection test completed: {sum([results['credentials_valid'], results['user_info_valid'], results['upload_success'], results['delete_success']])}/4 tests passed",
+                f"Tests completed: {sum([results['credentials_valid'], results['user_info_valid'], results['upload_success'], results['delete_success']])}/4 tests passed",
                 level="info"
             )
 
@@ -710,7 +819,7 @@ class FileHostWorker(QThread):
 
             self._log(
                 f"Connection test failed: {e}",
-                level="error")
+                level="warning")
 
     # =========================================================================
     # Cache Helper Methods
@@ -749,6 +858,7 @@ class FileHostWorker(QThread):
         self.settings.setValue(f"FileHosts/{self.host_id}/storage_ts", int(time.time()))
         self.settings.setValue(f"FileHosts/{self.host_id}/storage_total", str(total))
         self.settings.setValue(f"FileHosts/{self.host_id}/storage_left", str(left))
+        self._log(f"Storage cache updated: {format_binary_size(left)}/{format_binary_size(total)} bytes", level="debug")
         self.settings.sync()
 
     def _save_test_results(self, results: Dict[str, Any]) -> None:

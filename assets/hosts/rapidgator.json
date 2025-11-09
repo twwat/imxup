@@ -1,0 +1,59 @@
+{
+  "name": "RapidGator",
+  "icon": "rapidgator.png",
+  "referral_url": "https://rapidgator.net/article/resource/ref/4058796",
+  "requires_auth": true,
+  "auth_type": "token_login",
+
+  "upload": {
+    "endpoint": "",
+    "method": "POST",
+    "file_field": "file"
+  },
+
+  "response": {
+    "type": "json",
+    "link_path": ["response", "upload", "file", "url"]
+  },
+
+  "auth": {
+    "login_url": "https://rapidgator.net/api/v2/user/login",
+    "login_fields": {
+      "login": "{username}",
+      "password": "{password}"
+    },
+    "token_path": ["response", "token"],
+    "token_ttl": 86400
+  },
+
+  "multistep": {
+    "init_url": "https://rapidgator.net/api/v2/file/upload?name={filename}&hash={hash}&size={size}&token={token}",
+    "init_params": ["filename", "hash", "size", "token"],
+    "upload_url_path": ["response", "upload", "url"],
+    "upload_id_path": ["response", "upload", "upload_id"],
+    "poll_url": "https://rapidgator.net/api/v2/file/upload_info?upload_id={upload_id}&token={token}",
+    "poll_delay": 1.0,
+    "poll_retries": 10,
+    "require_hash": true
+  },
+
+  "defaults": {
+    "max_file_size_mb": null,
+    "max_connections": 2,
+    "auto_retry": true,
+    "max_retries": 3
+  },
+
+  "delete": {
+    "url": "https://rapidgator.net/api/v2/file/delete?file_id={file_id}&token={token}",
+    "method": "GET",
+    "params": ["file_id", "token"]
+  },
+
+  "user_info": {
+    "url": "https://rapidgator.net/api/v2/user/info?token={token}",
+    "storage_total_path": ["response", "user", "storage", "total"],
+    "storage_left_path": ["response", "user", "storage", "left"],
+    "premium_status_path": ["response", "user", "is_premium"]
+  }
+}

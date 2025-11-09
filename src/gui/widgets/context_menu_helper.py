@@ -4,7 +4,7 @@ Helps organize context menu functionality to avoid bloating main_window.py.
 """
 
 from PyQt6.QtWidgets import QMenu
-from PyQt6.QtCore import QObject, pyqtSignal, Qt
+from PyQt6.QtCore import QObject, pyqtSignal, Qt, QMutexLocker
 
 
 class GalleryContextMenuHelper(QObject):
@@ -331,11 +331,14 @@ class GalleryContextMenuHelper(QObject):
                     if success:
                         updated_count += 1
                         
-                        # Update in-memory queue item
-                        gallery_item = self.main_window.queue_manager.get_item(gallery_path)
-                        if gallery_item:
-                            gallery_item.template_name = template_name
-                        
+                        # Update in-memory queue item (thread-safe)
+                        gallery_item = None
+                        with QMutexLocker(self.main_window.queue_manager.mutex):
+                            if gallery_path in self.main_window.queue_manager.items:
+                                gallery_item = self.main_window.queue_manager.items[gallery_path]
+                                gallery_item.template_name = template_name
+                                self.main_window.queue_manager._inc_version()
+
                         # For completed galleries, regenerate BBCode
                         if gallery_item and gallery_item.status == "completed":
                             try:

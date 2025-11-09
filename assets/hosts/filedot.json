@@ -1,0 +1,61 @@
+{
+  "name": "FileDot.to",
+  "icon": "filedot.png",
+  "referral_url": "https://filedot.to/free26531.html",
+  "requires_auth": true,
+  "auth_type": "session",
+  "upload": {
+    "endpoint": "{server}/upload.cgi",
+    "get_server": "https://filedot.to/server",
+    "server_response_path": ["url"],
+    "method": "POST",
+    "file_field": "file_0",
+    "extra_fields": {
+      "utype": "reg"
+    }
+  },
+  "response": {
+    "type": "json",
+    "link_path": [
+      "file_code"
+    ],
+    "link_prefix": "https://filedot.to/",
+    "file_id_path": [
+      "file_code"
+    ]
+  },
+  "auth": {
+    "login_url": "https://filedot.to/login",
+    "login_fields": {
+      "op": "login",
+      "login": "{username}",
+      "password": "{password}",
+      "redirect": ""
+    },
+    "session_id_regex": "name=\"sess_id\"\\s+value=\"([^\"]+)\"",
+    "upload_page_url": "https://filedot.to/upload",
+    "captcha_regex": "<div[^>]*style=[\"']width:80px[^>]*>.*?</div>",
+    "captcha_transform": null,
+    "stale_token_patterns": [
+      "Anti-CSRF check failed",
+      "session.*expired",
+      "token.*invalid"
+    ],
+    "check_body_on_success": true
+  },
+  "defaults": {
+    "max_file_size_mb": null,
+    "max_connections": 2,
+    "auto_retry": true,
+    "max_retries": 3
+  },
+  "delete": {
+    "url": "https://filedot.to/?op=my_files",
+    "method": "POST",
+    "params": ["del_code", "sess_id"]
+  },
+  "user_info": {
+    "url": "https://filedot.to/account/",
+    "storage_regex": "(?i)Used space:?\\s*</td>\\s*<td>\\s*<(?:b|strong)>\\s*([\\d.]+)\\s+of\\s+([\\d.]+)\\s+GB\\s*</(?:b|strong)>"
+  }
+}

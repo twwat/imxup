@@ -49,6 +49,10 @@ class IconManager:
         'renamed_true':         ['renamed_true-light.png',      'renamed_true-dark.png'],
         'renamed_false':        ['renamed_false-light.png',     'renamed_false-dark.png'],
         
+        # File host 
+        'host_enabled':         ['host_enabled-light.png',      'host_enabled-dark.png'],
+        'host_disabled':        ['host_disabled-light.png',     'host_disabled-dark.png'],
+        
         # UI element icons
         'settings':             ['settings-light.png',          'settings-dark.png'],
         'templates':            ['templates-light.png',         'templates-dark.png'],

@@ -437,6 +437,7 @@ class QueueStore:
         final_kibps = float(item.get('final_kibps', 0.0) or 0.0)
         gallery_id = item.get('gallery_id')
         gallery_url = item.get('gallery_url')
+        db_id = item.get('db_id')  # Predicted database ID
         insertion_order = int(item.get('insertion_order', 0) or 0)
         failed_files = json.dumps(item.get('failed_files', []))
         tab_name = item.get('tab_name', 'Main')
@@ -487,6 +488,11 @@ class QueueStore:
                   total_size, scan_complete, uploaded_bytes, final_kibps, gallery_id, gallery_url,
                   insertion_order, failed_files, tab_name]
 
+        # If db_id is provided (predicted), insert with explicit ID
+        if db_id is not None:
+            columns.insert(0, 'id')
+            values.insert(0, db_id)
+
         # Optional columns - add if they exist in schema
         optional_fields = {
             'tab_id': tab_id,
@@ -514,7 +520,7 @@ class QueueStore:
         # Build SQL statement
         columns_str = ', '.join(columns)
         placeholders = ','.join(['?'] * len(columns))
-        update_pairs = ','.join([f"{col}=excluded.{col}" for col in columns if col != 'path'])
+        update_pairs = ','.join([f"{col}=excluded.{col}" for col in columns if col not in ('path', 'id')])
 
         sql = f"""
             INSERT INTO galleries({columns_str})
@@ -618,6 +624,7 @@ class QueueStore:
             for r in rows:
                 # Current schema: 28 columns (id at index 0, custom1-4 at 19-22, ext1-4 at 23-26, image_files at index 27)
                 item: Dict[str, Any] = {
+                    'db_id': int(r[0]),  # Database primary key
                     'path': r[1],
                     'name': r[2],
                     'status': r[3],

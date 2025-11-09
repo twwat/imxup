@@ -1,0 +1,59 @@
+{
+  "name": "TezFiles",
+  "icon": "tezfiles.png",
+  "referral_url": "https://tezfiles.com/pr/53023444",
+  "requires_auth": true,
+  "auth_type": "api_key",
+
+  "upload": {
+    "endpoint": "",
+    "method": "POST",
+    "file_field": "file"
+  },
+
+  "response": {
+    "type": "json",
+    "link_path": ["link"],
+    "file_id_path": ["user_file_id"]
+  },
+
+  "auth": {
+    "token_type": "permanent"
+  },
+
+  "multistep": {
+    "init_url": "https://tezfiles.com/api/v2/getUploadFormData",
+    "init_method": "POST",
+    "init_body_json": true,
+    "upload_url_path": ["form_action"],
+    "file_field_path": ["file_field"],
+    "form_data_path": ["form_data"],
+    "poll_delay": 0,
+    "poll_retries": 0,
+    "require_hash": false
+  },
+
+  "defaults": {
+    "max_file_size_mb": null,
+    "max_connections": 2,
+    "auto_retry": true,
+    "max_retries": 3
+  },
+
+  "delete": {
+    "url": "https://tezfiles.com/api/v2/deleteFiles",
+    "method": "POST",
+    "body_json": true
+  },
+
+  "user_info": {
+    "url": "https://tezfiles.com/api/v2/accountInfo",
+    "method": "POST",
+    "body_json": true,
+    "account_expires_path": ["account_expires"]
+  },
+
+  "comments": {
+    "note": "TezFiles API returns 'available_traffic' (daily bandwidth limit in bytes), NOT storage quota. Storage monitoring is not available via API."
+  }
+}
