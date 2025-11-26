@@ -400,25 +400,27 @@ class FileHostWorker(QThread):
                         error_msg += f" (tried WSL2 path: {folder_path})"
 
                     self._log(f"FAIL FAST: {error_msg}", level="error")
+                    # CRITICAL: Emit signal FIRST before DB write (fail-fast path)
+                    self.upload_failed.emit(gallery_id, host_name, error_msg)
                     self.queue_store.update_file_host_upload(
                         upload_id,
                         status='failed',
                         finished_ts=int(time.time()),
                         error_message=error_msg
                     )
-                    self.upload_failed.emit(gallery_id, host_name, error_msg)
                     continue
 
                 if not folder_path.is_dir():
                     error_msg = f"Path is not a directory: {gallery_path}"
                     self._log(f"FAIL FAST: {error_msg}", level="error")
+                    # CRITICAL: Emit signal FIRST before DB write (fail-fast path)
+                    self.upload_failed.emit(gallery_id, host_name, error_msg)
                     self.queue_store.update_file_host_upload(
                         upload_id,
                         status='failed',
                         finished_ts=int(time.time()),
                         error_message=error_msg
                     )
-                    self.upload_failed.emit(gallery_id, host_name, error_msg)
                     continue
 
                 # Check if host is enabled (should always be true since worker exists)
@@ -501,15 +503,16 @@ class FileHostWorker(QThread):
             level="info"
         )
 
-        # Update status to uploading
+        # CRITICAL: Emit started signal FIRST before database write
+        # This ensures GUI gets immediate notification without waiting for DB
+        self.upload_started.emit(gallery_id, host_name)
+
+        # Update status to uploading (AFTER signal emission)
         self.queue_store.update_file_host_upload(
             upload_id,
             status='uploading',
             started_ts=int(time.time())
         )
-
-        # Emit started signal
-        self.upload_started.emit(gallery_id, host_name)
 
         try:
             # Step 1: Create or reuse ZIP (with WSL2 path conversion)
@@ -579,7 +582,11 @@ class FileHostWorker(QThread):
                 download_url = result.get('url', '')
                 file_id = result.get('upload_id') or result.get('file_id', '')
 
-                # Update database with success
+                # CRITICAL: Emit signal FIRST before any blocking operations
+                # This ensures GUI gets immediate notification without waiting for DB writes
+                self.upload_completed.emit(gallery_id, host_name, result)
+
+                # Update database with success (AFTER signal emission)
                 self.queue_store.update_file_host_upload(
                     upload_id,
                     status='completed',
@@ -591,10 +598,10 @@ class FileHostWorker(QThread):
                     uploaded_bytes=zip_size
                 )
 
-                # Record success
+                # Record success (fast operation, no blocking)
                 self.coordinator.record_completion(success=True)
 
-                # Record metrics for successful transfer
+                # Record metrics for successful transfer (async via queue)
                 from src.utils.metrics_store import get_metrics_store
                 metrics_store = get_metrics_store()
                 if metrics_store:
@@ -604,9 +611,6 @@ class FileHostWorker(QThread):
                         transfer_time=upload_elapsed_time,
                         success=True
                     )
-
-                # Emit completed signal
-                self.upload_completed.emit(gallery_id, host_name, result)
                 self._log(
                     f"Successfully uploaded {gallery_name}: {download_url}",
                     level="info")
@@ -662,7 +666,11 @@ class FileHostWorker(QThread):
                     level="info"
                 )
             else:
-                # Mark as failed
+                # CRITICAL: Emit failed signal FIRST before blocking operations
+                # This ensures GUI gets immediate notification
+                self.upload_failed.emit(gallery_id, host_name, error_msg)
+
+                # Mark as failed (AFTER signal emission)
                 self.queue_store.update_file_host_upload(
                     upload_id,
                     status='failed',
@@ -673,10 +681,10 @@ class FileHostWorker(QThread):
                 # Force cleanup ZIP on final failure (no more retries)
                 self.zip_manager.cleanup_gallery(gallery_id)
 
-                # Record failure
+                # Record failure (fast operation)
                 self.coordinator.record_completion(success=False)
 
-                # Record metrics for failed transfer
+                # Record metrics for failed transfer (async via queue)
                 from src.utils.metrics_store import get_metrics_store
                 metrics_store = get_metrics_store()
                 if metrics_store:
@@ -688,9 +696,6 @@ class FileHostWorker(QThread):
                         transfer_time=elapsed,
                         success=False
                     )
-
-                # Emit failed signal
-                self.upload_failed.emit(gallery_id, host_name, error_msg)
 
         finally:
             # Release ZIP reference

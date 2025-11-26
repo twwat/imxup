@@ -3467,10 +3467,11 @@ class ImxUploadGUI(QMainWindow):
 
     # File Host Upload Signal Handlers
     def on_file_host_upload_started(self, gallery_id: int, host_name: str):
-        """Handle file host upload started"""
+        """Handle file host upload started - ASYNC to prevent blocking main thread"""
         log(f"File host upload started: {host_name} for gallery {gallery_id}", level="debug", category="file_hosts")
-        # Refresh the row to show uploading status
-        self._refresh_file_host_widgets_for_gallery_id(gallery_id)
+        # Defer UI refresh to avoid blocking signal emission
+        from PyQt6.QtCore import QTimer
+        QTimer.singleShot(0, lambda: self._refresh_file_host_widgets_for_gallery_id(gallery_id))
 
     def on_file_host_upload_progress(self, gallery_id: int, host_name: str, uploaded_bytes: int, total_bytes: int, speed_bps: float = 0.0):
         """Handle file host upload progress with detailed display"""
@@ -3501,16 +3502,19 @@ class ImxUploadGUI(QMainWindow):
             log(f"Error handling file host upload progress: {e}", level="error", category="file_hosts")
 
     def on_file_host_upload_completed(self, gallery_id: int, host_name: str, result: dict):
-        """Handle file host upload completed"""
+        """Handle file host upload completed - ASYNC to prevent blocking main thread"""
         log(f"File host upload completed: {host_name} for gallery {gallery_id}", level="info", category="file_hosts")
-        # Refresh the row to show completed status
-        self._refresh_file_host_widgets_for_gallery_id(gallery_id)
+        # Defer UI refresh to avoid blocking signal emission
+        # Use QTimer.singleShot(0) to schedule on next event loop iteration
+        from PyQt6.QtCore import QTimer
+        QTimer.singleShot(0, lambda: self._refresh_file_host_widgets_for_gallery_id(gallery_id))
 
     def on_file_host_upload_failed(self, gallery_id: int, host_name: str, error_message: str):
-        """Handle file host upload failed"""
+        """Handle file host upload failed - ASYNC to prevent blocking main thread"""
         log(f"File host upload failed: {host_name} for gallery {gallery_id}: {error_message}", level="warning", category="file_hosts")
-        # Refresh the row to show failed status
-        self._refresh_file_host_widgets_for_gallery_id(gallery_id)
+        # Defer UI refresh to avoid blocking signal emission
+        from PyQt6.QtCore import QTimer
+        QTimer.singleShot(0, lambda: self._refresh_file_host_widgets_for_gallery_id(gallery_id))
 
     def on_file_host_bandwidth_updated(self, kbps: float):
         """Handle file host bandwidth update with smoothing.
@@ -3717,24 +3721,43 @@ class ImxUploadGUI(QMainWindow):
         self.worker_status_widget.update_worker_error(worker_id, error)
 
     def _refresh_file_host_widgets_for_gallery_id(self, gallery_id: int):
-        """Refresh file host widgets for a specific gallery ID"""
+        """Refresh file host widgets for a specific gallery ID - OPTIMIZED VERSION
+
+        This method is called asynchronously via QTimer to avoid blocking signal emission.
+        Optimized to use O(1) lookups instead of iterating all items.
+        """
         try:
-            # Find gallery path from gallery_id
-            gallery_path = None
-            for item in self.queue_manager.get_all_items():
-                if item.gallery_id and str(item.gallery_id) == str(gallery_id):
-                    gallery_path = item.path
-                    break
+            # OPTIMIZATION 1: Use cached gallery_id -> path mapping if available
+            # This avoids iterating through all queue items
+            if not hasattr(self, '_gallery_id_to_path'):
+                self._gallery_id_to_path = {}
+
+            gallery_path = self._gallery_id_to_path.get(gallery_id)
+
+            # If not cached, fall back to search (only on first miss)
+            if not gallery_path:
+                for item in self.queue_manager.get_all_items():
+                    if item.gallery_id and str(item.gallery_id) == str(gallery_id):
+                        gallery_path = item.path
+                        # Cache for future lookups
+                        self._gallery_id_to_path[gallery_id] = gallery_path
+                        break
 
             if not gallery_path:
                 return
 
-            # Find row for this gallery
+            # OPTIMIZATION 2: O(1) row lookup via path_to_row dict
             row = self.path_to_row.get(gallery_path)
             if row is None:
                 return
 
-            # Get updated host upload data
+            # OPTIMIZATION 3: Get widget reference first, skip DB query if widget missing
+            from src.gui.widgets.custom_widgets import FileHostsStatusWidget
+            status_widget = self.gallery_table.cellWidget(row, GalleryTableWidget.COL_HOSTS_STATUS)
+            if not isinstance(status_widget, FileHostsStatusWidget):
+                return  # Widget not present, skip expensive DB query
+
+            # Only do DB query if we have a valid widget to update
             host_uploads = {}
             try:
                 uploads_list = self.queue_manager.store.get_file_host_uploads(gallery_path)
@@ -3743,12 +3766,9 @@ class ImxUploadGUI(QMainWindow):
                 log(f"Failed to load file host uploads: {e}", level="warning", category="file_hosts")
                 return
 
-            # Update the HOSTS_STATUS widget
-            from src.gui.widgets.custom_widgets import FileHostsStatusWidget
-            status_widget = self.gallery_table.cellWidget(row, GalleryTableWidget.COL_HOSTS_STATUS)
-            if isinstance(status_widget, FileHostsStatusWidget):
-                status_widget.update_hosts(host_uploads)
-                status_widget.update()  # Force visual refresh
+            # Update widget (already confirmed it exists and is correct type)
+            status_widget.update_hosts(host_uploads)
+            status_widget.update()  # Force visual refresh
 
         except Exception as e:
             log(f"Error refreshing file host widgets: {e}", level="error", category="file_hosts")
