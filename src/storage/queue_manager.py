@@ -297,7 +297,7 @@ class QueueManager(QObject):
         """Scan images for validation and metadata"""
         gallery_name = os.path.basename(path)
 
-        result = {
+        result: dict[str, Any] = {
             'total_size': 0,
             'failed_files': [],
             'avg_width': 0.0,
@@ -1088,9 +1088,10 @@ class QueueManager(QObject):
                 self._inc_version()
 
                 # Trigger BBCode regeneration when custom field changes
-                if hasattr(self, 'parent') and self.parent and hasattr(self.parent, 'regenerate_bbcode_for_gallery'):
+                parent_obj = getattr(self, 'parent', None)
+                if parent_obj and hasattr(parent_obj, 'regenerate_bbcode_for_gallery'):
                     try:
-                        self.parent.regenerate_bbcode_for_gallery(path)
+                        parent_obj.regenerate_bbcode_for_gallery(path)
                     except Exception as e:
                         print(f"{timestamp()} Error auto-regenerating BBCode for {path}: {e}")
 
@@ -1168,11 +1169,12 @@ class QueueManager(QObject):
             self._inc_version()
 
             # Trigger BBCode regeneration when gallery name changes
-            if hasattr(self, 'parent') and self.parent and hasattr(self.parent, 'regenerate_bbcode_for_gallery'):
+            parent_obj = getattr(self, 'parent', None)
+            if parent_obj and hasattr(parent_obj, 'regenerate_bbcode_for_gallery'):
                 try:
-                    self.parent.regenerate_bbcode_for_gallery(path)
+                    parent_obj.regenerate_bbcode_for_gallery(path)
                     log(f" Regenerated bbcode for {path}")
-                    
+
                 except Exception as e:
                     log(f" Error auto-regenerating BBCode for {path}: {e}")
 

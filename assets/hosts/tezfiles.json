@@ -8,7 +8,9 @@
   "upload": {
     "endpoint": "",
     "method": "POST",
-    "file_field": "file"
+    "file_field": "file",
+    "inactivity_timeout": 300,
+    "upload_timeout": null
   },
 
   "response": {
@@ -34,7 +36,8 @@
   },
 
   "defaults": {
-    "max_file_size_mb": null,
+    "max_file_size_mb": 10239,
+    "storage_gb": 10000,
     "max_connections": 2,
     "auto_retry": true,
     "max_retries": 3

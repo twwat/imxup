@@ -28,7 +28,8 @@ class BBCodeViewerDialog(QDialog):
         self.setWindowTitle(f"BBCode Files - {self.folder_name}")
         self.setModal(True)
         self.resize(800, 600)
-        
+        self._center_on_parent()
+
         # Setup UI
         layout = QVBoxLayout(self)
         
@@ -166,3 +167,21 @@ class BBCodeViewerDialog(QDialog):
             
         except Exception as e:
             QMessageBox.warning(self, "Save Error", f"Error saving files: {str(e)}")
+    def _center_on_parent(self):
+        """Center dialog on parent window or screen"""
+        if self.parent():
+            # Center on parent window
+            parent_geo = self.parent().geometry()
+            dialog_geo = self.frameGeometry()
+            x = parent_geo.x() + (parent_geo.width() - dialog_geo.width()) // 2
+            y = parent_geo.y() + (parent_geo.height() - dialog_geo.height()) // 2
+            self.move(x, y)
+        else:
+            # Center on screen if no parent
+            screen = QApplication.primaryScreen()
+            if screen:
+                screen_geo = screen.geometry()
+                dialog_geo = self.frameGeometry()
+                x = (screen_geo.width() - dialog_geo.width()) // 2
+                y = (screen_geo.height() - dialog_geo.height()) // 2
+                self.move(x, y)

@@ -25,7 +25,7 @@ class ArchiveFolderSelector(QDialog):
         """
         super().__init__(parent)
         self.folders = folders
-        self.selected_folders = []
+        self.selected_folders: list[Path] = []
 
         self.setWindowTitle(f"Select Folders - {archive_name}")
         self.setMinimumSize(600, 400)

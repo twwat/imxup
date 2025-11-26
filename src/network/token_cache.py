@@ -9,6 +9,9 @@ import time
 from typing import Optional, Dict, Any
 from PyQt6.QtCore import QSettings
 
+# Import encryption functions from imxup module
+from imxup import encrypt_password, decrypt_password
+
 
 class TokenCache:
     """Manages cached authentication tokens for file hosts."""
@@ -25,8 +28,6 @@ class TokenCache:
             token: Authentication token
             ttl: Time-to-live in seconds (None = no expiration)
         """
-        from imxup import encrypt_password
-
         # Encrypt the token
         encrypted_token = encrypt_password(token)
 
@@ -54,8 +55,6 @@ class TokenCache:
         Returns:
             Decrypted token if valid, None if expired or not found
         """
-        from imxup import decrypt_password
-
         self.settings.beginGroup(f"FileHosts/Tokens/{host_id}")
 
         # Check if token exists

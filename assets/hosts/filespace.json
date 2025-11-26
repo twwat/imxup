@@ -1,5 +1,5 @@
 {
-  "name": "FileSpace",
+  "name": "Filespace",
   "icon": "filespace.png",
   "referral_url": "https://filespace.com/free399849.html",
   "requires_auth": true,
@@ -8,7 +8,9 @@
     "endpoint": "https://phoebe.filespace.com/cgi-bin/upload.cgi?upload_id=",
     "method": "POST",
     "file_field": "file",
-    "extra_fields": {}
+    "extra_fields": {},
+    "inactivity_timeout": 300,
+    "upload_timeout": null
   },
   "response": {
     "type": "text",
@@ -26,7 +28,8 @@
     "session_cookie_name": "xfss"
   },
   "defaults": {
-    "max_file_size_mb": null,
+    "max_file_size_mb": 5000,
+    "storage_gb": 50,
     "max_connections": 2,
     "auto_retry": true,
     "max_retries": 3

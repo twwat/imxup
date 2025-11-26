@@ -8,14 +8,15 @@ from __future__ import annotations
 import os
 import sqlite3
 import platform
+import time
 from src.utils.logger import log
 from datetime import datetime
 
 # Cookie cache to avoid repeated Firefox database access
 # Structure: {cache_key: {cookie_name: cookie_data}}
-_firefox_cookie_cache = {}
-_firefox_cache_time = 0
-_cache_duration = 300  # Cache for 5 minutes
+_firefox_cookie_cache: dict[str, dict[str, dict[str, str | bool]]] = {}
+_firefox_cache_time: float = 0.0
+_cache_duration: int = 300  # Cache for 5 minutes
 
 
 def _timestamp() -> str:
@@ -28,135 +29,147 @@ def get_firefox_cookies(domain: str = "imx.to", cookie_names: list[str] | None =
     Args:
         domain: Domain to extract cookies for (default: "imx.to")
         cookie_names: Optional list of specific cookie names to extract.
-                     If None, extracts all cookies for the domain.
+                      If None, extracts all cookies for the domain.
+                      Example: ["PHPSESSID", "session_token"]
 
     Returns:
-        Dict of name -> { value, domain, path, secure }
+        Dictionary of cookies: {name: {value: str, domain: str, path: str, secure: bool}}
     """
     import time
-    global _firefox_cookie_cache, _firefox_cache_time
-
     start_time = time.time()
 
-    # Create cache key including cookie filter
-    cache_key = f"{domain}_{','.join(sorted(cookie_names)) if cookie_names else 'all'}"
+    # Create cache key from domain and cookie_names
+    cache_key = f"{domain}:{','.join(sorted(cookie_names) if cookie_names else [])}"
 
-    # Check cache first
+    # Check cache
     if cache_key in _firefox_cookie_cache and (time.time() - _firefox_cache_time) < _cache_duration:
         elapsed = time.time() - start_time
-        log(f"Using cached Firefox cookies (took {elapsed:.3f}s)", level="debug", category="auth")
+        log(f"Returning cached Firefox cookies for {domain} ({len(_firefox_cookie_cache[cache_key])} cookies, {elapsed:.3f}s)", level="trace", category="cookies")
         return _firefox_cookie_cache[cache_key].copy()
-    
+
+    # Determine OS-specific Firefox profile location
+    system = platform.system()
+    if system == "Windows":
+        appdata = os.getenv("APPDATA")
+        if not appdata:
+            log("APPDATA environment variable not set", level="warning", category="cookies")
+            return {}
+        profile_path = os.path.join(appdata, "Mozilla", "Firefox", "Profiles")
+    elif system == "Linux":
+        profile_path = os.path.expanduser("~/.mozilla/firefox")
+    elif system == "Darwin":  # macOS
+        profile_path = os.path.expanduser("~/Library/Application Support/Firefox/Profiles")
+    else:
+        log(f"Unsupported OS for Firefox cookie extraction: {system}", level="warning", category="cookies")
+        elapsed = time.time() - start_time
+        return {}
+
+    if not os.path.exists(profile_path):
+        log(f"Firefox profile path not found: {profile_path}", level="debug", category="cookies")
+        elapsed = time.time() - start_time
+        return {}
+
+    # Find the default profile directory (usually ends with .default or .default-release)
     try:
-        if platform.system() == "Windows":
-            firefox_dir = os.path.join(os.environ.get('APPDATA', ''), 'Mozilla', 'Firefox', 'Profiles')
-        else:
-            firefox_dir = os.path.join(os.path.expanduser("~"), '.mozilla', 'firefox')
-
-        if not os.path.exists(firefox_dir):
-            elapsed = time.time() - start_time
-            log(f"Firefox profiles directory not found: {firefox_dir} (took {elapsed:.3f}s)", level="warning", category="auth")
+        profiles = [d for d in os.listdir(profile_path) if os.path.isdir(os.path.join(profile_path, d))]
+        default_profile = next((p for p in profiles if ".default" in p), None)
+        if not default_profile:
+            log("No default Firefox profile found", level="debug", category="cookies")
             return {}
 
-        profiles = [d for d in os.listdir(firefox_dir) if d.endswith('.default-release')]
-        if not profiles:
-            profiles = [d for d in os.listdir(firefox_dir) if 'default' in d]
-        if not profiles:
-            log(f"No Firefox profile found", level="debug")
+        cookie_db_path = os.path.join(profile_path, default_profile, "cookies.sqlite")
+        if not os.path.exists(cookie_db_path):
+            log(f"Firefox cookies database not found at {cookie_db_path}", level="debug", category="cookies")
             return {}
 
-        profile_dir = os.path.join(firefox_dir, profiles[0])
-        cookie_file = os.path.join(profile_dir, 'cookies.sqlite')
-        if not os.path.exists(cookie_file):
-            log(f"Firefox cookie file not found: {cookie_file}", level="debug", category="auth")
-            return {}
-
-        cookies = {}
-        #print(f"{_timestamp()} DEBUG: About to connect to SQLite database: {cookie_file}")
+        # Connect to SQLite database and fetch cookies
         sqlite_start = time.time()
-        # Set a 1-second timeout to prevent long waits on locked Firefox databases
-        conn = sqlite3.connect(cookie_file, timeout=1.0)
+        # Use URI mode with immutable flag to avoid locking issues
+        conn = sqlite3.connect(f"file:{cookie_db_path}?mode=ro", uri=True)
         sqlite_connect_time = time.time() - sqlite_start
-        #log(f"SQLite connect took {sqlite_connect_time:.4f}s", level="debug")
-        
         cursor = conn.cursor()
-        query_start = time.time()
 
-        # Build query with optional cookie name filter
+        query_start = time.time()
+        # Query for cookies matching the domain
         if cookie_names:
-            # Filter for specific cookie names (and require secure cookies)
-            placeholders = ','.join(['?'] * len(cookie_names))
+            placeholders = ','.join('?' * len(cookie_names))
             query = f"""
-                SELECT name, value, host, path, expiry, isSecure
+                SELECT name, value, host, path, isSecure, expiry
                 FROM moz_cookies
-                WHERE host LIKE ? AND name IN ({placeholders}) AND isSecure = 1
+                WHERE host LIKE ?
+                AND name IN ({placeholders})
             """
-            params = (f'%{domain}%', *cookie_names)
+            cursor.execute(query, (f"%{domain}%", *cookie_names))
         else:
-            # Get all cookies for domain
             query = """
-                SELECT name, value, host, path, expiry, isSecure
+                SELECT name, value, host, path, isSecure, expiry
                 FROM moz_cookies
                 WHERE host LIKE ?
             """
-            params = (f'%{domain}%',)
+            cursor.execute(query, (f"%{domain}%",))
 
-        cursor.execute(query, params)
+        rows = cursor.fetchall()
         query_time = time.time() - query_start
-        #log(f"SQLite query took {query_time:.4f}s", level="debug", category="auth")
-        for row in cursor.fetchall():
-            name, value, host, path, _expiry, secure = row
-            cookies[name] = {
-                'value': value,
-                'domain': host,
-                'path': path,
-                'secure': bool(secure),
-            }
         conn.close()
 
-        # Update cache (use cache key)
-        if cache_key not in _firefox_cookie_cache:
-            _firefox_cookie_cache[cache_key] = {}
+        # Format cookies into a dictionary
+        cookies = {}
+        for name, value, host, path, is_secure, expiry in rows:
+            cookies[name] = {
+                "value": value,
+                "domain": host,
+                "path": path,
+                "secure": bool(is_secure),
+                "expiry": expiry
+            }
+
+        # Update cache
         _firefox_cookie_cache[cache_key] = cookies.copy()
         _firefox_cache_time = time.time()
-        
+
         elapsed = time.time() - start_time
-        log(f"get_firefox_cookies() completed in {elapsed:.3f}s (SQLite: connect took {sqlite_connect_time:.3f}s, query took {query_time:.3f}s), found {len(cookies)} {domain} cookies (cached)", level="debug", category="auth")
+        log(f"Loaded {len(cookies)} Firefox cookies for {domain} in {elapsed:.3f}s (SQLite: {sqlite_connect_time:.3f}s, query: {query_time:.3f}s)", level="trace", category="cookies")
         return cookies
     except Exception as e:
         elapsed = time.time() - start_time
-        log(f"Error extracting Firefox cookies: {e} (took {elapsed:.3f}s)", level="warning", category="auth")
-        # Cache empty result to avoid repeated failures
-        _firefox_cookie_cache[cache_key] = {}
+        log(f"Error extracting Firefox cookies: {e}", level="debug", category="cookies")
+        # Update cache with empty result to avoid repeated failures
         _firefox_cache_time = time.time()
         return {}
 
 
-def load_cookies_from_file(cookie_file: str = "cookies.txt") -> dict:
-    """Load cookies from a Netscape-format cookie file.
-    Returns a dict of name -> { value, domain, path, secure }.
+def load_cookies_from_file(filepath: str) -> dict:
+    """Load cookies from a Netscape format cookies file.
+
+    Args:
+        filepath: Path to cookies file
+
+    Returns:
+        Dictionary of cookies in the same format as get_firefox_cookies()
     """
+    if not os.path.exists(filepath):
+        return {}
+
     cookies = {}
     try:
-        if os.path.exists(cookie_file):
-            with open(cookie_file, 'r', encoding='utf-8', errors='ignore') as f:
-                for line in f:
-                    line = line.strip()
-                    if line and not line.startswith('#') and '\t' in line:
-                        parts = line.split('\t')
-                        if len(parts) >= 7 and 'imx.to' in parts[0]:
-                            domain, _subdomain, path, secure, _expiry, name, value = parts[:7]
-                            cookies[name] = {
-                                'value': value,
-                                'domain': domain,
-                                'path': path,
-                                'secure': secure == 'TRUE',
-                            }
-            log(f"Loaded {len(cookies)} cookies from {cookie_file}", level="info", category="auth")
-        #else:
-        #    print(f"{_timestamp()} Cookie file not found: {cookie_file}")
+        with open(filepath, 'r', encoding='utf-8') as f:
+            for line in f:
+                line = line.strip()
+                # Skip comments and empty lines
+                if not line or line.startswith('#'):
+                    continue
+
+                parts = line.split('\t')
+                if len(parts) >= 7:
+                    domain, _, path, secure, _, name, value = parts[:7]
+                    cookies[name] = {
+                        "value": value,
+                        "domain": domain,
+                        "path": path,
+                        "secure": secure.upper() == 'TRUE'
+                    }
+        log(f"Loaded {len(cookies)} cookies from {filepath}", level="trace", category="cookies")
     except Exception as e:
-        log(f"Error loading cookies: {e}", level="error", category="auth")
+        log(f"Error loading cookies from {filepath}: {e}", level="warning", category="cookies")
+
     return cookies
-
-

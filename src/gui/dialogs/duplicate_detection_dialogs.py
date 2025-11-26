@@ -4,10 +4,10 @@ Handles two types of duplicates: previously uploaded galleries and queue duplica
 """
 
 import os
-from typing import List, Dict, Tuple
+from typing import List, Dict, Tuple, Any
 from PyQt6.QtWidgets import (
-    QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, 
-    QCheckBox, QScrollArea, QWidget, QFrame, QMessageBox
+    QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
+    QCheckBox, QScrollArea, QWidget, QFrame, QMessageBox, QApplication
 )
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QFont
@@ -16,23 +16,45 @@ from PyQt6.QtGui import QFont
 class PreviouslyUploadedDialog(QDialog):
     """Dialog for handling previously uploaded galleries"""
     
-    def __init__(self, duplicates: List[Dict], parent=None):
+    def __init__(self, duplicates: List[Dict[str, Any]], parent: QWidget | None = None):
         super().__init__(parent)
         self.duplicates = duplicates
-        self.selected_paths = []
-        self.checkboxes = {}
-        
+        self.selected_paths: List[str] = []
+        self.checkboxes: Dict[str, QCheckBox] = {}
+
         self.setWindowTitle("Previously Uploaded Galleries")
         self.setModal(True)
         self.setMinimumSize(500, 400)
         self.setMaximumSize(800, 600)
-        
+        self._center_on_parent()
+
         self._setup_ui()
         self._connect_signals()
-    
-    def _setup_ui(self):
+
+    def _center_on_parent(self) -> None:
+        """Center dialog on parent window or screen"""
+        parent_widget = self.parent()
+        if parent_widget:
+            # Center on parent window
+            if hasattr(parent_widget, 'geometry'):
+                parent_geo = parent_widget.geometry()  # type: ignore[union-attr]
+                dialog_geo = self.frameGeometry()
+                x = parent_geo.x() + (parent_geo.width() - dialog_geo.width()) // 2
+                y = parent_geo.y() + (parent_geo.height() - dialog_geo.height()) // 2
+                self.move(x, y)
+        else:
+            # Center on screen if no parent
+            screen = QApplication.primaryScreen()
+            if screen:
+                screen_geo = screen.geometry()
+                dialog_geo = self.frameGeometry()
+                x = (screen_geo.width() - dialog_geo.width()) // 2
+                y = (screen_geo.height() - dialog_geo.height()) // 2
+                self.move(x, y)
+
+    def _setup_ui(self) -> None:
         layout = QVBoxLayout(self)
-        
+
         # Header message
         count = len(self.duplicates)
         gallery_word = "gallery" if count == 1 else "galleries"
@@ -196,18 +218,18 @@ class PreviouslyUploadedDialog(QDialog):
 
 class QueueDuplicatesDialog(QDialog):
     """Dialog for handling items already in queue"""
-    
-    def __init__(self, duplicates: List[Dict], parent=None):
+
+    def __init__(self, duplicates: List[Dict[str, Any]], parent: QWidget | None = None):
         super().__init__(parent)
         self.duplicates = duplicates
-        self.selected_paths = []
-        self.checkboxes = {}
-        
+        self.selected_paths: List[str] = []
+        self.checkboxes: Dict[str, QCheckBox] = {}
+
         self.setWindowTitle("Already in Queue")
         self.setModal(True)
         self.setMinimumSize(500, 300)
         self.setMaximumSize(800, 500)
-        
+
         self._setup_ui()
         self._connect_signals()
     
@@ -422,16 +444,16 @@ def show_duplicate_detection_dialogs(
     
     # Show previously uploaded dialog if needed
     if previously_uploaded:
-        dialog = PreviouslyUploadedDialog(previously_uploaded, parent)
-        if dialog.exec() == QDialog.DialogCode.Accepted:
-            selected_paths = dialog.get_selected_paths()
+        prev_dialog = PreviouslyUploadedDialog(previously_uploaded, parent)
+        if prev_dialog.exec() == QDialog.DialogCode.Accepted:
+            selected_paths = prev_dialog.get_selected_paths()
             folders_to_add_normally.extend(selected_paths)
-    
+
     # Show queue duplicates dialog if needed
-    folders_to_replace_in_queue = []
+    folders_to_replace_in_queue: List[str] = []
     if already_in_queue:
-        dialog = QueueDuplicatesDialog(already_in_queue, parent)
-        if dialog.exec() == QDialog.DialogCode.Accepted:
-            folders_to_replace_in_queue = dialog.get_selected_paths()
+        queue_dialog = QueueDuplicatesDialog(already_in_queue, parent)
+        if queue_dialog.exec() == QDialog.DialogCode.Accepted:
+            folders_to_replace_in_queue = queue_dialog.get_selected_paths()
     
     return folders_to_add_normally, folders_to_replace_in_queue

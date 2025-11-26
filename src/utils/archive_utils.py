@@ -29,7 +29,16 @@ def is_archive_file(path: str | Path) -> bool:
         return False
 
     path_obj = Path(path)
-    return path_obj.suffix.lower() in SUPPORTED_ARCHIVE_EXTENSIONS
+    suffix = path_obj.suffix.lower()
+
+    # Handle edge case: ".zip" (hidden file) should be treated as having .zip extension
+    if not suffix and str(path_obj.name).startswith('.'):
+        # Check if the entire name (without leading dot) is a supported extension
+        potential_ext = '.' + str(path_obj.name).lstrip('.')
+        if potential_ext.lower() in SUPPORTED_ARCHIVE_EXTENSIONS:
+            return True
+
+    return suffix in SUPPORTED_ARCHIVE_EXTENSIONS
 
 
 def is_valid_archive(path: str | Path) -> bool:
@@ -60,8 +69,24 @@ def get_archive_name(path: str | Path) -> str:
     if not path:
         return "archive"
 
-    path_obj = Path(path)
-    return path_obj.stem
+    # Convert to string to handle both POSIX and Windows paths uniformly
+    path_str = str(path)
+
+    # Normalize path separators (handle both / and \)
+    path_str = path_str.replace('\\', '/')
+
+    # Get the filename component (everything after last separator)
+    filename = path_str.split('/')[-1] if '/' in path_str else path_str
+
+    # Remove extension
+    if '.' in filename:
+        # Handle edge case: ".zip" should return ".zip" not ""
+        if filename.startswith('.') and filename.count('.') == 1:
+            return filename
+        # Normal case: remove extension
+        return filename.rsplit('.', 1)[0]
+
+    return filename
 
 
 def get_archive_size(path: str | Path) -> int:

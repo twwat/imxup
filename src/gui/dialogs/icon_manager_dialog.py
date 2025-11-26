@@ -26,10 +26,13 @@ class IconDropFrame(QFrame):
         self.variant_type = variant_type
         self.setAcceptDrops(True)
 
-    def dragEnterEvent(self, event: QDragEnterEvent):
+    def dragEnterEvent(self, event: QDragEnterEvent | None) -> None:
         """Handle drag enter event"""
-        if event.mimeData().hasUrls():
-            urls = event.mimeData().urls()
+        if event is None:
+            return
+        mime_data = event.mimeData()
+        if mime_data is not None and mime_data.hasUrls():
+            urls = mime_data.urls()
             if len(urls) == 1:
                 file_path = urls[0].toLocalFile()
                 if file_path.lower().endswith(('.png', '.ico', '.svg', '.jpg', '.jpeg')):
@@ -37,9 +40,15 @@ class IconDropFrame(QFrame):
                     return
         event.ignore()
 
-    def dropEvent(self, event: QDropEvent):
+    def dropEvent(self, event: QDropEvent | None) -> None:
         """Handle drop event"""
-        urls = event.mimeData().urls()
+        if event is None:
+            return
+        mime_data = event.mimeData()
+        if mime_data is None:
+            event.ignore()
+            return
+        urls = mime_data.urls()
         if len(urls) == 1:
             file_path = urls[0].toLocalFile()
             if file_path.lower().endswith(('.png', '.ico', '.svg', '.jpg', '.jpeg')):

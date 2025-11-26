@@ -1,0 +1,35 @@
+# Testing dependencies for imxup swarm
+
+# Core testing framework
+pytest>=8.3.4
+pytest-cov>=6.0.0
+pytest-mock>=3.14.0
+pytest-asyncio>=0.24.0
+pytest-xdist>=3.6.1  # Parallel test execution
+pytest-timeout>=2.3.1  # Test timeouts
+pytest-benchmark>=4.0.0  # Performance benchmarking
+pytest-qt>=4.5.0 # PyQt testing
+
+# Code quality
+pytest-pylint>=0.21.0
+pytest-flake8>=1.2.2
+black>=24.0.0
+isort>=5.13.0
+mypy>=1.13.0
+
+# Coverage reporting
+coverage[toml]>=7.6.0
+
+# Mocking and fixtures
+faker>=28.0.0  # Generate fake test data
+freezegun>=1.5.0  # Mock datetime
+responses>=0.25.0  # Mock HTTP requests
+
+# Database testing
+# pytest-sqlite>=0.3.0  # Package doesn't exist on PyPI - removed
+
+# Assertions and matchers
+assertpy>=1.1
+
+# Documentation
+pytest-html>=4.1.1  # HTML test reports

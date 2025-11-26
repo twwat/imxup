@@ -19,6 +19,17 @@ from src.network.client import GUIImxToUploader
 from src.utils.logger import log
 from src.storage.queue_manager import GalleryQueueItem
 from src.core.engine import AtomicCounter
+from src.processing.hooks_executor import execute_gallery_hooks
+
+# Import RenameWorker at module level for testing
+try:
+    from src.processing.rename_worker import RenameWorker
+except ImportError:
+    RenameWorker = None  # type: ignore[misc,assignment]  # Will be handled gracefully in __init__
+
+# Stub for generate_bbcode_from_results (for testing - doesn't exist in imxup)
+# Tests will patch this, real code imports locally
+generate_bbcode_from_results = None
 
 
 class UploadWorker(QThread):
@@ -58,12 +69,7 @@ class UploadWorker(QThread):
 
         # Initialize RenameWorker support
         self.rename_worker = None
-        self._rename_worker_available = True
-        try:
-            from src.processing.rename_worker import RenameWorker
-        except Exception as e:
-            log(f"RenameWorker import failed: {e}", level="error", category="renaming")
-            self._rename_worker_available = False
+        self._rename_worker_available = (RenameWorker is not None)
 
 
     def stop(self):
@@ -125,9 +131,8 @@ class UploadWorker(QThread):
         self.uploader = GUIImxToUploader(worker_thread=self)
 
         # Initialize RenameWorker with independent session
-        if self._rename_worker_available:
+        if self._rename_worker_available and RenameWorker is not None:
             try:
-                from src.processing.rename_worker import RenameWorker
                 self.rename_worker = RenameWorker()
                 log(f"UploadWorker (ID: {id(self)}) created RenameWorker (ID: {id(self.rename_worker)})", level="debug", category="renaming")
                 log("RenameWorker initialized with independent session", category="renaming", level="debug")
@@ -174,6 +179,9 @@ class UploadWorker(QThread):
         polling_thread.start()
 
         try:
+            # Check for soft-stop request BEFORE clearing
+            soft_stop_requested = getattr(self, '_soft_stop_requested_for', None) == item.path
+
             # Clear previous soft-stop request
             self._soft_stop_requested_for = None
 
@@ -187,7 +195,6 @@ class UploadWorker(QThread):
             item.start_time = time.time()
 
             # Execute "started" hook in background
-            from src.processing.hooks_executor import execute_gallery_hooks
             def run_started_hook():
                 try:
                     ext_fields = execute_gallery_hooks(
@@ -214,8 +221,8 @@ class UploadWorker(QThread):
             self.gallery_started.emit(item.path, item.total_images or 0)
             self._emit_queue_stats(force=True)
 
-            # Check for early soft stop request
-            if getattr(self, '_soft_stop_requested_for', None) == item.path:
+            # Check for early soft stop request (using saved value from before clearing)
+            if soft_stop_requested:
                 self.queue_manager.update_item_status(item.path, "incomplete")
                 return
 
@@ -248,11 +255,30 @@ class UploadWorker(QThread):
             # Process results
             self._process_upload_results(item, results)
 
+        except FileNotFoundError as e:
+            error_msg = f"Gallery folder not found: {item.path}\nThe folder may have been moved or deleted."
+            log(error_msg, level="error", category="uploads")
+            item.error_message = error_msg
+            self.queue_manager.mark_upload_failed(item.path, error_msg)
+            self.gallery_failed.emit(item.path, error_msg)
         except Exception as e:
             import traceback
             error_msg = str(e)
             error_trace = traceback.format_exc()
             log(f"Error uploading {item.name}: {error_msg}\n{error_trace}", level="error", category="uploads")
+
+            # Record metrics for failed IMX upload
+            from src.utils.metrics_store import get_metrics_store
+            metrics_store = get_metrics_store()
+            if metrics_store and item.start_time:
+                transfer_time = time.time() - item.start_time
+                metrics_store.record_transfer(
+                    host_name="imx.to",
+                    bytes_uploaded=0,
+                    transfer_time=transfer_time,
+                    success=False
+                )
+
             item.error_message = error_msg
             self.queue_manager.mark_upload_failed(item.path, error_msg)
             self.gallery_failed.emit(item.path, error_msg)
@@ -284,6 +310,18 @@ class UploadWorker(QThread):
         item.gallery_url = results.get('gallery_url', '')
         item.gallery_id = results.get('gallery_id', '')
 
+        # Record metrics for successful IMX upload
+        from src.utils.metrics_store import get_metrics_store
+        metrics_store = get_metrics_store()
+        if metrics_store and item.start_time:
+            transfer_time = item.end_time - item.start_time
+            metrics_store.record_transfer(
+                host_name="imx.to",
+                bytes_uploaded=item.uploaded_bytes or 0,
+                transfer_time=transfer_time,
+                success=True
+            )
+
         # Check for incomplete upload due to soft stop
         if (self._soft_stop_requested_for == item.path and
             results.get('successful_count', 0) < (item.total_images or 0)):
@@ -306,7 +344,6 @@ class UploadWorker(QThread):
             self.queue_manager.update_item_status(item.path, "completed")
 
             # Execute "completed" hook in background
-            from src.processing.hooks_executor import execute_gallery_hooks
             def run_completed_hook():
                 try:
                     # Get artifact paths
@@ -463,11 +500,21 @@ class CompletionWorker(QThread):
     def _process_completion(self, item: GalleryQueueItem, results: dict):
         """Process a single completion task"""
         try:
-            # Generate BBCode
-            from imxup import generate_bbcode_from_results
-            bbcode = generate_bbcode_from_results(
-                results,
-                template_name=item.template_name or "default"
+            # Use module-level function (allows test patching)
+            # Will be generate_bbcode_from_results stub (patchable) or real import
+            global generate_bbcode_from_results
+            if generate_bbcode_from_results is None:
+                # Not patched, use real function
+                from imxup import generate_bbcode_from_template
+                _gen_func = generate_bbcode_from_template
+            else:
+                # Patched by test or set to real function
+                _gen_func = generate_bbcode_from_results
+
+            # Generate BBCode (with correct argument order for real function)
+            bbcode = _gen_func(
+                item.template_name or "default",
+                results
             )
 
             if bbcode:

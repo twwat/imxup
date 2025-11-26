@@ -5,7 +5,7 @@ Provides credential setup, testing, and configuration for file host uploads
 """
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QFormLayout, QLabel, QGroupBox,
-    QPushButton, QLineEdit, QCheckBox, QProgressBar, QComboBox, QWidget, QListWidget, QSplitter
+    QPushButton, QLineEdit, QCheckBox, QProgressBar, QComboBox, QWidget, QListWidget, QSplitter, QSpinBox
 )
 from PyQt6.QtCore import QSettings, QTimer, Qt
 from PyQt6.QtGui import QPixmap
@@ -14,6 +14,47 @@ from typing import Optional
 import time
 
 from src.utils.format_utils import format_binary_size
+from src.gui.widgets.custom_widgets import CopyableLogListWidget
+
+
+class AsteriskPasswordEdit(QLineEdit):
+    """Custom QLineEdit that shows asterisks (*) instead of password dots when masked"""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._is_masked = True
+        self._actual_text = ""
+        self.textChanged.connect(self._on_text_changed)
+
+    def _on_text_changed(self, text):
+        """Track actual text separately when masked"""
+        if not self._is_masked:
+            self._actual_text = text
+
+    def setText(self, text):
+        """Override setText to handle initial value loading"""
+        self._actual_text = text
+        if self._is_masked:
+            super().setText("*" * len(text))
+        else:
+            super().setText(text)
+
+    def text(self):
+        """Override text() to return actual text, not asterisks"""
+        return self._actual_text if self._is_masked else super().text()
+
+    def set_masked(self, masked: bool):
+        """Toggle between masked (asterisks) and visible mode"""
+        self._is_masked = masked
+        if masked:
+            # Save actual text before masking
+            self._actual_text = super().text()
+            super().setText("*" * len(self._actual_text))
+            self.setReadOnly(True)  # Prevent editing while masked
+        else:
+            # Show actual text
+            super().setText(self._actual_text)
+            self.setReadOnly(False)  # Allow editing when visible
 
 
 class FileHostConfigDialog(QDialog):
@@ -120,67 +161,164 @@ class FileHostConfigDialog(QDialog):
         content_layout = QVBoxLayout(left_widget)  # Keep this name for minimal changes below
         content_layout.setContentsMargins(0, 0, 0, 0)
 
-        # Credentials section
-        # Credentials section
-        self.creds_input = None
+        # Credentials section - Dynamic multi-field layout
+        self.creds_api_key_input = None
+        self.creds_username_input = None
+        self.creds_password_input = None
+
         if self.host_config.requires_auth:
+            from src.gui.icon_manager import get_icon_manager
+            icon_manager = get_icon_manager()
+
             creds_group = QGroupBox("Credentials")
-            creds_layout = QVBoxLayout(creds_group)
-
-            # Format info based on auth type
-            if self.host_config.auth_type == "api_key":
-                format_text = "Format: API key"
-            elif self.host_config.auth_type == "bearer":
-                format_text = "Format: Bearer token"
-            else:  # token_login, session, or other
-                format_text = "Format: username:password"
-
-            creds_layout.addWidget(QLabel(format_text))
-
-            # Credentials input
-            self.creds_input = QLineEdit()
-            self.creds_input.setEchoMode(QLineEdit.EchoMode.Password)
-            self.creds_input.setPlaceholderText("Enter credentials...")
-            self.creds_input.setProperty("class", "console")
+            creds_layout = QFormLayout(creds_group)
+            creds_layout.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
 
             # Load current credentials from encrypted storage
             from imxup import get_credential, decrypt_password
             from src.utils.logger import log
 
             encrypted_creds = get_credential(f"file_host_{self.host_id}_credentials")
+            decrypted = None
+            api_key_val = ""
+            username_val = ""
+            password_val = ""
 
-            decrypted = None  # Track for cache initialization
             if encrypted_creds:
                 try:
                     decrypted = decrypt_password(encrypted_creds)
-                    if decrypted:  # Only set if we got valid credentials
-                        # Block signals during initial load to prevent false dirty state
-                        self.creds_input.blockSignals(True)
-                        self.creds_input.setText(decrypted)
-                        self.creds_input.blockSignals(False)
+                    if decrypted:
+                        # Parse based on auth type
+                        if self.host_config.auth_type in ["api_key", "bearer"]:
+                            api_key_val = decrypted
+                        elif "|" in decrypted:  # Mixed auth: api_key|username:password
+                            parts = decrypted.split("|", 1)
+                            api_key_val = parts[0]
+                            if ":" in parts[1]:
+                                username_val, password_val = parts[1].split(":", 1)
+                        elif ":" in decrypted:  # username:password
+                            username_val, password_val = decrypted.split(":", 1)
                 except Exception as e:
                     log(f"Failed to load credentials for {self.host_id}: {e}", level="error", category="file_hosts")
 
-            # Initialize cached credentials with loaded value (fix for stale cache bug)
-            # This ensures get_credentials() returns correct value even if dialog closed without edits
+            # Initialize cached credentials
             self.saved_credentials = decrypted if decrypted else None
 
-            # Add show/hide button
-            creds_row = QHBoxLayout()
-            creds_row.addWidget(self.creds_input, 1)
+            # Determine which fields to show based on auth_type
+            if self.host_config.auth_type in ["api_key", "bearer"]:
+                # API Key only
+                self.creds_api_key_input = AsteriskPasswordEdit()
+                self.creds_api_key_input.setFixedWidth(450)
+                self.creds_api_key_input.setPlaceholderText("Enter API key...")
+                self.creds_api_key_input.blockSignals(True)
+                self.creds_api_key_input.setText(api_key_val)
+                self.creds_api_key_input.blockSignals(False)
 
-            show_creds_btn = QPushButton("👁")
-            show_creds_btn.setMaximumWidth(30)
-            show_creds_btn.setCheckable(True)
-            show_creds_btn.setToolTip("Show/hide credentials")
-            show_creds_btn.clicked.connect(
-                lambda checked: self.creds_input.setEchoMode(
-                    QLineEdit.EchoMode.Normal if checked else QLineEdit.EchoMode.Password
+                api_key_row = QHBoxLayout()
+                api_key_row.addWidget(self.creds_api_key_input)
+
+                show_api_btn = QPushButton()
+                show_api_btn.setIcon(icon_manager.get_icon('action_view'))
+                show_api_btn.setMaximumWidth(30)
+                show_api_btn.setCheckable(True)
+                show_api_btn.setToolTip("Show/hide API key")
+                show_api_btn.clicked.connect(
+                    lambda checked: self.creds_api_key_input.set_masked(not checked)
                 )
-            )
-            creds_row.addWidget(show_creds_btn)
+                api_key_row.addWidget(show_api_btn)
+                api_key_row.addStretch()
 
-            creds_layout.addLayout(creds_row)
+                creds_layout.addRow("API Key:", api_key_row)
+
+            elif self.host_config.auth_type == "mixed":
+                # Both API key and username/password
+                self.creds_api_key_input = AsteriskPasswordEdit()
+                self.creds_api_key_input.setFixedWidth(450)
+                self.creds_api_key_input.setPlaceholderText("Enter API key...")
+                self.creds_api_key_input.blockSignals(True)
+                self.creds_api_key_input.setText(api_key_val)
+                self.creds_api_key_input.blockSignals(False)
+
+                api_key_row = QHBoxLayout()
+                api_key_row.addWidget(self.creds_api_key_input)
+
+                show_api_btn = QPushButton()
+                show_api_btn.setIcon(icon_manager.get_icon('action_view'))
+                show_api_btn.setMaximumWidth(30)
+                show_api_btn.setCheckable(True)
+                show_api_btn.setToolTip("Show/hide API key")
+                show_api_btn.clicked.connect(
+                    lambda checked: self.creds_api_key_input.set_masked(not checked)
+                )
+                api_key_row.addWidget(show_api_btn)
+                api_key_row.addStretch()
+
+                creds_layout.addRow("API Key:", api_key_row)
+
+                self.creds_username_input = QLineEdit()
+                self.creds_username_input.setFixedWidth(450)
+                self.creds_username_input.setPlaceholderText("Enter username...")
+                self.creds_username_input.blockSignals(True)
+                self.creds_username_input.setText(username_val)
+                self.creds_username_input.blockSignals(False)
+                creds_layout.addRow("Username:", self.creds_username_input)
+
+                self.creds_password_input = AsteriskPasswordEdit()
+                self.creds_password_input.setFixedWidth(450)
+                self.creds_password_input.setPlaceholderText("Enter password...")
+                self.creds_password_input.blockSignals(True)
+                self.creds_password_input.setText(password_val)
+                self.creds_password_input.blockSignals(False)
+
+                password_row = QHBoxLayout()
+                password_row.addWidget(self.creds_password_input)
+
+                show_pass_btn = QPushButton()
+                show_pass_btn.setIcon(icon_manager.get_icon('action_view'))
+                show_pass_btn.setMaximumWidth(30)
+                show_pass_btn.setCheckable(True)
+                show_pass_btn.setToolTip("Show/hide password")
+                show_pass_btn.clicked.connect(
+                    lambda checked: self.creds_password_input.set_masked(not checked)
+                )
+                password_row.addWidget(show_pass_btn)
+                password_row.addStretch()
+
+                creds_layout.addRow("Password:", password_row)
+
+            else:
+                # Username and password only (token_login, session, etc.)
+                self.creds_username_input = QLineEdit()
+                self.creds_username_input.setFixedWidth(450)
+                self.creds_username_input.setPlaceholderText("Enter username...")
+                self.creds_username_input.blockSignals(True)
+                self.creds_username_input.setText(username_val)
+                self.creds_username_input.blockSignals(False)
+                creds_layout.addRow("Username:", self.creds_username_input)
+
+                self.creds_password_input = AsteriskPasswordEdit()
+                self.creds_password_input.setFixedWidth(450)
+                self.creds_password_input.setPlaceholderText("Enter password...")
+                self.creds_password_input.blockSignals(True)
+                self.creds_password_input.setText(password_val)
+                self.creds_password_input.blockSignals(False)
+
+                password_row = QHBoxLayout()
+                password_row.addWidget(self.creds_password_input)
+
+                show_pass_btn = QPushButton()
+                show_pass_btn.setIcon(icon_manager.get_icon('action_view'))
+                show_pass_btn.setMaximumWidth(30)
+                show_pass_btn.setCheckable(True)
+                show_pass_btn.setToolTip("Show/hide password")
+                show_pass_btn.clicked.connect(
+                    lambda checked: self.creds_password_input.set_masked(not checked)
+                )
+                password_row.addWidget(show_pass_btn)
+                password_row.addStretch()
+
+                creds_layout.addRow("Password:", password_row)
+
             content_layout.addWidget(creds_group)
         # Storage section
         self.storage_bar = None
@@ -233,26 +371,88 @@ class FileHostConfigDialog(QDialog):
         content_layout.addWidget(triggers_group)
 
         # Connect change signals to mark dirty state
-        if self.creds_input:
-            self.creds_input.textChanged.connect(self._mark_dirty)
+        if self.creds_api_key_input:
+            self.creds_api_key_input.textChanged.connect(self._mark_dirty)
+        if self.creds_username_input:
+            self.creds_username_input.textChanged.connect(self._mark_dirty)
+        if self.creds_password_input:
+            self.creds_password_input.textChanged.connect(self._mark_dirty)
         self.trigger_combo.currentIndexChanged.connect(self._mark_dirty)
 
-        # Host info (read-only) - Read from settings layer
-        info_group = QGroupBox("Host Information")
-        info_layout = QFormLayout(info_group)
+        # Host Settings (editable) - Read from settings layer
+        settings_group = QGroupBox("Host Settings")
+        settings_layout = QFormLayout(settings_group)
 
+        # Load current values
         auto_retry = get_file_host_setting(self.host_id, "auto_retry", "bool")
         max_retries = get_file_host_setting(self.host_id, "max_retries", "int")
         max_connections = get_file_host_setting(self.host_id, "max_connections", "int")
         max_file_size_mb = get_file_host_setting(self.host_id, "max_file_size_mb", "int")
 
-        info_layout.addRow("Auto-retry:", QLabel("✓ Enabled" if auto_retry else "○ Disabled"))
-        info_layout.addRow("Max retries:", QLabel(str(max_retries)))
-        info_layout.addRow("Max connections:", QLabel(str(max_connections)))
-        if max_file_size_mb:
-            info_layout.addRow("Max file size:", QLabel(f"{max_file_size_mb} MB"))
+        # 1. auto_retry - QCheckBox
+        self.auto_retry_check = QCheckBox("Enable automatic retry on upload failure")
+        self.auto_retry_check.setChecked(auto_retry)
+        self.auto_retry_check.stateChanged.connect(self._mark_dirty)
+        settings_layout.addRow("Auto-retry:", self.auto_retry_check)
 
-        content_layout.addWidget(info_group)
+        # 2. max_retries - QSpinBox
+        self.max_retries_spin = QSpinBox()
+        self.max_retries_spin.setRange(1, 10)
+        self.max_retries_spin.setValue(max_retries)
+        self.max_retries_spin.setSuffix(" attempts")
+        self.max_retries_spin.setToolTip("Maximum number of retry attempts for failed uploads")
+        self.max_retries_spin.valueChanged.connect(self._mark_dirty)
+        settings_layout.addRow("Max retries:", self.max_retries_spin)
+
+        # 3. max_connections - QSpinBox
+        self.max_connections_spin = QSpinBox()
+        self.max_connections_spin.setRange(1, 10)
+        self.max_connections_spin.setValue(max_connections)
+        self.max_connections_spin.setSuffix(" connections")
+        self.max_connections_spin.setToolTip("Maximum concurrent upload connections to this host")
+        self.max_connections_spin.valueChanged.connect(self._mark_dirty)
+        settings_layout.addRow("Max connections:", self.max_connections_spin)
+
+        # 4. max_file_size_mb - QSpinBox (nullable)
+        self.max_file_size_spin = QSpinBox()
+        self.max_file_size_spin.setRange(0, 10000)
+        self.max_file_size_spin.setValue(max_file_size_mb if max_file_size_mb else 0)
+        self.max_file_size_spin.setSuffix(" MB")
+        self.max_file_size_spin.setSpecialValueText("No limit")
+        self.max_file_size_spin.setToolTip("Maximum file size for uploads (0 = no limit)")
+        self.max_file_size_spin.valueChanged.connect(self._mark_dirty)
+        settings_layout.addRow("Max file size:", self.max_file_size_spin)
+
+        # 5. inactivity_timeout - QSpinBox
+        inactivity_timeout = get_file_host_setting(self.host_id, "inactivity_timeout", "int")
+        if inactivity_timeout is None:
+            # Get from host config if not in INI
+            inactivity_timeout = self.host_config.inactivity_timeout if self.host_config else 300
+
+        self.inactivity_timeout_spin = QSpinBox()
+        self.inactivity_timeout_spin.setRange(30, 3600)
+        self.inactivity_timeout_spin.setValue(inactivity_timeout)
+        self.inactivity_timeout_spin.setSuffix(" seconds")
+        self.inactivity_timeout_spin.setToolTip("Abort upload if no progress for this many seconds (default: 300)")
+        self.inactivity_timeout_spin.valueChanged.connect(self._mark_dirty)
+        settings_layout.addRow("Inactivity timeout:", self.inactivity_timeout_spin)
+
+        # 6. upload_timeout - QSpinBox (nullable)
+        upload_timeout = get_file_host_setting(self.host_id, "upload_timeout", "int")
+        if upload_timeout is None:
+            # Get from host config if not in INI
+            upload_timeout = self.host_config.upload_timeout if self.host_config else None
+
+        self.upload_timeout_spin = QSpinBox()
+        self.upload_timeout_spin.setRange(0, 7200)
+        self.upload_timeout_spin.setValue(upload_timeout if upload_timeout else 0)
+        self.upload_timeout_spin.setSuffix(" seconds")
+        self.upload_timeout_spin.setSpecialValueText("Unlimited")
+        self.upload_timeout_spin.setToolTip("Maximum total upload time (0 = unlimited, not recommended)")
+        self.upload_timeout_spin.valueChanged.connect(self._mark_dirty)
+        settings_layout.addRow("Max upload time:", self.upload_timeout_spin)
+
+        content_layout.addWidget(settings_group)
 
         # Test Results section
         self.setup_test_results_section(content_layout)
@@ -266,7 +466,7 @@ class FileHostConfigDialog(QDialog):
         logs_group = QGroupBox("Worker Logs")
         logs_layout = QVBoxLayout(logs_group)
 
-        self.log_list = QListWidget()
+        self.log_list = CopyableLogListWidget()
         self.log_list.setProperty("class", "console")
         logs_layout.addWidget(self.log_list)
 
@@ -309,7 +509,7 @@ class FileHostConfigDialog(QDialog):
 
     def setup_test_results_section(self, parent_layout):
         """Setup the test results section with test button"""
-        test_group = QGroupBox("Connection Test & Results")
+        test_group = QGroupBox("Connection Test (optional)")
         test_group_layout = QVBoxLayout(test_group)
 
         # Test button at top
@@ -515,8 +715,8 @@ class FileHostConfigDialog(QDialog):
                 if self.worker:
                     self._connect_worker_signals()
                 else:
-                    from src.utils.logging import get_logger
-                    get_logger().warning(f"Worker spinup succeeded but get_worker returned None for {self.host_id}")
+                    from src.utils.logger import log
+                    log(f"Worker spinup succeeded but get_worker returned None for {self.host_id}", level="warning", category="file_hosts")
 
             self._update_enable_button_state(True)
             self.enable_error_label.setText("")
@@ -541,19 +741,19 @@ class FileHostConfigDialog(QDialog):
             total = int(total_str) if total_str else 0
             left = int(left_str) if left_str else 0
         except (ValueError, TypeError) as e:
-            from src.utils.logging import get_logger
-            get_logger().debug(f"Failed to parse cached storage for {self.host_id}: {e}")
+            from src.utils.logger import log
+            log(f"Failed to parse cached storage for {self.host_id}: {e}", level="debug", category="file_hosts")
             return
 
         # Only update if we have valid cached data
         if total == 0 and left == 0:
-            from src.utils.logging import get_logger
-            get_logger().debug(f"No cached storage data for {self.host_id}")
+            from src.utils.logger import log
+            log(f"No cached storage data for {self.host_id}", level="debug", category="file_hosts")
             return
 
         if total <= 0 or left < 0 or left > total:
-            from src.utils.logging import get_logger
-            get_logger().warning(f"Invalid cached storage for {self.host_id}: total={total}, left={left}")
+            from src.utils.logger import log
+            log(f"Invalid cached storage for {self.host_id}: total={total}, left={left}", level="warning", category="file_hosts")
             return
 
         # Calculate percentages
@@ -663,10 +863,8 @@ class FileHostConfigDialog(QDialog):
         if not self._check_unsaved_changes("Testing connection"):
             return
 
-        if not self.creds_input:
-            return
-
-        credentials = self.creds_input.text().strip()
+        # Get credentials from multi-field layout
+        credentials = self.get_credentials()
         if not credentials:
             self.test_timestamp_label.setText("Error: No credentials entered")
             # Use QSS class for theme-aware styling
@@ -784,14 +982,48 @@ class FileHostConfigDialog(QDialog):
         return selected_trigger if selected_trigger else "disabled"
 
     def get_credentials(self):
-        """Get entered credentials"""
-        # Return saved value if dialog already closed, otherwise read from widget
+        """Get entered credentials from multi-field layout.
+
+        Returns credential string in format:
+        - "api_key" for API key only hosts
+        - "username:password" for session/token_login hosts
+        - "api_key|username:password" for mixed auth hosts
+        """
+        # Return saved value if dialog already closed
         if hasattr(self, 'saved_credentials'):
             return self.saved_credentials
 
-        if self.creds_input:
-            return self.creds_input.text().strip()
-        return None
+        # Build credentials from dynamic fields based on auth type
+        if self.host_config.auth_type in ["api_key", "bearer"]:
+            # API key only
+            if self.creds_api_key_input:
+                api_key = self.creds_api_key_input.text().strip()
+                return api_key if api_key else None
+            return None
+
+        elif self.host_config.auth_type == "mixed":
+            # Both API key and username/password
+            api_key = self.creds_api_key_input.text().strip() if self.creds_api_key_input else ""
+            username = self.creds_username_input.text().strip() if self.creds_username_input else ""
+            password = self.creds_password_input.text().strip() if self.creds_password_input else ""
+
+            # Build mixed format: api_key|username:password
+            if api_key and username and password:
+                return f"{api_key}|{username}:{password}"
+            elif api_key:
+                return api_key  # Partial: API key only
+            elif username and password:
+                return f"{username}:{password}"  # Partial: session only
+            return None
+
+        else:
+            # Username and password only (token_login, session, etc.)
+            if self.creds_username_input and self.creds_password_input:
+                username = self.creds_username_input.text().strip()
+                password = self.creds_password_input.text().strip()
+                if username and password:
+                    return f"{username}:{password}"
+            return None
 
 
     def get_enabled_state(self):
@@ -925,10 +1157,9 @@ class FileHostConfigDialog(QDialog):
         self.apply_btn.setEnabled(False)
         errors = []  # Collect all errors for granular reporting
 
-        # Save credentials (separate try-except)
-        if self.creds_input:
-            credentials = self.creds_input.text().strip()
-            if credentials:
+        # Save credentials from multi-field layout (separate try-except)
+        credentials = self.get_credentials()  # Use get_credentials() to build from fields
+        if credentials:
                 try:
                     # Bug fix: Correct function name is set_credential, not store_credential
                     from imxup import set_credential, encrypt_password
@@ -957,6 +1188,31 @@ class FileHostConfigDialog(QDialog):
         except Exception as e:
             errors.append(f"Trigger settings: {str(e)}")
 
+        # Save host settings to INI (separate try-except for granular error reporting)
+        try:
+            from src.core.file_host_config import save_file_host_setting
+
+            # Save each setting individually
+            save_file_host_setting(self.host_id, "auto_retry", self.auto_retry_check.isChecked())
+            save_file_host_setting(self.host_id, "max_retries", self.max_retries_spin.value())
+            save_file_host_setting(self.host_id, "max_connections", self.max_connections_spin.value())
+
+            # Handle nullable max_file_size_mb (0 = None)
+            file_size_value = self.max_file_size_spin.value()
+            save_file_host_setting(self.host_id, "max_file_size_mb", file_size_value if file_size_value > 0 else None)
+
+            # Save timeout settings
+            save_file_host_setting(self.host_id, "inactivity_timeout", self.inactivity_timeout_spin.value())
+
+            # Handle nullable upload_timeout (0 = None)
+            upload_timeout_value = self.upload_timeout_spin.value()
+            save_file_host_setting(self.host_id, "upload_timeout", upload_timeout_value if upload_timeout_value > 0 else None)
+
+        except IOError as e:
+            errors.append(f"Host settings file I/O failed: {str(e)}")
+        except Exception as e:
+            errors.append(f"Host settings: {str(e)}")
+
         # Handle results
         if errors:
             # Partial or complete failure - keep dirty flag and re-enable Apply for retry
@@ -979,8 +1235,8 @@ class FileHostConfigDialog(QDialog):
             # UPDATE CACHED VALUES - Critical fix for stale cache bug!
             # Parent widget calls get_*() methods which return these cached values.
             # If we don't update them, parent will overwrite INI with stale data.
-            if self.creds_input:
-                self.saved_credentials = self.creds_input.text().strip()
+            # Update cached credentials from multi-field layout
+            self.saved_credentials = self.get_credentials()
 
             selected = self.trigger_combo.currentData()
             self.saved_trigger = selected if selected else "disabled"

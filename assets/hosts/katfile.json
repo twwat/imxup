@@ -1,0 +1,51 @@
+{
+  "name": "Katfile",
+  "icon": "katfile.png",
+  "referral_url": "https://katfile.cloud/free810402.html",
+  "requires_auth": true,
+  "auth_type": "api_key",
+
+  "upload": {
+    "get_server": "https://katfile.cloud/api/upload/server?key={token}",
+    "server_response_path": ["result"],
+    "server_session_id_path": ["sess_id"],
+    "endpoint": "{server}",
+    "method": "POST",
+    "file_field": "file_0",
+    "extra_fields": {
+      "utype": "reg",
+      "fld_path": ""
+    },
+    "inactivity_timeout": 300,
+    "upload_timeout": null
+  },
+
+  "response": {
+    "type": "json",
+    "link_path": ["file_code"],
+    "link_prefix": "https://katfile.cloud/",
+    "file_id_path": ["file_code"]
+  },
+
+  "user_info": {
+    "url": "https://katfile.cloud/api/account/info?key={token}",
+    "method": "GET",
+    "storage_left_path": ["result", "storage_left"],
+    "storage_used_path": ["result", "storage_used"],
+    "premium_status_path": ["result", "premium_expire"]
+  },
+
+  "defaults": {
+    "max_file_size_mb": null,
+    "storage_gb": 2048,
+    "max_connections": 2,
+    "auto_retry": true,
+    "max_retries": 3
+  },
+
+  "comments": {
+    "auth": "Uses permanent API keys (no expiration). No auth section needed for api_key type.",
+    "upload_flow": "Two-step upload: 1) GET /api/upload/server returns server URL + sess_id (SINGLE-USE per upload), 2) POST to server with sess_id form field.",
+    "response_format": "Upload response is array format: [{'file_code': 'xxx', 'file_status': 'OK'}]. Array is automatically converted to first element."
+  }
+}

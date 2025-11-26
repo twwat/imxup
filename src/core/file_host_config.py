@@ -37,6 +37,7 @@ class HostConfig:
     # Upload configuration
     get_server: Optional[str] = None  # URL to get upload server
     server_response_path: Optional[List[Union[str, int]]] = None  # JSON path to server URL in response
+    server_session_id_path: Optional[List[Union[str, int]]] = None  # JSON path to single-use sess_id in get_server response (Katfile-style)
     upload_endpoint: str = ""
     method: str = "POST"  # "POST" or "PUT"
     file_field: str = "file"
@@ -112,6 +113,10 @@ class HostConfig:
     stale_token_patterns: List[str] = field(default_factory=list)  # Regex patterns to detect stale tokens
     check_body_on_success: bool = False  # Check response body for stale patterns even on HTTP 200/204
 
+    # Upload timeout configuration
+    inactivity_timeout: int = 300  # Seconds of no progress before abort (default 5 minutes)
+    upload_timeout: Optional[int] = None  # Total time limit in seconds (None = unlimited)
+
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> 'HostConfig':
         """Create HostConfig from dictionary (loaded from JSON)."""
@@ -134,6 +139,7 @@ class HostConfig:
             # Upload config
             get_server=upload_config.get('get_server'),
             server_response_path=upload_config.get('server_response_path'),
+            server_session_id_path=upload_config.get('server_session_id_path'),
             upload_endpoint=upload_config.get('endpoint', ''),
             method=upload_config.get('method', 'POST'),
             file_field=upload_config.get('file_field', 'file'),
@@ -207,6 +213,10 @@ class HostConfig:
             session_token_ttl=auth_config.get('session_token_ttl'),
             stale_token_patterns=auth_config.get('stale_token_patterns', []),
             check_body_on_success=auth_config.get('check_body_on_success', False),
+
+            # Upload timeout configuration
+            inactivity_timeout=upload_config.get('inactivity_timeout', 300),
+            upload_timeout=upload_config.get('upload_timeout'),
         )
 
 
@@ -219,7 +229,9 @@ _HARDCODED_DEFAULTS = {
     "max_connections": 2,
     "max_file_size_mb": None,
     "auto_retry": True,
-    "max_retries": 3
+    "max_retries": 3,
+    "inactivity_timeout": 300,
+    "upload_timeout": None
 }
 
 
@@ -252,12 +264,17 @@ def get_file_host_setting(host_id: str, key: str, value_type: str = "str") -> An
                 ini_key = f"{host_id}_{key}"
                 if cfg.has_option("FILE_HOSTS", ini_key):
                     try:
-                        if value_type == "bool":
+                        raw_value = cfg.get("FILE_HOSTS", ini_key)
+                        # Skip empty values - treat as "not set" and use defaults
+                        if not raw_value or raw_value.strip() == "":
+                            # Fall through to default value logic below
+                            pass
+                        elif value_type == "bool":
                             return cfg.getboolean("FILE_HOSTS", ini_key)
                         elif value_type == "int":
                             return cfg.getint("FILE_HOSTS", ini_key)
                         else:
-                            return cfg.get("FILE_HOSTS", ini_key)
+                            return raw_value
                     except (ValueError, TypeError, configparser.Error) as e:
                         log(f"Invalid value for {ini_key} in INI file: {e}. Using default.",
                             level="warning", category="file_hosts")
@@ -306,7 +323,7 @@ def save_file_host_setting(host_id: str, key: str, value: Any) -> None:
 
     # Validate key (whitelist approach)
     valid_keys = {"enabled", "trigger", "max_connections", "max_file_size_mb",
-                  "auto_retry", "max_retries"}
+                  "auto_retry", "max_retries", "inactivity_timeout", "upload_timeout"}
     if key not in valid_keys:
         raise ValueError(f"Invalid setting key: {key}")
 
@@ -324,7 +341,13 @@ def save_file_host_setting(host_id: str, key: str, value: Any) -> None:
             raise ValueError(f"{key} must be int, not bool")
         if not isinstance(value, int) or value < 1 or value > 100:
             raise ValueError(f"{key} must be int between 1-100, got {value}")
-    elif key == "max_file_size_mb":
+    elif key == "inactivity_timeout":
+        # Reject booleans explicitly (bool is subclass of int in Python)
+        if isinstance(value, bool):
+            raise ValueError(f"{key} must be int, not bool")
+        if not isinstance(value, int) or value < 30 or value > 3600:
+            raise ValueError(f"{key} must be int between 30-3600, got {value}")
+    elif key in {"max_file_size_mb", "upload_timeout"}:
         # Reject booleans explicitly (bool is subclass of int in Python)
         if isinstance(value, bool):
             raise ValueError(f"{key} must be number, not bool")

@@ -1,0 +1,281 @@
+═════════════════════════════════════════════════════════════════════════════
+    FILE HOST UPLOAD SIGNAL FLOW & DATABASE UPDATE INTEGRATION
+═════════════════════════════════════════════════════════════════════════════
+
+                            UPLOAD LIFECYCLE
+                            ================
+
+1. WORKER THREAD (FileHostWorker) - Runs in background QThread
+   ────────────────────────────────────────────────────────────
+
+   run() main loop
+   └─ Get pending upload from DB
+      └─ queue_store.get_pending_file_host_uploads()
+         Returns: [{id, gallery_fk, host_name, status='pending', ...}]
+
+   _process_upload() starts
+   ├─ UPDATE DB: status='uploading'
+   │  └─ queue_store.update_file_host_upload(upload_id, status='uploading')
+   │
+   ├─ EMIT SIGNAL: upload_started(gallery_id, host_name)
+   │  └─ Propagates: Worker → Manager → GUI
+   │
+   ├─ Create ZIP file
+   │  └─ UPDATE DB: zip_path, total_bytes
+   │     └─ queue_store.update_file_host_upload(..., zip_path=..., total_bytes=...)
+   │
+   ├─ Upload with progress callback
+   │  │
+   │  └─ on_progress(uploaded, total, speed_bps) called by pycurl library
+   │     ├─ UPDATE DB: uploaded_bytes (LIVE, every callback)
+   │     │  └─ queue_store.update_file_host_upload(upload_id, uploaded_bytes=uploaded)
+   │     │
+   │     ├─ EMIT SIGNAL: upload_progress(gallery_id, host_name, uploaded, total, speed)
+   │     │  └─ Propagates: Worker → Manager → GUI (progress bar update)
+   │     │
+   │     └─ EMIT SIGNAL: bandwidth_updated(kbps)
+   │        └─ Propagates: Worker → Manager → GUI
+   │
+   └─ Upload completes
+      │
+      ├─ SUCCESS PATH (result.status == 'success')
+      │  ├─ UPDATE DB: status='completed', finished_ts, download_url, file_id
+      │  │  └─ queue_store.update_file_host_upload(
+      │  │        upload_id,
+      │  │        status='completed',
+      │  │        finished_ts=time.time(),
+      │  │        download_url=url,
+      │  │        file_id=file_id
+      │  │     )
+      │  │
+      │  ├─ UPDATE COORDINATOR: record_completion(success=True)
+      │  │  └─ coordinator.total_uploads_completed += 1
+      │  │
+      │  └─ EMIT SIGNAL: upload_completed(gallery_id, host_name, result)
+      │     └─ Propagates: Worker → Manager → GUI
+      │        └─ GUI updates progress, shows download link
+      │
+      └─ FAILURE PATH
+         ├─ Check if retryable: is_retryable = _is_retryable_error()
+         │
+         ├─ IF RETRYABLE & retries remaining:
+         │  └─ UPDATE DB: status='pending', retry_count++
+         │     └─ queue_store.update_file_host_upload(
+         │          upload_id,
+         │          status='pending',
+         │          retry_count=retry_count + 1,
+         │          error_message=error_msg
+         │       )
+         │     └─ Loop: Will be picked up on next iteration
+         │
+         └─ IF NOT RETRYABLE or max retries reached:
+            ├─ UPDATE DB: status='failed', finished_ts, error_message
+            │  └─ queue_store.update_file_host_upload(
+            │       upload_id,
+            │       status='failed',
+            │       finished_ts=time.time(),
+            │       error_message=error_msg
+            │    )
+            │
+            ├─ UPDATE COORDINATOR: record_completion(success=False)
+            │  └─ coordinator.total_uploads_failed += 1
+            │
+            └─ EMIT SIGNAL: upload_failed(gallery_id, host_name, error_msg)
+               └─ Propagates: Worker → Manager → GUI
+                  └─ GUI shows error, removes from queue
+
+
+2. SIGNAL RELAY LAYER (FileHostWorkerManager)
+   ────────────────────────────────────────────
+
+   Relays all worker signals to GUI:
+
+   Worker.upload_started     ──→  Manager.upload_started      ──→  GUI
+   Worker.upload_progress    ──→  Manager.upload_progress     ──→  GUI
+   Worker.upload_completed   ──→  Manager.upload_completed    ──→  GUI
+   Worker.upload_failed      ──→  Manager.upload_failed       ──→  GUI
+   Worker.bandwidth_updated  ──→  Manager.bandwidth_updated   ──→  GUI
+
+
+3. GUI LAYER (main_window.py)
+   ──────────────────────────
+
+   Signal connections:
+   ├─ upload_started        → on_file_host_upload_started()
+   ├─ upload_progress       → on_file_host_upload_progress()      [Update progress bar]
+   ├─ upload_completed      → on_file_host_upload_completed()     [Show success, URL]
+   ├─ upload_failed         → on_file_host_upload_failed()        [Show error]
+   └─ bandwidth_updated     → GUI bandwidth display update
+
+
+═════════════════════════════════════════════════════════════════════════════
+                            DATABASE STATE MACHINE
+═════════════════════════════════════════════════════════════════════════════
+
+         file_host_uploads.status transitions:
+         ═════════════════════════════════════
+
+                        ┌────────────────┐
+                        │    pending     │◄────────────────────┐
+                        │                │                     │
+                        └────────┬────────┘                     │
+                                 │                             │
+              ┌──────────────────┘                             │
+              │ (start upload)                      (retry if retryable)
+              │
+              ▼
+         ┌─────────────┐
+         │  uploading  │◄────────────────────┐
+         │  (in progress)                    │ (resume from pause)
+         └─────────────┘
+              │
+         ┌────┴─────────────────────────┐
+         │                              │
+         │ (success)                    │ (failure)
+         │                              │
+         ▼                              ▼
+    ┌──────────────┐           ┌──────────────┐
+    │  completed   │           │    failed    │
+    │  (final)     │           │   (final)    │
+    └──────────────┘           └──────────────┘
+
+
+═════════════════════════════════════════════════════════════════════════════
+                          METRICS INTEGRATION POINTS
+═════════════════════════════════════════════════════════════════════════════
+
+Recommended insertion points for MetricsStore:
+
+┌──────────────────────────────────────────────────────────────────────────┐
+│ Point 1: After successful completion (BEST)                              │
+│ Location: FileHostWorker._process_upload() line ~590                    │
+├──────────────────────────────────────────────────────────────────────────┤
+│                                                                           │
+│ queue_store.update_file_host_upload(upload_id, status='completed', ...) │
+│ coordinator.record_completion(success=True)                              │
+│                                                                           │
+│ ◄─── INSERT HERE ─────────────────────────────────────────────────────── │
+│                                                                           │
+│ metrics_store.record_upload_success(                                     │
+│     host_name=host_name,                                                 │
+│     gallery_id=gallery_id,                                               │
+│     upload_id=upload_id,                                                 │
+│     duration_seconds=ended_ts - started_ts,                              │
+│     bytes_uploaded=zip_size,                                             │
+│     speed_kbps=speed_kbps                                                │
+│ )                                                                         │
+│                                                                           │
+│ upload_completed.emit(...)                                               │
+└──────────────────────────────────────────────────────────────────────────┘
+
+┌──────────────────────────────────────────────────────────────────────────┐
+│ Point 2: After failure (upload_failed signal)                            │
+│ Location: FileHostWorker._process_upload() line ~664                    │
+├──────────────────────────────────────────────────────────────────────────┤
+│                                                                           │
+│ queue_store.update_file_host_upload(upload_id, status='failed', ...) │
+│ coordinator.record_completion(success=False)                             │
+│                                                                           │
+│ ◄─── INSERT HERE ─────────────────────────────────────────────────────── │
+│                                                                           │
+│ metrics_store.record_upload_failure(                                     │
+│     host_name=host_name,                                                 │
+│     gallery_id=gallery_id,                                               │
+│     upload_id=upload_id,                                                 │
+│     error_message=error_msg,                                             │
+│     retry_count=retry_count,                                             │
+│     is_retryable=is_retryable                                            │
+│ )                                                                         │
+│                                                                           │
+│ upload_failed.emit(...)                                                  │
+└──────────────────────────────────────────────────────────────────────────┘
+
+┌──────────────────────────────────────────────────────────────────────────┐
+│ Point 3: Progress updates (optional - sample based)                      │
+│ Location: FileHostWorker._process_upload() line ~555                    │
+├──────────────────────────────────────────────────────────────────────────┤
+│                                                                           │
+│ queue_store.update_file_host_upload(upload_id, uploaded_bytes=uploaded) │
+│                                                                           │
+│ ◄─── INSERT HERE (sample-based to avoid excessive writes) ──────────── │
+│                                                                           │
+│ if should_record_bandwidth_sample():  # e.g., every 5 seconds           │
+│     metrics_store.record_bandwidth_sample(                               │
+│         host_name=host_name,                                             │
+│         speed_bps=speed_bps,                                             │
+│         timestamp=time.time()                                            │
+│     )                                                                     │
+│                                                                           │
+│ upload_progress.emit(...)                                                │
+└──────────────────────────────────────────────────────────────────────────┘
+
+
+═════════════════════════════════════════════════════════════════════════════
+                      METRICS TABLE SCHEMA (PROPOSED)
+═════════════════════════════════════════════════════════════════════════════
+
+CREATE TABLE upload_metrics (
+    id INTEGER PRIMARY KEY,
+    upload_id INTEGER REFERENCES file_host_uploads(id),
+    host_name TEXT NOT NULL,
+    gallery_id INTEGER,
+    status TEXT,           -- 'success', 'failed', 'retried'
+    
+    -- Timing
+    start_ts INTEGER,      -- When upload started
+    end_ts INTEGER,        -- When upload ended
+    duration_seconds REAL, -- Total duration
+    
+    -- Size & Speed
+    bytes_uploaded INTEGER,
+    total_bytes INTEGER,
+    speed_kbps REAL,       -- Average KB/s
+    
+    -- Error info
+    error_message TEXT,
+    retry_count INTEGER,
+    is_retryable BOOLEAN,
+    
+    -- Metadata
+    recorded_ts INTEGER DEFAULT (strftime('%s', 'now')),
+    
+    UNIQUE(upload_id)
+);
+
+CREATE INDEX metrics_upload_idx ON upload_metrics(upload_id);
+CREATE INDEX metrics_host_idx ON upload_metrics(host_name);
+CREATE INDEX metrics_status_idx ON upload_metrics(status);
+CREATE INDEX metrics_recorded_idx ON upload_metrics(recorded_ts DESC);
+
+
+═════════════════════════════════════════════════════════════════════════════
+                        THREADING SAFETY CONSIDERATIONS
+═════════════════════════════════════════════════════════════════════════════
+
+Thread Model:
+  ┌─────────────────────────────────────┐
+  │   Main GUI Thread (Qt EventLoop)    │
+  │                                     │
+  │  - Signal handlers                  │
+  │  - UI updates                       │
+  │  - Database reads (bulk load)       │
+  └─────────────────────────────────────┘
+              ▲
+              │ Signals (thread-safe)
+              │
+  ┌─────────────────────────────────────┐
+  │  Worker Threads (One per host)      │
+  │                                     │
+  │  - Upload processing                │
+  │  - Progress callbacks               │
+  │  - Database writes (update_upload)  │
+  └─────────────────────────────────────┘
+
+Safety Mechanisms:
+  ├─ _ConnectionContext: Ensures proper cleanup
+  ├─ WAL mode: Allows concurrent reads/writes
+  ├─ isolation_level=None: Autocommit (no transaction holds)
+  └─ thread_lock: Used by Coordinator for stats
+
+
+═════════════════════════════════════════════════════════════════════════════

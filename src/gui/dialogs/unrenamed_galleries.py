@@ -5,7 +5,7 @@ Dialog for managing unrenamed galleries (galleries still titled "untitled galler
 
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QTableWidget, QTableWidgetItem,
-    QPushButton, QDialogButtonBox, QAbstractItemView, QHeaderView, QMessageBox
+    QPushButton, QDialogButtonBox, QAbstractItemView, QHeaderView, QMessageBox, QApplication
 )
 from PyQt6.QtCore import Qt, pyqtSignal
 
@@ -21,6 +21,7 @@ class UnrenamedGalleriesDialog(QDialog):
         self.setWindowTitle("Unrenamed Galleries")
         self.setModal(True)
         self.resize(600, 400)
+        self._center_on_parent()
 
         # Main layout
         layout = QVBoxLayout(self)
@@ -199,3 +200,21 @@ class UnrenamedGalleriesDialog(QDialog):
 
             except Exception as e:
                 QMessageBox.warning(self, "Error", f"Failed to clear galleries: {str(e)}")
+    def _center_on_parent(self):
+        """Center dialog on parent window or screen"""
+        if self.parent():
+            # Center on parent window
+            parent_geo = self.parent().geometry()
+            dialog_geo = self.frameGeometry()
+            x = parent_geo.x() + (parent_geo.width() - dialog_geo.width()) // 2
+            y = parent_geo.y() + (parent_geo.height() - dialog_geo.height()) // 2
+            self.move(x, y)
+        else:
+            # Center on screen if no parent
+            screen = QApplication.primaryScreen()
+            if screen:
+                screen_geo = screen.geometry()
+                dialog_geo = self.frameGeometry()
+                x = (screen_geo.width() - dialog_geo.width()) // 2
+                y = (screen_geo.height() - dialog_geo.height()) // 2
+                self.move(x, y)

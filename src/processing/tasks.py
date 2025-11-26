@@ -5,6 +5,7 @@ Handles async operations, progress batching, and table updates.
 
 import time
 import weakref
+from weakref import ReferenceType
 import configparser
 import os
 from typing import Callable, Optional, Dict, Any, Set
@@ -48,8 +49,8 @@ class ProgressUpdateBatcher:
     def __init__(self, update_callback: Callable, batch_interval: float = PROGRESS_UPDATE_BATCH_INTERVAL):
         self._callback = update_callback
         self._batch_interval = batch_interval
-        self._pending_updates = {}
-        self._last_batch_time = 0
+        self._pending_updates: Dict[str, Dict[str, Any]] = {}
+        self._last_batch_time: float = 0
         self._timer = QTimer()
         self._timer.setSingleShot(True)
         self._timer.timeout.connect(self._process_batch)
@@ -135,25 +136,25 @@ class TableRowUpdateTask:
 class TableUpdateQueue:
     """Manages table update operations in a non-blocking way"""
     
-    def __init__(self, table_widget, path_to_row_map: Dict[str, int]):
+    def __init__(self, table_widget: Any, path_to_row_map: Dict[str, int]):
         # Handle both GalleryTableWidget and TabbedGalleryWidget
         if hasattr(table_widget, 'gallery_table'):
-            self._table = weakref.ref(table_widget.gallery_table)
-            self._tabbed_widget = weakref.ref(table_widget)
+            self._table: ReferenceType[Any] = weakref.ref(table_widget.gallery_table)
+            self._tabbed_widget: Optional[ReferenceType[Any]] = weakref.ref(table_widget)
         else:
             self._table = weakref.ref(table_widget)
             self._tabbed_widget = None
-        
+
         self._path_to_row = path_to_row_map
-        self._pending_updates = {}
+        self._pending_updates: Dict[str, Any] = {}
         self._processing = False
         self._timer = QTimer()
         self._timer.setSingleShot(True)
         self._timer.timeout.connect(self._process_updates)
         
         # Performance optimizations
-        self._visibility_cache = {}
-        self._cache_invalidation_counter = 0
+        self._visibility_cache: Dict[int, bool] = {}
+        self._cache_invalidation_counter: int = 0
         self._visible_rows_cache: Set[int] = set()
         self._last_cache_update = 0
     

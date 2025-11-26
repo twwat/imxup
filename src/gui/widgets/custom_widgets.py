@@ -9,7 +9,8 @@ from typing import Optional, List, Dict, Any
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QProgressBar,
     QLabel, QPushButton, QTableWidget, QTableWidgetItem,
-    QHeaderView, QStyle, QMenu, QMessageBox, QTabBar, QListWidget, QApplication
+    QHeaderView, QStyle, QMenu, QMessageBox, QTabBar, QListWidget, QApplication,
+    QAbstractItemView
 )
 from PyQt6.QtCore import Qt, pyqtSignal, QTimer, QMimeData, QPoint, QSize
 from PyQt6.QtGui import QIcon, QPixmap, QPainter, QColor, QPen, QDragEnterEvent, QDropEvent, QKeyEvent
@@ -64,11 +65,13 @@ class OverallProgressWidget(QWidget):
         """Set progress text"""
         self.text_label.setText(text)
 
-    def setProperty(self, name: str, value):
+    def setProgressProperty(self, name: str, value) -> None:
         """Set property on progress bar"""
         self.progress_bar.setProperty(name, value)
         if name == "status":
-            self.progress_bar.style().polish(self.progress_bar)
+            style = self.progress_bar.style()
+            if style is not None:
+                style.polish(self.progress_bar)
 
 
 class TableProgressWidget(QWidget):
@@ -138,7 +141,9 @@ class TableProgressWidget(QWidget):
         self.progress_bar.setProperty("status", status)
 
         # Force style update to apply new property
-        self.progress_bar.style().polish(self.progress_bar)
+        style = self.progress_bar.style()
+        if style is not None:
+            style.polish(self.progress_bar)
 
 
 class ActionButtonWidget(QWidget):
@@ -390,41 +395,44 @@ class StatusIconWidget(QWidget):
     def update_status(self, status: str):
         """Update status display"""
         self.status = status
-        
+
         # Set icon based on status
         style = self.style()
+        if style is None:
+            return
+
         if status == QUEUE_STATE_READY:
             icon = style.standardIcon(QStyle.StandardPixmap.SP_DialogApplyButton)
             self.status_label.setText("Ready")
-            
+
         elif status == QUEUE_STATE_QUEUED:
             icon = style.standardIcon(QStyle.StandardPixmap.SP_ArrowRight)
             self.status_label.setText("Queued")
-            
+
         elif status == QUEUE_STATE_UPLOADING:
             icon = style.standardIcon(QStyle.StandardPixmap.SP_ArrowUp)
             self.status_label.setText("Uploading")
-            
+
         elif status == QUEUE_STATE_PAUSED:
             icon = style.standardIcon(QStyle.StandardPixmap.SP_MediaPause)
             self.status_label.setText("Paused")
-            
+
         elif status == QUEUE_STATE_COMPLETED:
             icon = style.standardIcon(QStyle.StandardPixmap.SP_DialogYesButton)
             self.status_label.setText("Completed")
-            
+
         elif status == QUEUE_STATE_FAILED:
             icon = style.standardIcon(QStyle.StandardPixmap.SP_DialogCancelButton)
             self.status_label.setText("Failed")
-            
+
         elif status == QUEUE_STATE_INCOMPLETE:
             icon = style.standardIcon(QStyle.StandardPixmap.SP_MessageBoxWarning)
             self.status_label.setText("Incomplete")
-            
+
         else:
             icon = style.standardIcon(QStyle.StandardPixmap.SP_MessageBoxQuestion)
             self.status_label.setText("Unknown")
-        
+
         pixmap = icon.pixmap(ICON_SIZE, ICON_SIZE)
         self.icon_label.setPixmap(pixmap)
 
@@ -462,37 +470,48 @@ class DropEnabledTabBar(QTabBar):
         super().__init__(parent)
         self.setAcceptDrops(True)
     
-    def dragEnterEvent(self, event: QDragEnterEvent):
+    def dragEnterEvent(self, event: QDragEnterEvent | None) -> None:
         """Handle drag enter event"""
-        if event.mimeData().hasUrls():
+        if event is None:
+            return
+        mime_data = event.mimeData()
+        if mime_data is not None and mime_data.hasUrls():
             event.acceptProposedAction()
-    
-    def dragMoveEvent(self, event):
+
+    def dragMoveEvent(self, event) -> None:
         """Handle drag move event"""
-        if event.mimeData().hasUrls():
+        if event is None:
+            return
+        mime_data = event.mimeData()
+        if mime_data is not None and mime_data.hasUrls():
             event.acceptProposedAction()
-    
-    def dropEvent(self, event: QDropEvent):
+
+    def dropEvent(self, event: QDropEvent | None) -> None:
         """Handle drop event"""
-        if event.mimeData().hasUrls():
-            # Determine which tab the drop occurred on
-            drop_pos = event.position().toPoint()
-            tab_index = self.tabAt(drop_pos)
-            
-            if tab_index == -1:
-                # Dropped outside any tab, use current tab
-                tab_index = self.currentIndex()
-            
-            # Extract folder paths
-            folders = []
-            for url in event.mimeData().urls():
-                path = url.toLocalFile()
-                if os.path.isdir(path):
-                    folders.append(path)
-            
-            if folders:
-                self.files_dropped.emit(folders, tab_index)
-                event.acceptProposedAction()
+        if event is None:
+            return
+        mime_data = event.mimeData()
+        if mime_data is None or not mime_data.hasUrls():
+            return
+
+        # Determine which tab the drop occurred on
+        drop_pos = event.position().toPoint()
+        tab_index = self.tabAt(drop_pos)
+
+        if tab_index == -1:
+            # Dropped outside any tab, use current tab
+            tab_index = self.currentIndex()
+
+        # Extract folder paths
+        folders = []
+        for url in mime_data.urls():
+            path = url.toLocalFile()
+            if os.path.isdir(path):
+                folders.append(path)
+
+        if folders:
+            self.files_dropped.emit(folders, tab_index)
+            event.acceptProposedAction()
 
 
 class GalleryTableWidget(QTableWidget):
@@ -610,7 +629,7 @@ class GalleryTableWidget(QTableWidget):
         
         # Actions
         actions_widget = ActionButtonWidget()
-        actions_widget.update_state(gallery_data.get('status', QUEUE_STATE_READY))
+        actions_widget.update_buttons(gallery_data.get('status', QUEUE_STATE_READY))
         self.setCellWidget(row, 9, actions_widget)
         
         return row
@@ -645,7 +664,7 @@ class GalleryTableWidget(QTableWidget):
         # Actions
         actions_widget = self.cellWidget(row, 9)
         if isinstance(actions_widget, ActionButtonWidget):
-            actions_widget.update_state(gallery_data.get('status', QUEUE_STATE_READY))
+            actions_widget.update_buttons(gallery_data.get('status', QUEUE_STATE_READY))
     
     def find_row_by_path(self, path: str) -> Optional[int]:
         """Find table row by gallery path"""
@@ -661,11 +680,14 @@ class CopyableLogListWidget(QListWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        self.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.customContextMenuRequested.connect(self.show_context_menu)
 
-    def keyPressEvent(self, event: QKeyEvent):
+    def keyPressEvent(self, event: QKeyEvent | None) -> None:
         """Handle Ctrl+C to copy selected log entries"""
+        if event is None:
+            return
         if event.key() == Qt.Key.Key_C and event.modifiers() == Qt.KeyboardModifier.ControlModifier:
             self.copy_selected_items()
         else:
@@ -677,8 +699,11 @@ class CopyableLogListWidget(QListWidget):
         if not selected_items:
             return
 
-        # Get text from all selected items
-        texts = [item.text() for item in selected_items]
+        # Sort by row index to ensure consistent order
+        sorted_items = sorted(selected_items, key=lambda item: self.row(item))
+        texts = [item.text() for item in sorted_items]
+        # Reverse to get chronological order (display is reverse chronological)
+        texts = list(reversed(texts))
 
         # Join with newlines and copy to clipboard
         content = "\n".join(texts)
@@ -753,8 +778,10 @@ class CopyableLogTableWidget(QTableWidget):
         self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.customContextMenuRequested.connect(self.show_context_menu)
 
-    def keyPressEvent(self, event: QKeyEvent):
+    def keyPressEvent(self, event: QKeyEvent | None) -> None:
         """Handle Ctrl+C to copy selected log entries"""
+        if event is None:
+            return
         if event.key() == Qt.Key.Key_C and event.modifiers() == Qt.KeyboardModifier.ControlModifier:
             self.copy_selected_rows()
         else:
@@ -769,32 +796,32 @@ class CopyableLogTableWidget(QTableWidget):
         if not selected_rows:
             return
 
-        # Sort rows in display order
-        sorted_rows = sorted(selected_rows)
+        # Sort rows and reverse for chronological order (display is newest-first)
+        sorted_rows = sorted(selected_rows, reverse=True)
 
-        # Build text from selected rows (timestamp + category + message)
+        # Build text from selected rows (timestamp + level + category + message)
         lines = []
         for row in sorted_rows:
-            row_parts = []
-
             # Get timestamp (column 0)
             timestamp_item = self.item(row, 0)
-            if timestamp_item and timestamp_item.text():
-                row_parts.append(timestamp_item.text())
+            timestamp = timestamp_item.text() if timestamp_item else ""
 
-            # Get category (column 1) in brackets
-            category_item = self.item(row, 1)
-            if category_item and category_item.text():
-                row_parts.append(f"[{category_item.text()}]")
+            # Get level (column 1)
+            level_item = self.item(row, 1)
+            level = level_item.text() if level_item else ""
 
-            # Get message (column 2)
-            message_item = self.item(row, 2)
-            if message_item:
-                row_parts.append(message_item.text())
+            # Get category (column 2)
+            category_item = self.item(row, 2)
+            category = category_item.text() if category_item else ""
 
-            # Join parts with space and add to lines
-            if row_parts:
-                lines.append(" ".join(row_parts))
+            # Get message (column 3)
+            message_item = self.item(row, 3)
+            message = message_item.text() if message_item else ""
+
+            # Format: "2025-11-20 00:49:47 DEBUG [template]: Message text"
+            if timestamp or level or category or message:
+                line = f"{timestamp} {level} [{category}]: {message}"
+                lines.append(line)
 
         # Join all lines and copy to clipboard
         content = "\n".join(lines)
@@ -838,7 +865,7 @@ class FileHostsStatusWidget(QWidget):
     def __init__(self, gallery_path: str, parent=None):
         super().__init__(parent)
         self.gallery_path = gallery_path
-        self.host_buttons = {}  # {host_name: QPushButton}
+        self.host_buttons: dict[str, QPushButton] = {}  # {host_name: QPushButton}
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(4, 1, 4, 1)
@@ -863,14 +890,21 @@ class FileHostsStatusWidget(QWidget):
         icon_manager = get_icon_manager()
 
         layout = self.layout()
+        if layout is None:
+            return
+
+        if icon_manager is None:
+            return
 
         # Clear existing widgets (buttons + stretch) if reinitializing
         if self._initialized:
             # Clear all widgets from layout
             while layout.count():
                 item = layout.takeAt(0)
-                if item.widget():
-                    item.widget().deleteLater()
+                if item and item.widget():
+                    widget = item.widget()
+                    if widget:
+                        widget.deleteLater()
             self.host_buttons.clear()
 
         # Get all enabled hosts
@@ -947,8 +981,11 @@ class FileHostsStatusWidget(QWidget):
             self.host_buttons[host_name] = btn
             layout.addWidget(btn)
 
-        layout.addStretch()
+        from PyQt6.QtWidgets import QHBoxLayout
+        if isinstance(layout, QHBoxLayout):
+            layout.addStretch()
         self._initialized = True
+        self.update()  # Force visual refresh after icon updates
 
     def _apply_status_overlay(self, base_icon: QIcon, status: str, icon_manager) -> QIcon:
         """Apply status overlay to host icon.

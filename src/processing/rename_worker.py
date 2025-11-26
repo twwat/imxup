@@ -160,7 +160,7 @@ class RenameWorker:
     def login(self):
         """Login to imx.to web interface with DDoS-Guard bypass"""
         from src.network.cookies import get_firefox_cookies, load_cookies_from_file
-        from src.utils.ddos_bypass import get_ddos_bypass
+        #from src.utils.ddos_bypass import get_ddos_bypass
 
         # Define required secure cookies for imx.to authentication
         REQUIRED_COOKIES = ["continue", "PHPSESSID", "user_id", "user_key", "user_name"]
