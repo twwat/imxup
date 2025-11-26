@@ -253,6 +253,7 @@ class AppLogger:
             self._file_handler = None
 
         try:
+            handler: logging.Handler
             if rotation == "size":
                 handler = _GzipRotatingFileHandler(
                     filename=log_path,

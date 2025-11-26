@@ -57,17 +57,32 @@ import getpass
 import platform
 import sqlite3
 import glob
-import winreg
+try:
+    import winreg  # Windows-only
+except ImportError:
+    winreg = None  # Not available on Linux/Mac
 import mimetypes
 
-__version__ = "0.6.00"  # Application version number
+__version__ = "0.6.03"  # Application version number
 
-# Build User-Agent string (defer debug_print until after console allocation)
-_system = platform.system()
-_release = platform.release()
-_machine = platform.machine()
-_version = platform.version()
-USER_AGENT = f"Mozilla/5.0 (ImxUp {__version__}; {_system} {_release} {_version}; {_machine}; rv:141.0) Gecko/20100101 Firefox/141.0"
+# Lazy User-Agent string builder to avoid platform.system() hang during module import
+# (platform.system() can hang on some Windows systems, breaking splash screen initialization)
+_user_agent_cache = None
+
+def get_user_agent() -> str:
+    """Get User-Agent string, building it lazily on first call to avoid import-time hangs."""
+    global _user_agent_cache
+    if _user_agent_cache is None:
+        try:
+            _system = platform.system()
+            _release = platform.release()
+            _machine = platform.machine()
+            _version = platform.version()
+            _user_agent_cache = f"Mozilla/5.0 (ImxUp {__version__}; {_system} {_release} {_version}; {_machine}; rv:141.0) Gecko/20100101 Firefox/141.0"
+        except Exception:
+            # Fallback if platform calls fail
+            _user_agent_cache = f"Mozilla/5.0 (ImxUp {__version__}; Windows; rv:141.0) Gecko/20100101 Firefox/141.0"
+    return _user_agent_cache
 
 def get_version() -> str:
     return __version__
@@ -136,6 +151,10 @@ def _unique_destination_path(dest_dir: str, filename: str) -> str:
 
 def create_windows_context_menu():
     """Create Windows context menu integration"""
+    # Skip if not on Windows or winreg not available
+    if winreg is None or platform.system() != 'Windows':
+        return False
+
     try:
         # Resolve executables and scripts based on frozen/unfrozen state
         is_frozen = getattr(sys, 'frozen', False)
@@ -201,6 +220,10 @@ def create_windows_context_menu():
 
 def remove_windows_context_menu():
     """Remove Windows context menu integration"""
+    # Skip if not on Windows or winreg not available
+    if winreg is None or platform.system() != 'Windows':
+        return False
+
     try:
         # Remove command line context menu (background)
         try:
@@ -286,8 +309,16 @@ class NestedProgressBar:
 
 
 
+class CredentialDecryptionError(Exception):
+    """Raised when credential decryption fails"""
+    pass
+
 def get_encryption_key():
-    """Generate encryption key from system info"""
+    """Generate encryption key from system info (LEGACY - WEAK SECURITY).
+
+    WARNING: This uses hostname+username which is predictable and insecure.
+    Kept only for backward compatibility. New credentials should use keyring.
+    """
     # Use username and hostname to create a consistent key
     # NOTE: platform.node() can HANG on systems with WMI/network issues
     # Use COMPUTERNAME environment variable instead (Windows-specific but safer)
@@ -298,23 +329,51 @@ def get_encryption_key():
     return base64.urlsafe_b64encode(key)
 
 def encrypt_password(password):
-    """Encrypt password with system-derived key"""
+    """Encrypt password using legacy Fernet encryption.
+
+    NOTE: This is kept for backward compatibility only.
+    New code should store credentials directly via keyring (see set_credential).
+    """
     key = get_encryption_key()
     f = Fernet(key)
     return f.encrypt(password.encode()).decode()
 
 def decrypt_password(encrypted_password):
-    """Decrypt password with system-derived key"""
+    """Decrypt password with proper error handling.
+
+    Raises CredentialDecryptionError on failure to prevent silent auth failures.
+    """
+    if not encrypted_password:
+        raise CredentialDecryptionError("No encrypted password provided")
+
     try:
         key = get_encryption_key()
         f = Fernet(key)
         return f.decrypt(encrypted_password.encode()).decode()
     except Exception as e:
-        log(f"Failed to decrypt password: {e}", level="warning", category="auth")
-        return None
+        log(f"Failed to decrypt password: {e}", level="error", category="auth")
+        raise CredentialDecryptionError(
+            "Credential decryption failed. Your credentials may be corrupted. "
+            "Please reconfigure via Settings > Credentials."
+        ) from e
 
 def get_credential(key):
-    """Get credential from QSettings (Registry on Windows)"""
+    """Get credential using OS-native secure storage (keyring).
+
+    Falls back to QSettings/Registry for backward compatibility.
+    """
+    try:
+        # Try keyring first (secure OS-native storage)
+        import keyring
+        value = keyring.get_password("imxup", key)
+        if value:
+            return value
+    except ImportError:
+        pass  # Fall through to legacy storage
+    except Exception:
+        pass  # Keyring not available, fall through to QSettings (normal)
+
+    # Fallback to legacy QSettings/Registry storage
     from PyQt6.QtCore import QSettings
     settings = QSettings("imxup", "imxup")
     settings.beginGroup("Credentials")
@@ -323,7 +382,21 @@ def get_credential(key):
     return value
 
 def set_credential(key, value):
-    """Set credential in QSettings (Registry on Windows)"""
+    """Set credential using OS-native secure storage (keyring).
+
+    Also stores in QSettings/Registry for backward compatibility.
+    """
+    try:
+        # Try to use keyring (secure OS-native storage)
+        import keyring
+        keyring.set_password("imxup", key, value)
+        log(f"Credential '{key}' stored securely in OS keyring", level="debug", category="auth")
+    except ImportError:
+        log("keyring not available, using QSettings only", level="warning", category="auth")
+    except Exception as e:
+        log(f"Keyring storage failed: {e}, falling back to QSettings", level="warning", category="auth")
+
+    # Also store in QSettings/Registry for backward compatibility
     from PyQt6.QtCore import QSettings
     settings = QSettings("imxup", "imxup")
     settings.beginGroup("Credentials")
@@ -688,7 +761,26 @@ def load_templates():
     
     # Add default template
     templates["default"] = get_default_template()
-    
+
+    # Add Extended Example template
+    templates["Extended Example"] = """#folderName#
+[hr][/hr]
+[center][size=4][b][color=#11c153]#folderName#[/color][/b][/size]
+
+[size=3][b][color="#888"]#pictureCount# IMAGES • #extension# • #width#x#height# • #folderSize# [/color] [/b][/font][/size]
+[/center][hr][/hr]#allImages#
+[if galleryLink][b]Gallery link[/b]: #galleryLink#[else][i][size=1]Sorry, no gallery link available.[/size][/i][/if]
+ext1: [if ext1]#ext1#[else]no ext1 value set[/if]
+ext2: [if ext2]#ext2#[else]no ext2 value set[/if]
+ext3: [if ext3]#ext3#[else]no ext3 value set[/if]
+ext4: [if ext4]#ext4#[else]no ext4 value set[/if]
+custom1: [if custom1]#custom1#[else]no custom1 value set[/if]
+custom2: [if custom2]#custom2#[else]no custom2 value set[/if]
+custom3: [if custom3]#custom3#[else]no custom3 value set[/if]
+custom4: [if custom4]#custom4#[else]no custom4 value set[/if]
+[if hostLinks][b]Download links:[/b]
+#hostLinks#[/if]"""
+
     # Load custom templates
     if os.path.exists(template_path):
         for filename in os.listdir(template_path):
@@ -1196,7 +1288,7 @@ class ImxToUploader:
         if self.api_key:
             self.headers = {
                 "X-API-Key": self.api_key,
-                "User-Agent": USER_AGENT
+                "User-Agent": get_user_agent()
             }
         else:
             self.headers = {}
@@ -1221,11 +1313,18 @@ class ImxToUploader:
         if not hasattr(self._curl_local, 'curl'):
             # Create new curl handle for this thread
             import pycurl
+            import certifi
             self._curl_local.curl = pycurl.Curl()
 
             # CRITICAL: Thread safety for multi-threaded uploads
             # NOSIGNAL prevents signal-based timeouts which don't work in multi-threaded programs
             self._curl_local.curl.setopt(pycurl.NOSIGNAL, 1)
+
+            # SECURITY: Enable SSL/TLS certificate verification to prevent MITM attacks
+            # Uses certifi's trusted CA bundle for certificate validation
+            self._curl_local.curl.setopt(pycurl.CAINFO, certifi.where())
+            self._curl_local.curl.setopt(pycurl.SSL_VERIFYPEER, 1)
+            self._curl_local.curl.setopt(pycurl.SSL_VERIFYHOST, 2)
 
             log(f"Created new curl handle for thread {threading.current_thread().name}", level="debug", category="network")
         return self._curl_local.curl
@@ -2423,24 +2522,23 @@ def main():
 
             debug_print("Creating splash screen...")
             splash = SplashScreen()
-            debug_print("Showing splash screen...")
+            #debug_print("Showing splash screen...")
             splash.show()
             splash.update_status("Starting ImxUp...")
             debug_print("Processing events...")
             app.processEvents()  # Force splash to appear NOW
-            debug_print("Events processed")
+            #debug_print("Events processed")
 
             # NOW import the heavy main_window module (while splash is visible)
             splash.set_status("Loading modules")
-            debug_print(f"{timestamp()} INFO: Launching GUI for ImxUp v{__version__}")
+            debug_print(f"Launching GUI for ImxUp v{__version__}...")
             if sys.stdout is not None:
                 try:
                     sys.stdout.flush()
                 except (OSError, AttributeError):
                     pass
-            #debug_print("About to import main_window...")
+            debug_print("Importing main_window...")
             from src.gui.main_window import ImxUploadGUI, check_single_instance
-            #debug_print("main_window imported successfully")
 
             # Check for existing instance
             folders_to_add = []
@@ -2463,6 +2561,7 @@ def main():
             window = ImxUploadGUI(splash)
 
             # Now set Fusion style after widgets are initialized
+            splash.set_status("Setting Fusion style...")
             app.setStyle("Fusion")
 
             # Add folders from command line if provided
@@ -2484,19 +2583,19 @@ def main():
             progress.show()
             QApplication.processEvents()
 
-            debug_print(f"{timestamp()} Calling _initialize_table_from_queue()")
-            window._initialize_table_from_queue(progress_callback=lambda current, total: (
-                progress.setValue(current),
-                progress.setLabelText(f"Loading gallery {current}/{total}..."),
-                QApplication.processEvents() if current % 10 == 0 else None
-            ))
+            # Progress callback to update dialog with count
+            def update_progress(current, total):
+                progress.setValue(current)
+                progress.setLabelText(f"{current}/{total} galleries loaded")
+                # Process events to keep UI responsive (already batched every 10 galleries)
+                QApplication.processEvents()
+
+            window._initialize_table_from_queue(progress_callback=update_progress)
 
             # Process events to ensure the QTimer.singleShot(0) in _initialize_table_from_queue completes
-            debug_print(f"{timestamp()} Processing final events before closing progress dialog")
             QApplication.processEvents()
 
             progress.close()
-            debug_print(f"{timestamp()} Gallery loading complete")
 
             # NOW show the main window (galleries already loaded)
             window.show()

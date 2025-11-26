@@ -151,6 +151,10 @@ class TabbedGalleryWidget(QWidget):
         self.current_tab = "Main"
         self._restoring_tabs = False  # Flag to prevent saving during tab restoration
 
+        # PER-TAB STATE ISOLATION: Each tab maintains independent state
+        self._tab_states = {}  # Dict[tab_name, TabState] - stores per-tab state
+        self._saving_state = False  # Flag to prevent recursion during state save/restore
+
         # Enhanced filter result caching system
         self._filter_cache = {}  # Cache filtered row visibility per tab
         self._filter_cache_timestamps = {}  # Track cache freshness per tab
@@ -210,7 +214,10 @@ class TabbedGalleryWidget(QWidget):
         # Gallery table (reuse existing implementation)
         self.table = GalleryTableWidget()
         layout.addWidget(self.table, 1)  # Give it stretch priority
-        
+
+        # Connect selection changes to auto-save state
+        self.table.itemSelectionChanged.connect(self._on_selection_changed)
+
         # Tabs will be initialized when TabManager is set
         # Don't add hardcoded tabs here
     
@@ -308,36 +315,45 @@ class TabbedGalleryWidget(QWidget):
         self._restoring_tabs = False
     
     def _on_tab_changed(self, index):
-        """Handle tab change with performance tracking"""
+        """Handle tab change with performance tracking and state isolation"""
         if index < 0 or index >= self.tab_bar.count():
             return
-        
+
         # Performance monitoring
         switch_start_time = time.time()
-        
+
         tab_text = self.tab_bar.tabText(index)
         tab_name = tab_text.split(' (')[0] if ' (' in tab_text else tab_text
         old_tab = self.current_tab
-        
+
+        # CRITICAL: Save state of old tab BEFORE switching
+        if old_tab and old_tab != tab_name:
+            self._save_tab_state(old_tab)
+
         self.current_tab = tab_name
-        
+
         # Invalidate update queue visibility cache when switching tabs
         update_queue = getattr(self.table, '_update_queue', None)
         if update_queue and hasattr(update_queue, 'invalidate_visibility_cache'):
             update_queue.invalidate_visibility_cache()
-        
+
+        # CRITICAL: Restore state FIRST while rows are visible
+        self._restore_tab_state(tab_name)
+
+        # Apply filter AFTER restoring state (preserves selections on hidden rows)
         self._apply_filter(tab_name)
+
         self.tab_changed.emit(tab_name)
-        
+
         # Update performance metrics
         switch_time = (time.time() - switch_start_time) * 1000
         self._perf_metrics['tab_switches'] += 1
         self._perf_metrics['tab_switch_times'].append(switch_time)
-        
+
         # Keep only recent measurements
         if len(self._perf_metrics['tab_switch_times']) > 50:
             self._perf_metrics['tab_switch_times'] = self._perf_metrics['tab_switch_times'][-25:]
-            
+
         # Log slow tab switches
         #if switch_time > 16:
         #    print(f"Slow tab switch from '{old_tab}' to '{tab_name}': {switch_time:.1f}ms")
@@ -347,6 +363,117 @@ class TabbedGalleryWidget(QWidget):
         if self.tab_manager and tab_name != "All Tabs" and not self._restoring_tabs:
             self.tab_manager.last_active_tab = tab_name
     
+    def _save_tab_state(self, tab_name: str):
+        """Save current table state for a specific tab"""
+        if self._saving_state or not tab_name:
+            return
+
+        try:
+            self._saving_state = True
+
+            # Capture current state
+            state = {
+                'scroll_position': self.table.verticalScrollBar().value(),
+                'selected_rows': set(),
+                'current_row': self.table.currentRow(),
+                'horizontal_scroll': self.table.horizontalScrollBar().value()
+            }
+
+            # Save selected row indices (only for visible rows in this tab)
+            # FIX: Use selectedRows() instead of selectedItems() for proper row-based selection
+            selection_model = self.table.selectionModel()
+            if selection_model:
+                selected_indexes = selection_model.selectedRows()
+                for index in selected_indexes:
+                    row = index.row()
+                    if not self.table.isRowHidden(row):
+                        state['selected_rows'].add(row)
+
+            # Store state for this tab
+            self._tab_states[tab_name] = state
+
+        finally:
+            self._saving_state = False
+
+    def _restore_tab_state(self, tab_name: str):
+        """Restore saved state for a specific tab"""
+        if self._saving_state or not tab_name:
+            return
+
+        try:
+            self._saving_state = True
+
+            # Get saved state or create default
+            state = self._tab_states.get(tab_name, {
+                'scroll_position': 0,
+                'selected_rows': set(),
+                'current_row': -1,
+                'horizontal_scroll': 0
+            })
+
+            # Block selection signals during restoration to prevent deselection on Start
+            self.table.blockSignals(True)
+            try:
+                # Clear current selection first
+                self.table.clearSelection()
+
+                # Restore multi-selection using QItemSelectionModel for proper batch selection
+                # FIX: Build complete selection first, then apply all at once to prevent flickering
+                selection_model = self.table.selectionModel()
+                if selection_model and state['selected_rows']:
+                    from PyQt6.QtCore import QItemSelectionModel, QItemSelection
+                    selection = QItemSelection()
+
+                    for row in state['selected_rows']:
+                        if row < self.table.rowCount():
+                            # Don't check isRowHidden here - restore selections BEFORE filter applies
+                            # Build selection range for entire row
+                            index_first = self.table.model().index(row, 0)
+                            index_last = self.table.model().index(row, self.table.columnCount() - 1)
+                            selection.select(index_first, index_last)
+
+                    # Apply all selections at once using ClearAndSelect to replace previous selections
+                    selection_model.select(selection, QItemSelectionModel.SelectionFlag.ClearAndSelect | QItemSelectionModel.SelectionFlag.Rows)
+
+                # Restore current row
+                if state['current_row'] >= 0 and state['current_row'] < self.table.rowCount():
+                    if not self.table.isRowHidden(state['current_row']):
+                        self.table.setCurrentCell(state['current_row'], self.table.currentColumn())
+
+            finally:
+                self.table.blockSignals(False)
+
+            # Restore scroll positions (after unblocking signals)
+            self.table.verticalScrollBar().setValue(state['scroll_position'])
+            self.table.horizontalScrollBar().setValue(state['horizontal_scroll'])
+
+        finally:
+            self._saving_state = False
+
+    def _on_selection_changed(self):
+        """Auto-save selection state when it changes (prevents deselection on Start)"""
+        if self._saving_state or self._restoring_tabs:
+            return
+
+        # Save state for current tab whenever selection changes
+        if self.current_tab:
+            # Use a lightweight state update (don't block signals)
+            state = self._tab_states.get(self.current_tab, {})
+            state['selected_rows'] = set()
+
+            # Only save visible selected rows
+            # FIX: Use selectedRows() instead of selectedItems() for proper row-based selection
+            selection_model = self.table.selectionModel()
+            if selection_model:
+                selected_indexes = selection_model.selectedRows()
+                for index in selected_indexes:
+                    row = index.row()
+                    if not self.table.isRowHidden(row):
+                        state['selected_rows'].add(row)
+
+            state['current_row'] = self.table.currentRow()
+            self._tab_states[self.current_tab] = state
+
     def _save_tab_order(self):
         """Save current tab bar order to QSettings"""
         order = []

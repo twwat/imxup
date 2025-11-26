@@ -91,18 +91,18 @@ class GalleryFileManagerDialog(QDialog):
         self.gallery_path = gallery_path
         self.queue_manager = queue_manager
         self.gallery_item = queue_manager.get_item(gallery_path)
-        self.modified = False
-        self.scanner = None
+        self.modified: bool = False
+        self.scanner: Optional[FileScanner] = None
 
         # Track original and current files
-        self.original_files = set()
-        self.removed_files = set()
-        self.added_files = set()
-        self.file_status = {}  # filename -> (is_valid, error_msg)
+        self.original_files: Set[str] = set()
+        self.removed_files: Set[str] = set()
+        self.added_files: Set[str] = set()
+        self.file_status: dict[str, tuple[bool, str]] = {}  # filename -> (is_valid, error_msg)
 
         # Artifact data for completed galleries
-        self.artifact_data = None
-        self.is_completed = False
+        self.artifact_data: Optional[dict] = None
+        self.is_completed: bool = False
 
         self.setup_ui()
         self.load_gallery_files()
@@ -285,7 +285,9 @@ class GalleryFileManagerDialog(QDialog):
 
             # Add to file list
             item = QListWidgetItem(filename)
-            item.setIcon(self.style().standardIcon(self.style().StandardPixmap.SP_DialogApplyButton))
+            style = self.style()
+            if style is not None:
+                item.setIcon(style.standardIcon(style.StandardPixmap.SP_DialogApplyButton))
             item.setToolTip("Uploaded image")
             self.file_list.addItem(item)
 
@@ -330,11 +332,14 @@ class GalleryFileManagerDialog(QDialog):
             self.file_list.addItem(item)
         
         # Set icon and tooltip based on status
+        style = self.style()
         if is_valid:
-            item.setIcon(self.style().standardIcon(self.style().StandardPixmap.SP_DialogApplyButton))
+            if style is not None:
+                item.setIcon(style.standardIcon(style.StandardPixmap.SP_DialogApplyButton))
             item.setToolTip("Valid image file")
         else:
-            item.setIcon(self.style().standardIcon(self.style().StandardPixmap.SP_DialogCancelButton))
+            if style is not None:
+                item.setIcon(style.standardIcon(style.StandardPixmap.SP_DialogCancelButton))
             item.setToolTip(f"Invalid: {error_msg}")
             item.setForeground(Qt.GlobalColor.red)
         
@@ -548,39 +553,50 @@ class GalleryFileManagerDialog(QDialog):
         self.file_list.clearSelection()
         for i in range(self.file_list.count()):
             item = self.file_list.item(i)
+            if item is None:
+                continue
             filename = item.text().replace(" (new)", "")
             if filename in self.file_status:
                 is_valid, _ = self.file_status[filename]
                 if not is_valid:
                     item.setSelected(True)
     
-    def dragEnterEvent(self, event: QDragEnterEvent):
+    def dragEnterEvent(self, event: QDragEnterEvent | None) -> None:
         """Handle drag enter"""
-        if event.mimeData().hasUrls():
+        if event is None:
+            return
+        mime_data = event.mimeData()
+        if mime_data is not None and mime_data.hasUrls():
             # Check if any URLs are image files
-            for url in event.mimeData().urls():
+            for url in mime_data.urls():
                 path = url.toLocalFile()
                 if path.lower().endswith(IMAGE_EXTENSIONS):
                     event.acceptProposedAction()
                     return
         event.ignore()
     
-    def dragMoveEvent(self, event):
+    def dragMoveEvent(self, event) -> None:
         """Handle drag move"""
-        if event.mimeData().hasUrls():
+        if event is None:
+            return
+        mime_data = event.mimeData()
+        if mime_data is not None and mime_data.hasUrls():
             event.acceptProposedAction()
         else:
             event.ignore()
     
-    def dropEvent(self, event: QDropEvent):
+    def dropEvent(self, event: QDropEvent | None) -> None:
         """Handle drop event - add dropped files"""
-        if event.mimeData().hasUrls():
-            files = []
-            for url in event.mimeData().urls():
+        if event is None:
+            return
+        mime_data = event.mimeData()
+        if mime_data is not None and mime_data.hasUrls():
+            files: List[str] = []
+            for url in mime_data.urls():
                 path = url.toLocalFile()
                 if os.path.isfile(path) and path.lower().endswith(IMAGE_EXTENSIONS):
                     files.append(path)
-            
+
             if files:
                 # Add the files
                 event.acceptProposedAction()

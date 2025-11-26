@@ -5,12 +5,12 @@ Provides log viewing, filtering, and configuration capabilities
 """
 
 import os
-from typing import Dict
+from typing import Any, Dict
 
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QGroupBox, QGridLayout, QCheckBox,
     QComboBox, QSpinBox, QLabel, QPushButton, QTabWidget, QWidget,
-    QTableWidget, QTableWidgetItem, QLineEdit, QDialogButtonBox, QHeaderView, QAbstractItemView
+    QTableWidget, QTableWidgetItem, QLineEdit, QDialogButtonBox, QHeaderView, QAbstractItemView, QApplication
 )
 from PyQt6.QtCore import Qt, QSettings
 from PyQt6.QtGui import QFont
@@ -24,6 +24,7 @@ class LogViewerDialog(QDialog):
         self.setWindowTitle("Log Viewer")
         self.setModal(False)
         self.resize(1000, 720)
+        self._center_on_parent()
 
         self.follow_enabled = True
 
@@ -32,7 +33,7 @@ class LogViewerDialog(QDialog):
         # Prepare logger for reading logs
         try:
             from src.utils.logging import get_logger as _get_logger
-            self._logger = _get_logger()
+            self._logger: Any = _get_logger()
         except Exception:
             self._logger = None
 
@@ -114,7 +115,9 @@ class LogViewerDialog(QDialog):
         self.log_view.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.log_view.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         # Keep vertical header visible but style it like regular cells
-        self.log_view.verticalHeader().setVisible(True)
+        vert_header = self.log_view.verticalHeader()
+        if vert_header:
+            vert_header.setVisible(True)
         # Enable grid with semi-transparent styling
         self.log_view.setShowGrid(True)
         # Set monospace font
@@ -123,10 +126,11 @@ class LogViewerDialog(QDialog):
         self.log_view.setFont(_log_font)
         # Column sizing
         header = self.log_view.horizontalHeader()
-        header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)  # Timestamp
-        header.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)  # Level
-        header.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)  # Category
-        header.setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)  # Message
+        if header:
+            header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)  # Timestamp
+            header.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)  # Level
+            header.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)  # Category
+            header.setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)  # Message
         self.log_view.setProperty("class", "log-viewer")
 
         # Apply inline stylesheet for semi-transparent gridlines
@@ -145,7 +149,7 @@ class LogViewerDialog(QDialog):
         logs_vbox.addLayout(body_hbox)
         # Connect selection handler for auto-expand
         self.log_view.itemSelectionChanged.connect(self._on_selection_changed)
-        self._selected_rows = set()  # Track which rows are currently selected
+        self._selected_rows: set[int] = set()  # Track which rows are currently selected
 
 
         # Just show the logs tab (no tabs needed)
@@ -615,3 +619,21 @@ class LogViewerDialog(QDialog):
         from src.utils.logger import unregister_log_viewer
         unregister_log_viewer(self)
         super().closeEvent(event)
+    def _center_on_parent(self):
+        """Center dialog on parent window or screen"""
+        if self.parent():
+            # Center on parent window
+            parent_geo = self.parent().geometry()
+            dialog_geo = self.frameGeometry()
+            x = parent_geo.x() + (parent_geo.width() - dialog_geo.width()) // 2
+            y = parent_geo.y() + (parent_geo.height() - dialog_geo.height()) // 2
+            self.move(x, y)
+        else:
+            # Center on screen if no parent
+            screen = QApplication.primaryScreen()
+            if screen:
+                screen_geo = screen.geometry()
+                dialog_geo = self.frameGeometry()
+                x = (screen_geo.width() - dialog_geo.width()) // 2
+                y = (screen_geo.height() - dialog_geo.height()) // 2
+                self.move(x, y)

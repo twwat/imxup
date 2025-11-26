@@ -124,10 +124,11 @@ class ZIPManager:
 
             zip_path, ref_count = self.zip_cache[gallery_id]
 
-            if force_delete or ref_count <= 1:
-                # Delete the ZIP
+            if force_delete:
+                # Force delete the ZIP (explicit cleanup request)
                 try:
-                    if zip_path.exists():
+                    file_existed = zip_path.exists()
+                    if file_existed:
                         zip_path.unlink()
                         log(
                             f"Deleted ZIP for gallery {gallery_id}: {zip_path.name}",
@@ -135,12 +136,21 @@ class ZIPManager:
                             category="file_hosts"
                         )
                     del self.zip_cache[gallery_id]
-                    return True
+                    return file_existed
                 except Exception as e:
                     log(f"Failed to delete ZIP {zip_path}: {e}", level="error", category="file_hosts")
                     # Remove from cache anyway
                     del self.zip_cache[gallery_id]
                     return False
+            elif ref_count <= 1:
+                # Decrement to 0 but keep in cache for retry reuse
+                self.zip_cache[gallery_id] = (zip_path, 0)
+                log(
+                    f"Released ZIP reference for gallery {gallery_id} (refs: 0, kept for retry)",
+                    level="debug",
+                    category="file_hosts"
+                )
+                return False
             else:
                 # Decrement ref count
                 self.zip_cache[gallery_id] = (zip_path, ref_count - 1)
@@ -169,11 +179,16 @@ class ZIPManager:
             deleted_count = 0
             gallery_ids = list(self.zip_cache.keys())
 
-            for gallery_id in gallery_ids:
-                if self.release_zip(gallery_id, force_delete=True):
-                    deleted_count += 1
+            # FIXED: Call release_zip without holding the lock to avoid deadlock
+            # release_zip() acquires its own lock, so calling it while holding
+            # the lock causes a deadlock (thread waiting for itself)
 
-            return deleted_count
+        # Release lock before calling release_zip
+        for gallery_id in gallery_ids:
+            if self.release_zip(gallery_id, force_delete=True):
+                deleted_count += 1
+
+        return deleted_count
 
     def get_cache_info(self) -> Dict[int, Dict]:
         """Get information about cached ZIPs.

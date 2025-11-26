@@ -113,7 +113,7 @@ class SplashScreen(QSplashScreen):
         y_offset += 40
         
         apache_text = "Licensed under the Apache License, Version 2.0"
-        apache_font = QFont("Courier", 11)
+        apache_font = QFont("Courier", 12)
         painter.setFont(apache_font)
         painter.setPen(QColor(195, 195, 195))
         apache_rect = painter.fontMetrics().boundingRect(apache_text)
@@ -127,13 +127,8 @@ class SplashScreen(QSplashScreen):
         painter.setFont(license_font)
 
         license_lines = [
-            #"THIS SOFTWARE IS DISTRIBUTED ON AN \"AS IS\" BASIS, WITHOUT",
-            #"WARRANTIES OR CONDITIONS OF ANY KIND, EXPRESS OR IMPLIED"
-            #"SOFTWARE DISTRIBUTED UNDER THE LICENSE IS DISTRIBUTED ON",
-            #"AN \"AS IS\" BASIS, WITHOUT WARRANTIES OR CONDITIONS",
-            #"OF ANY KIND, EXPRESS OR IMPLIED"
-            "DISTRIBUTED ON AN \"AS IS\" BASIS, WITHOUT WARRANTIES",
-            "OR CONDITIONS OF ANY KIND, EXPRESS OR IMPLIED."
+            "This software is distributed on an \"AS IS\" basis, without any",
+            "warranties or conditions of any kind, express or implied."
         ]
 
         y_pos = y_offset

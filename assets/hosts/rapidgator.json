@@ -1,5 +1,5 @@
 {
-  "name": "RapidGator",
+  "name": "Rapidgator",
   "icon": "rapidgator.png",
   "referral_url": "https://rapidgator.net/article/resource/ref/4058796",
   "requires_auth": true,
@@ -8,7 +8,9 @@
   "upload": {
     "endpoint": "",
     "method": "POST",
-    "file_field": "file"
+    "file_field": "file",
+    "inactivity_timeout": 300,
+    "upload_timeout": null
   },
 
   "response": {
@@ -23,7 +25,13 @@
       "password": "{password}"
     },
     "token_path": ["response", "token"],
-    "token_ttl": 86400
+    "token_ttl": 86400,
+    "stale_token_patterns": [
+      "Invalid token",
+      "token.*expired",
+      "token.*invalid",
+      "Unauthorized"
+    ]
   },
 
   "multistep": {
@@ -38,7 +46,8 @@
   },
 
   "defaults": {
-    "max_file_size_mb": null,
+    "max_file_size_mb": 5120,
+    "storage_gb": 10000,
     "max_connections": 2,
     "auto_retry": true,
     "max_retries": 3

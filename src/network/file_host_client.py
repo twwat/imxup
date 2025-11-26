@@ -52,10 +52,25 @@ class FileHostClient:
         self.credentials = credentials
         self.host_id = host_id
         self._log_callback = log_callback
+
+        # Load timeout settings from INI (overrides JSON defaults)
+        if host_id:
+            from src.core.file_host_config import get_file_host_setting
+            inactivity_timeout = get_file_host_setting(host_id, "inactivity_timeout", "int")
+            upload_timeout = get_file_host_setting(host_id, "upload_timeout", "int")
+
+            # Override config values if set in INI
+            if inactivity_timeout is not None:
+                self.config.inactivity_timeout = inactivity_timeout
+            if upload_timeout is not None:
+                self.config.upload_timeout = upload_timeout
         # Progress tracking
         self.last_uploaded = 0
+        self.last_time = 0.0
+        self.last_uploaded_for_speed = 0  # Separate tracking for speed calculation
+        self.current_speed_bps = 0.0
         self.should_stop_func: Optional[Callable[[], bool]] = None
-        self.on_progress_func: Optional[Callable[[int, int], None]] = None
+        self.on_progress_func: Optional[Callable[[int, int, float], None]] = None
 
         # Authentication token (for token-based auth)
         self.auth_token: Optional[str] = None
@@ -202,9 +217,9 @@ class FileHostClient:
                 storage_formatted = json.dumps(storage_info, indent=2).replace(chr(10), '\\n')
                 if self._log_callback: self._log_callback(
                     f"Opportunistically cached storage from login: {storage_formatted}",
-                    "info" )
+                    "debug" )
 
-            if self._log_callback: self._log_callback(f"Successfully logged in to {self.config.name}", "info")
+            if self._log_callback: self._log_callback(f"Successfully logged in to {self.config.name}", "debug")
             return token
 
         finally:
@@ -236,6 +251,7 @@ class FileHostClient:
             get_curl.setopt(pycurl.WRITEDATA, get_buffer)
             get_curl.setopt(pycurl.HEADERFUNCTION, get_headers.write)
             get_curl.setopt(pycurl.TIMEOUT, 30)
+            get_curl.setopt(pycurl.USERAGENT, "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
             get_curl.perform()
 
             # Extract cookies from GET request
@@ -337,6 +353,11 @@ class FileHostClient:
             post_curl.setopt(pycurl.HEADERFUNCTION, post_headers.write)
             post_curl.setopt(pycurl.TIMEOUT, 30)
             post_curl.setopt(pycurl.FOLLOWLOCATION, True)
+            post_curl.setopt(pycurl.HTTPHEADER, [
+                "Content-Type: application/x-www-form-urlencoded",
+                "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                f"Referer: {self.config.login_url}"
+            ])
 
             # Send cookies from GET request
             if self.cookie_jar:
@@ -699,33 +720,43 @@ class FileHostClient:
         Returns:
             0 to continue, 1 to abort
         """
-        # Update bandwidth counter
+        # Update bandwidth counter and calculate speed
+        current_time = time.time()
         bytes_since_last = uploaded - self.last_uploaded
         if bytes_since_last > 0:
             self.bandwidth_counter.add(bytes_since_last)
             self.last_uploaded = uploaded
 
+        # Calculate speed (bytes per second) - separate tracking to accumulate bytes correctly
+        time_delta = current_time - self.last_time
+        if time_delta > 0.1:  # Only update speed every 100ms minimum
+            bytes_for_speed = uploaded - self.last_uploaded_for_speed
+            if bytes_for_speed > 0:
+                self.current_speed_bps = bytes_for_speed / time_delta
+            self.last_time = current_time
+            self.last_uploaded_for_speed = uploaded
+
         # Check for cancellation
         if self.should_stop_func and self.should_stop_func():
             return 1  # Abort transfer
 
-        # Notify progress
+        # Notify progress with speed
         if self.on_progress_func and upload_total > 0:
-            self.on_progress_func(uploaded, upload_total)
+            self.on_progress_func(uploaded, upload_total, self.current_speed_bps)
 
         return 0
 
     def upload_file(
         self,
         file_path: Path,
-        on_progress: Optional[Callable[[int, int], None]] = None,
+        on_progress: Optional[Callable[[int, int, float], None]] = None,
         should_stop: Optional[Callable[[], bool]] = None
     ) -> Dict[str, Any]:
         """Upload file to file host.
 
         Args:
             file_path: Path to file to upload
-            on_progress: Optional progress callback (uploaded_bytes, total_bytes)
+            on_progress: Optional progress callback (uploaded_bytes, total_bytes, speed_bps)
             should_stop: Optional cancellation check callback
 
         Returns:
@@ -737,6 +768,9 @@ class FileHostClient:
         self.on_progress_func = on_progress
         self.should_stop_func = should_stop
         self.last_uploaded = 0
+        self.last_time = time.time()
+        self.last_uploaded_for_speed = 0
+        self.current_speed_bps = 0.0
 
         if self._log_callback: self._log_callback(f"Uploading {file_path.name} to {self.config.name}...", "info")
 
@@ -764,8 +798,9 @@ class FileHostClient:
             upload_url = upload_url.replace("{filename}", file_path.name)
 
         # Get server if needed
+        server_sess_id = None
         if self.config.get_server:
-            upload_url = self._get_upload_server()
+            upload_url, server_sess_id = self._get_upload_server()
 
         curl = pycurl.Curl()
         response_buffer = BytesIO()
@@ -773,7 +808,15 @@ class FileHostClient:
         try:
             curl.setopt(pycurl.URL, upload_url)
             curl.setopt(pycurl.WRITEDATA, response_buffer)
-            curl.setopt(pycurl.TIMEOUT, 300)
+
+            # Optional total timeout (None = unlimited)
+            if self.config.upload_timeout:
+                curl.setopt(pycurl.TIMEOUT, self.config.upload_timeout)
+
+            # Inactivity timeout (abort if <1KB/s for this many seconds)
+            curl.setopt(pycurl.LOW_SPEED_TIME, self.config.inactivity_timeout)
+            curl.setopt(pycurl.LOW_SPEED_LIMIT, 1024)  # 1 KB/s minimum
+
             curl.setopt(pycurl.FOLLOWLOCATION, True)
 
             # Set up progress callbacks
@@ -861,9 +904,11 @@ class FileHostClient:
                     *[(k, v) for k, v in self.config.extra_fields.items()]
                 ]
                 
-                # Add session ID if extracted
+                # Add session ID if extracted (from upload page HTML or get_server API)
                 if sess_id:
                     form_fields.append(('sess_id', sess_id))
+                elif server_sess_id:  # Katfile-style: sess_id from get_server API response
+                    form_fields.append(('sess_id', server_sess_id))
                 
                 curl.setopt(pycurl.HTTPPOST, form_fields)
                 curl.perform()
@@ -899,6 +944,8 @@ class FileHostClient:
 
         # Step 2: Initialize upload
         init_url = self.config.upload_init_url
+        if not init_url:
+            raise ValueError("upload_init_url not configured for multi-step upload")
 
         if self._log_callback: self._log_callback(f"Initializing upload of {file_path.name}...", "debug")
 
@@ -956,7 +1003,7 @@ class FileHostClient:
                                self._extract_from_json(init_data, ["error"]) or \
                                response_text[:200]  # First 200 chars of response
 
-                raise Exception(f"Upload init failed for {file_path.name} (HTTP {response_code}, API status {api_status}): {error_details}")
+                raise ValueError(f"Upload init failed for {file_path.name} (HTTP {response_code}, API status {api_status}): {error_details}")
 
             # Check API status even if HTTP was 200 (support both integer 200 and string "success")
             api_status = init_data.get("status")
@@ -964,7 +1011,7 @@ class FileHostClient:
                 error_msg = self._extract_from_json(init_data, ["response", "details"]) or \
                            self._extract_from_json(init_data, ["response", "msg"]) or \
                            f"API returned status {api_status}"
-                raise Exception(f"Upload initialization failed for {file_path.name}: {error_msg}")
+                raise ValueError(f"Upload initialization failed for {file_path.name}: {error_msg}")
 
             # Extract upload URL and ID
             upload_url = self._extract_from_json(init_data, self.config.upload_url_path)
@@ -979,9 +1026,11 @@ class FileHostClient:
                     file_field = dynamic_field
 
             # Extract form data (K2S-specific: ajax, params, signature)
-            form_data = {}
+            form_data: Dict[str, Any] = {}
             if self.config.form_data_path:
-                form_data = self._extract_from_json(init_data, self.config.form_data_path) or {}
+                extracted_form_data = self._extract_from_json(init_data, self.config.form_data_path)
+                if isinstance(extracted_form_data, dict):
+                    form_data = extracted_form_data
 
             # Check for deduplication (file already exists)
             if upload_state == 2 or (upload_url is None and upload_state is not None):
@@ -1019,7 +1068,15 @@ class FileHostClient:
             with open(file_path, 'rb') as f:
                 curl.setopt(pycurl.URL, upload_url)
                 curl.setopt(pycurl.WRITEDATA, response_buffer)
-                curl.setopt(pycurl.TIMEOUT, 300)
+
+                # Optional total timeout (None = unlimited)
+                if self.config.upload_timeout:
+                    curl.setopt(pycurl.TIMEOUT, self.config.upload_timeout)
+
+                # Inactivity timeout (abort if <1KB/s for this many seconds)
+                curl.setopt(pycurl.LOW_SPEED_TIME, self.config.inactivity_timeout)
+                curl.setopt(pycurl.LOW_SPEED_LIMIT, 1024)  # 1 KB/s minimum
+
                 curl.setopt(pycurl.NOPROGRESS, False)
                 curl.setopt(pycurl.XFERINFOFUNCTION, self._xferinfo_callback)
 
@@ -1133,38 +1190,72 @@ class FileHostClient:
             "raw_response": upload_data
         }
 
-    def _get_upload_server(self) -> str:
-        """Get upload server URL.
+    def _get_upload_server(self) -> tuple[str, Optional[str]]:
+        """Get upload server URL and optional session ID.
 
         Returns:
-            Upload server URL
+            Tuple of (server_url, sess_id):
+            - server_url: Upload server URL (may contain replaced placeholders)
+            - sess_id: Single-use session ID from get_server API (Katfile-style), 
+                       or None if not configured
         """
         if not self.config.get_server:
-            return self.config.upload_endpoint
+            return (self.config.upload_endpoint, None)
+
+        # Replace {token} placeholder with API key
+        get_server_url = self.config.get_server
+        if "{token}" in get_server_url and self.auth_token:
+            get_server_url = get_server_url.replace("{token}", self.auth_token)
 
         curl = pycurl.Curl()
         response_buffer = BytesIO()
 
         try:
-            curl.setopt(pycurl.URL, self.config.get_server)
+            curl.setopt(pycurl.URL, get_server_url)
             curl.setopt(pycurl.WRITEDATA, response_buffer)
             curl.setopt(pycurl.TIMEOUT, 10)
+            
+            # Add auth headers if needed
+            headers = self._prepare_headers()
+            if headers:
+                curl.setopt(pycurl.HTTPHEADER, [f"{k}: {v}" for k, v in headers.items()])
+            
             curl.perform()
 
             data = json.loads(response_buffer.getvalue().decode('utf-8'))
 
             # Extract server URL using configured path
+            server_url = self.config.upload_endpoint
             if self.config.server_response_path:
-                server_url = self._extract_from_json(data, self.config.server_response_path)
-                if server_url:
-                    return self.config.upload_endpoint.replace("{server}", server_url)
-
+                extracted_url = self._extract_from_json(data, self.config.server_response_path)
+                if extracted_url:
+                    server_url = self.config.upload_endpoint.replace("{server}", extracted_url)
+                else:
+                    raise ValueError(f"Failed to extract server URL from get_server response (path: {self.config.server_response_path})")
+            
             # Fallback: GoFile compatibility (legacy)
-            if "gofile" in self.config.name.lower() and "data" in data and "server" in data["data"]:
+            elif "gofile" in self.config.name.lower() and "data" in data and "server" in data["data"]:
                 server = data["data"]["server"]
-                return self.config.upload_endpoint.replace("{server}", server)
+                server_url = self.config.upload_endpoint.replace("{server}", server)
 
-            return self.config.upload_endpoint
+            # Extract sess_id if configured (Katfile-style single-use session IDs)
+            sess_id = None
+            if self.config.server_session_id_path:
+                sess_id = self._extract_from_json(data, self.config.server_session_id_path)
+                if sess_id:
+                    if self._log_callback:
+                        sess_id_preview = sess_id[:20] if len(sess_id) > 20 else sess_id
+                        self._log_callback(f"Extracted single-use sess_id from get_server: {sess_id_preview}...", "debug")
+                else:
+                    # Extraction failed but was expected
+                    if self._log_callback:
+                        self._log_callback(
+                            f"ERROR: server_session_id_path configured but extraction failed. Response: {json.dumps(data)[:200]}",
+                            "error"
+                        )
+                    raise ValueError(f"Failed to extract required sess_id from get_server API (path: {self.config.server_session_id_path})")
+
+            return (server_url, sess_id)
 
         finally:
             curl.close()
@@ -1217,9 +1308,11 @@ class FileHostClient:
 
                     # Apply regex transformation
                     if self.config.link_regex:
-                        match = re.search(self.config.link_regex, result["url"])
-                        if match and match.groups():
-                            result["url"] = self.config.link_prefix + match.group(1) + self.config.link_suffix
+                        url_str = result["url"]
+                        if isinstance(url_str, str):
+                            match = re.search(self.config.link_regex, url_str)
+                            if match and match.groups():
+                                result["url"] = self.config.link_prefix + match.group(1) + self.config.link_suffix
 
             # Extract file_id for delete operations
             if self.config.file_id_path:
@@ -1428,11 +1521,16 @@ class FileHostClient:
 
         def _get_user_info_impl(**kwargs) -> Dict[str, Any]:
             """Core user info implementation (wrapped for retry)."""
+            # user_info_url is guaranteed to exist by the check at the start of get_user_info()
+            user_info_url = self.config.user_info_url
+            if not user_info_url:
+                raise ValueError("user_info_url not configured")
+
             # Check authentication based on auth type (must be inside for token refresh)
             if self.config.auth_type == "api_key":
                 if not self.auth_token:
                     raise ValueError("API key required for user info")
-                info_url = self.config.user_info_url
+                info_url = user_info_url.replace("{token}", self.auth_token)
             elif self.config.auth_type == "token_login":
                 # Thread-safe token read
                 with self._token_lock:
@@ -1440,12 +1538,12 @@ class FileHostClient:
                 if not token:
                     raise ValueError("Authentication token required for user info")
                 # Build user info URL with token (must use fresh token after refresh)
-                info_url = self.config.user_info_url.replace("{token}", token)
+                info_url = user_info_url.replace("{token}", token)
             elif self.config.auth_type == "session":
                 if not self.cookie_jar:
                     raise ValueError("Session cookies required for user info")
                 # Use URL as-is (no token placeholder)
-                info_url = self.config.user_info_url
+                info_url = user_info_url
             else:
                 raise ValueError(f"Unsupported auth type for user info: {self.config.auth_type}")
 
@@ -1553,6 +1651,25 @@ class FileHostClient:
 
                     if self.config.storage_used_path:
                         result['storage_used'] = self._extract_from_json(data, self.config.storage_used_path)
+
+                    # Fallback: calculate storage_total from storage_left + storage_used if missing
+                    if result.get('storage_total') is None:
+                        storage_left = result.get('storage_left')
+                        storage_used = result.get('storage_used')
+                        if storage_left is not None and storage_used is not None:
+                            try:
+                                result['storage_total'] = int(storage_left) + int(storage_used)
+                                if self._log_callback:
+                                    self._log_callback(
+                                        f"Calculated storage_total={result['storage_total']} from storage_left ({storage_left}) + storage_used ({storage_used})",
+                                        "debug"
+                                    )
+                            except (ValueError, TypeError) as e:
+                                if self._log_callback:
+                                    self._log_callback(
+                                        f"Failed to calculate storage_total: {e}",
+                                        "warning"
+                                    )
 
                     if self.config.premium_status_path:
                         result['is_premium'] = self._extract_from_json(data, self.config.premium_status_path)

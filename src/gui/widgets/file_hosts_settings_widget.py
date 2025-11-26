@@ -125,136 +125,98 @@ class FileHostsSettingsWidget(QWidget):
         self._load_initial_storage()
 
     def _create_host_row(self, host_id: str, host_config):
-        """Create UI row for a single host.
+        """Create UI row for a single host using compact single-row layout.
 
         Args:
             host_id: Host identifier
             host_config: HostConfig instance
         """
+        from PyQt6.QtWidgets import QSizePolicy
+        from src.core.file_host_config import get_file_host_setting
+
         # Container frame
         host_frame = QFrame()
         host_frame.setFrameShape(QFrame.Shape.StyledPanel)
         host_frame.setFrameShadow(QFrame.Shadow.Raised)
-        frame_layout = QVBoxLayout(host_frame)
-        frame_layout.setContentsMargins(8, 8, 8, 8)
-        frame_layout.setSpacing(4)
+        frame_layout = QHBoxLayout(host_frame)
+        frame_layout.setContentsMargins(8, 4, 8, 4)  # Tighter vertical spacing
+        frame_layout.setSpacing(8)
 
-        # Top row: Status indicator + Configure button
-        top_row = QHBoxLayout()
-
-        # Status indicator (enabled/disabled) - icon set by _update_status_icon
+        # 1. Status Icon (20×20px) - enabled/disabled indicator
         status_icon = QLabel()
-        status_icon.setFixedWidth(20)
         status_icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        top_row.addWidget(status_icon)
+        status_icon.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        frame_layout.addWidget(status_icon)
 
-        host_label = QLabel(host_config.name)
-        # Apply class based on enabled/disabled state - let QSS handle all styling
-        from src.core.file_host_config import get_file_host_setting
-        host_enabled = get_file_host_setting(host_id, "enabled", "bool")
-        if not host_enabled:
-            host_label.setProperty("class", "host-name-disabled")
-        else:
-            host_label.setProperty("class", "host-name-enabled")
-        # Force style refresh
-        host_label.style().unpolish(host_label)
-        host_label.style().polish(host_label)
-        top_row.addWidget(host_label)
+        # 2. Logo Container (160px fixed width) - logos scaled to 28px height, centered
+        logo_container = QWidget()
+        logo_container.setFixedWidth(150)
+        logo_container.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Preferred)
+        logo_layout = QHBoxLayout(logo_container)
+        logo_layout.setContentsMargins(0, 0, 0, 0)
+        logo_layout.setSpacing(0)
+        #logo_layout.addStretch()  # Center the logo
 
-        # Host logo (if available) - centered with spacing
-        logo_label = self._load_host_logo(host_id, host_config)
+        logo_label = self._load_host_logo(host_id, host_config, height=22)
         if logo_label:
-            top_row.addStretch(1)  # Push logo toward center
-            top_row.addWidget(logo_label)
-            top_row.addStretch(1)  # Balance on the right side
+            logo_label.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+            logo_layout.addWidget(logo_label)
+        else:
+            # Fallback: Show host name if no logo available
+            fallback_label = QLabel(host_config.name)
+            #fallback_label.setAlignment(Qt.AlignmentFlag.AlignLeft)
+            logo_layout.addWidget(fallback_label)
 
-        # Test status label
-        status_label = QLabel()
-        self._update_status_label(host_id, host_config, status_label)
-        top_row.addWidget(status_label)
+        #logo_layout.addStretch()  # Center the logo
+        frame_layout.addWidget(logo_container)
 
-        top_row.addStretch()
-        frame_layout.addLayout(top_row)
+        # 3. Configure Button (100px width) - for all hosts
+        configure_btn = QPushButton("Configure")
+        configure_btn.setFixedWidth(80)
+        configure_btn.setToolTip(f"Configuration settings for {host_config.name}")
+        configure_btn.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        configure_btn.clicked.connect(lambda: self._show_host_config_dialog(host_id, host_config))
+        frame_layout.addWidget(configure_btn)
 
-        # Storage progress bar (moved up - was after auto-upload before)
+        # 4. Storage Bar (expanding, shows amount free)
         storage_bar = None
         if host_config.user_info_url and (host_config.storage_left_path or host_config.storage_regex):
-            storage_row = QHBoxLayout()
-
-            storage_label_text = QLabel("Storage:")
-            # Use QSS class for theme-aware styling
-            storage_label_text.setProperty("class", "label-small-muted")
-            storage_label_text.setFixedWidth(80)
-            storage_row.addWidget(storage_label_text)
-
             storage_bar = QProgressBar()
+            storage_bar.setMinimumWidth(280)
+            storage_bar.setMaximumHeight(20)
             storage_bar.setMaximum(100)
             storage_bar.setValue(0)
             storage_bar.setTextVisible(True)
-            storage_bar.setFormat("Loading...")
-            storage_bar.setMaximumHeight(16)
+            storage_bar.setFormat("")
             storage_bar.setProperty("class", "storage-bar")
-            storage_row.addWidget(storage_bar, 1)
+            storage_bar.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+            # Tooltip will show full details
+            #storage_bar.setToolTip("Storage information loading...")
+            frame_layout.addWidget(storage_bar)
 
-            frame_layout.addLayout(storage_row)
+        # 5. Status Display (expanding, shows Ready/Disabled status)
+        status_label = QLabel()
+        status_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        status_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        # Set initial semantic status
+        status_text = self._get_status_text(host_id, host_config)
+        status_label.setText(status_text)
+        self._update_status_label_style(host_id, host_config, status_label)
+        frame_layout.addWidget(status_label)
 
-        # Button row (Enable/Disable + Configure) for hosts that require auth
-        enable_btn = None
-        if host_config.requires_auth:
-            button_row = QHBoxLayout()
-            button_row.addSpacing(80)  # Align with labels above
-
-            # Enable/Disable button with theme-specific styling
-            enable_btn = QPushButton()
-            enable_btn.setMinimumWidth(80)
-            enable_btn.setMaximumWidth(80)
-            enable_btn.clicked.connect(lambda checked=False, hid=host_id: self._on_enable_disable_clicked(hid))
-            button_row.addWidget(enable_btn)
-
-            # Configure button
-            configure_btn = QPushButton("Configure")
-            configure_btn.setToolTip(f"Configure {host_config.name}")
-            configure_btn.clicked.connect(lambda: self._show_host_config_dialog(host_id, host_config))
-            configure_btn.setMaximumWidth(80)
-            button_row.addWidget(configure_btn)
-
-            button_row.addStretch()
-
-            frame_layout.addLayout(button_row)
-
-        # Auto-upload display (read-only text)
-        trigger_display = self._get_trigger_display_text(host_id)
-        if trigger_display:
-            trigger_row = QHBoxLayout()
-            trigger_label = QLabel("Auto-upload:")
-            # Use QSS class for theme-aware styling
-            trigger_label.setProperty("class", "label-small-muted")
-            trigger_label.setFixedWidth(80)
-            trigger_row.addWidget(trigger_label)
-
-            trigger_value = QLabel(trigger_display)
-            # Use QSS class for theme-aware styling
-            trigger_value.setProperty("class", "label-small")
-            trigger_row.addWidget(trigger_value)
-            trigger_row.addStretch()
-            frame_layout.addLayout(trigger_row)
-
-        # Store widgets for later access (display-only UI)
+        # Store widgets for later access
         self.host_widgets[host_id] = {
             "frame": host_frame,
             "status_icon": status_icon,
             "status_label": status_label,
             "storage_bar": storage_bar,
-            "host_label": host_label,  # Store for theme updates
-            "enable_btn": enable_btn if host_config.requires_auth else None
+            "logo_label": logo_label,  # Store logo for theme updates
+            "configure_btn": configure_btn,
+            "enable_btn": None  # Removed - redundant with status icon
         }
 
         # Load cached storage immediately for this host
         self.refresh_storage_display(host_id)
-
-        # Update enable button state
-        if host_config.requires_auth:
-            self._update_enable_button_state(host_id)
 
         # Update status icon to reflect current enabled state
         self._update_status_icon(host_id)
@@ -262,12 +224,14 @@ class FileHostsSettingsWidget(QWidget):
         # Add to layout
         self.hosts_container_layout.addWidget(host_frame)
 
-    def _load_host_logo(self, host_id: str, host_config: HostConfig) -> Optional[QLabel]:
+    def _load_host_logo(self, host_id: str, host_config: HostConfig, height: int = 40) -> Optional[QLabel]:
         """Load and create a clickable QLabel with the host's logo.
 
         Args:
             host_id: Host identifier (used to find logo file)
             host_config: HostConfig instance (for referral URL)
+            height: Target height in pixels (default 40 for dialogs, 28 for settings tab).
+                   Maintains aspect ratio.
 
         Returns:
             Clickable QLabel with scaled logo pixmap, or None if logo not found
@@ -284,8 +248,8 @@ class FileHostsSettingsWidget(QWidget):
             if pixmap.isNull():
                 return None
 
-            # Scale logo to max height of 24px while maintaining aspect ratio
-            scaled_pixmap = pixmap.scaledToHeight(24, Qt.TransformationMode.SmoothTransformation)
+            # Scale logo to specified height, maintaining aspect ratio
+            scaled_pixmap = pixmap.scaledToHeight(height, Qt.TransformationMode.SmoothTransformation)
 
             logo_label = QLabel()
             logo_label.setPixmap(scaled_pixmap)
@@ -306,7 +270,7 @@ class FileHostsSettingsWidget(QWidget):
                         return True
                     return False
 
-                logo_label.mousePressEvent = open_referral_url
+                logo_label.mousePressEvent = open_referral_url  # type: ignore[method-assign]
 
             return logo_label
         except Exception:
@@ -331,7 +295,7 @@ class FileHostsSettingsWidget(QWidget):
         icon_key = 'host_enabled' if is_enabled else 'host_disabled'
         icon = self.icon_manager.get_icon(icon_key, theme_mode=None)  # None = auto-detect
 
-        # Set pixmap (20x20 size)
+        # Set pixmap (20x20 size for inline status indicator)
         pixmap = icon.pixmap(20, 20)
         status_icon.setPixmap(pixmap)
 
@@ -339,57 +303,90 @@ class FileHostsSettingsWidget(QWidget):
         tooltip = "Host enabled" if is_enabled else "Host disabled"
         status_icon.setToolTip(tooltip)
 
-    def _update_status_label(self, host_id: str, host_config, status_label: QLabel):
-        """Update status label with test results.
+    def _get_status_text(self, host_id: str, host_config) -> str:
+        """Get semantic status text for a host.
+
+        Returns: "Ready (Auto)", "Ready (Manual)", "Credentials Required", or "Disabled"
+        """
+        from src.core.file_host_config import get_file_host_setting
+
+        # Check if host is enabled
+        is_enabled = get_file_host_setting(host_id, "enabled", "bool")
+
+        if not is_enabled:
+            # Check if credentials exist
+            test_results = self._load_test_results_from_settings(host_id)
+            has_credentials = test_results and test_results.get('credentials_valid', False)
+
+            if not has_credentials and host_config.requires_auth:
+                return "Credentials Required"
+            else:
+                return "Disabled"
+
+        # Host is enabled - check auto-upload trigger
+        trigger = get_file_host_setting(host_id, "trigger", "str")
+        is_auto = trigger in ["on_added", "on_started", "on_completed"]
+
+        if is_auto:
+            map = {"on_added": "Add", "on_started": "Start", "on_completed": "Done"}
+            automsg = trigger.replace("on_","").capitalize()
+            return f"Ready (AUTO: On-{map[trigger]})"
+        else:
+            return "Ready (Manual)"
+
+    def _update_status_label_style(self, host_id: str, host_config, status_label: QLabel):
+        """Update status label styling based on current status.
 
         Args:
             host_id: Host identifier
             host_config: HostConfig instance
             status_label: QLabel to update
         """
-        if not host_config.requires_auth:
-            status_label.setText("✓ No auth required")
-            # Use QSS class for theme-aware styling
+        from src.core.file_host_config import get_file_host_setting
+
+        # Get current status
+        is_enabled = get_file_host_setting(host_id, "enabled", "bool")
+
+        if not is_enabled:
+            status_label.setProperty("class", "status-disabled")
+        elif not host_config.requires_auth:
             status_label.setProperty("class", "status-success-light")
-            status_label.style().unpolish(status_label)
-            status_label.style().polish(status_label)
-            return
-
-        # Load test results directly from QSettings (works even if worker doesn't exist yet)
-        test_results = self._load_test_results_from_settings(host_id)
-        if test_results:
-            test_time = datetime.fromtimestamp(test_results['timestamp'])
-            time_str = test_time.strftime("%m/%d %H:%M")
-
-            # Count how many tests passed (out of 4)
-            tests_passed = sum([
-                test_results['credentials_valid'],
-                test_results['user_info_valid'],
-                test_results['upload_success'],
-                test_results['delete_success']
-            ])
-
-            if tests_passed == 4:
-                status_label.setText(f"✓ All tests passed ({time_str})")
-                # Use QSS class for theme-aware styling
-                status_label.setProperty("class", "status-success")
-            elif tests_passed > 0:
-                status_label.setText(f"⚠ {tests_passed}/4 tests passed ({time_str})")
-                # Use QSS class for theme-aware styling
-                status_label.setProperty("class", "status-warning")
+        else:
+            test_results = self._load_test_results_from_settings(host_id)
+            if not test_results:
+                status_label.setProperty("class", "status-warning-light")
             else:
-                status_label.setText("⚠ Test failed - retest needed")
-                # Use QSS class for theme-aware styling
-                status_label.setProperty("class", "status-error")
-            status_label.style().unpolish(status_label)
-            status_label.style().polish(status_label)
-            return
+                tests_passed = sum([
+                    test_results['credentials_valid'],
+                    test_results['user_info_valid'],
+                    test_results['upload_success'],
+                    test_results['delete_success']
+                ])
 
-        status_label.setText("⚠ Requires credentials")
-        # Use QSS class for theme-aware styling
-        status_label.setProperty("class", "status-warning-light")
-        status_label.style().unpolish(status_label)
-        status_label.style().polish(status_label)
+                if tests_passed == 4:
+                    status_label.setProperty("class", "status-success")
+                elif tests_passed > 0:
+                    status_label.setProperty("class", "status-warning")
+                else:
+                    status_label.setProperty("class", "status-error")
+
+        # Force style refresh
+        label_style = status_label.style()
+        if label_style:
+            label_style.unpolish(status_label)
+            label_style.polish(status_label)
+
+    def _update_status_label(self, host_id: str, host_config, status_label: QLabel):
+        """Update status label with semantic status text.
+
+        Args:
+            host_id: Host identifier
+            host_config: HostConfig instance
+            status_label: QLabel to update
+        """
+        status_text = self._get_status_text(host_id, host_config)
+        status_label.setText(status_text)
+        self._update_status_label_style(host_id, host_config, status_label)
 
     def _load_test_results_from_settings(self, host_id: str) -> Optional[dict]:
         """Load test results directly from QSettings.
@@ -467,6 +464,25 @@ class FileHostsSettingsWidget(QWidget):
         # Trigger test (result will be cached in QSettings)
         worker.test_connection()
 
+    def _format_storage_compact(self, left: int, total: int) -> str:
+        """Format storage as compact string showing amount free.
+
+        Args:
+            left: Free storage in bytes
+            total: Total storage in bytes
+
+        Returns:
+            Compact storage string showing free amount (e.g., "15.2 GB free")
+        """
+        if total <= 0:
+            return "Unknown"
+
+        # Format free space with human-readable size
+        left_formatted = format_binary_size(left)
+
+        # Show amount free (e.g., "15.2 GB free")
+        return f"{left_formatted} free"
+
     def refresh_storage_display(self, host_id: str):
         """Update storage display by reading from QSettings cache.
 
@@ -507,13 +523,21 @@ class FileHostsSettingsWidget(QWidget):
         percent_used = int((used / total) * 100) if total > 0 else 0
         percent_free = 100 - percent_used
 
-        # Format strings
-        left_str = format_binary_size(left)
-        total_str = format_binary_size(total)
+        # Format strings for compact display and tooltip
+        left_formatted = format_binary_size(left)
+        total_formatted = format_binary_size(total)
+        used_formatted = format_binary_size(used)
 
-        # Update progress bar
+        # Compact format: show amount free (e.g., "15.2 GB free")
+        compact_format = self._format_storage_compact(left, total)
+
+        # Update progress bar with compact format
         storage_bar.setValue(percent_free)
-        storage_bar.setFormat(f"{left_str} / {total_str} free ({percent_free}%)")
+        storage_bar.setFormat(compact_format)  # Shows "15.2 GB free"
+
+        # Detailed tooltip
+        tooltip = f"Storage: {left_formatted} free / {total_formatted} total\nUsed: {used_formatted} ({percent_used}%)"
+        storage_bar.setToolTip(tooltip)
 
         # Color coding based on usage
         if percent_used >= 90:
@@ -557,32 +581,14 @@ class FileHostsSettingsWidget(QWidget):
         if not status_label:
             return
 
-        # Update status label
-        test_time = datetime.fromtimestamp(results['timestamp'])
-        time_str = test_time.strftime("%m/%d %H:%M")
-
-        tests_passed = sum([
-            results['credentials_valid'],
-            results['user_info_valid'],
-            results['upload_success'],
-            results['delete_success']
-        ])
-
-        if tests_passed == 4:
-            status_label.setText(f"✓ All tests passed ({time_str})")
-            # Use QSS class for theme-aware styling
-            status_label.setProperty("class", "status-success")
-        elif tests_passed > 0:
-            status_label.setText(f"⚠ {tests_passed}/4 tests passed ({time_str})")
-            # Use QSS class for theme-aware styling
-            status_label.setProperty("class", "status-warning")
-        else:
-            error = results.get('error_message', 'Unknown error')
-            status_label.setText(f"✗ Test failed: {error}")
-            # Use QSS class for theme-aware styling
-            status_label.setProperty("class", "status-error")
-        status_label.style().unpolish(status_label)
-        status_label.style().polish(status_label)
+        # Update status label with semantic status (NOT test results)
+        from src.core.file_host_config import get_config_manager
+        config_manager = get_config_manager()
+        host_config = config_manager.hosts.get(host_id)
+        if host_config:
+            status_text = self._get_status_text(host_id, host_config)
+            status_label.setText(status_text)
+            self._update_status_label_style(host_id, host_config, status_label)
 
     def _show_host_config_dialog(self, host_id: str, host_config):
         """Show detailed configuration dialog for a host.
@@ -723,70 +729,36 @@ class FileHostsSettingsWidget(QWidget):
         Args:
             enabled_hosts: List of enabled host IDs
         """
-        # Update status labels and enable buttons for all hosts
+        # Update status labels and icons for all hosts
         from src.core.file_host_config import get_config_manager
         config_manager = get_config_manager()
 
         for host_id, host_config in config_manager.hosts.items():
             widgets = self.host_widgets.get(host_id)
-            if widgets and widgets.get('status_label'):
-                self._update_status_label(host_id, host_config, widgets['status_label'])
-            # Update enable button state
-            if widgets and widgets.get('enable_btn'):
-                self._update_enable_button_state(host_id)
+            if widgets:
+                # Update status label
+                if widgets.get('status_label'):
+                    self._update_status_label(host_id, host_config, widgets['status_label'])
+                # Update status icon
+                self._update_status_icon(host_id)
 
     def _update_enable_button_state(self, host_id: str):
-        """Update enable/disable button text and style based on worker state.
+        """Legacy method - no longer used with compact layout.
+
+        The enable/disable button has been removed from the compact layout.
+        Enable/disable is now done through the Configure dialog.
 
         Args:
             host_id: Host identifier
         """
-        widgets = self.host_widgets.get(host_id)
-        if not widgets or not widgets.get('enable_btn'):
-            return
-
-        enable_btn = widgets['enable_btn']
-        is_enabled = self.worker_manager.is_enabled(host_id) if self.worker_manager else False
-
-        # Use QSS classes for theme-aware styling (defined in styles.qss)
-        if is_enabled:
-            enable_btn.setText("Disable")
-            enable_btn.setProperty("class", "host-disable-btn")
-            enable_btn.style().unpolish(enable_btn)
-            enable_btn.style().polish(enable_btn)
-        else:
-            enable_btn.setText("Enable")
-            enable_btn.setProperty("class", "host-enable-btn")
-            enable_btn.style().unpolish(enable_btn)
-            enable_btn.style().polish(enable_btn)
-
-        # Update host name label styling based on enabled state
-        host_label = widgets.get('host_label')
-        if host_label:
-            if is_enabled:
-                host_label.setProperty("class", "host-name-enabled")
-            else:
-                host_label.setProperty("class", "host-name-disabled")
-            host_label.style().unpolish(host_label)
-            host_label.style().polish(host_label)
-
-        # Update status icon to match enabled state
-        self._update_status_icon(host_id)
+        # Method kept for backward compatibility but does nothing
+        pass
 
     def _on_enable_disable_clicked(self, host_id: str):
-        """Handle enable/disable button click.
+        """Legacy method - no longer used with compact layout.
 
         Args:
             host_id: Host identifier
         """
-        if not self.worker_manager:
-            return
-
-        is_enabled = self.worker_manager.is_enabled(host_id)
-
-        if is_enabled:
-            # Disable worker
-            self.worker_manager.disable_host(host_id)
-        else:
-            # Enable worker (it will test credentials during spinup)
-            self.worker_manager.enable_host(host_id)
+        # Method kept for backward compatibility but does nothing
+        pass

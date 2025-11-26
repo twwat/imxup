@@ -18,14 +18,14 @@ def timestamp() -> str:
 
 def format_binary_size(num_bytes: int | float, precision: int = 1) -> str:
     """Format a byte count using binary prefixes (B, KiB, MiB, GiB, TiB).
-    
+
     Uses 1024 as the step size
     Shows no decimals for bytes; otherwise uses the given precision
-    
+
     Args:
         num_bytes: Number of bytes to format
         precision: Number of decimal places for non-byte units
-        
+
     Returns:
         Formatted string with appropriate unit
     """
@@ -33,17 +33,21 @@ def format_binary_size(num_bytes: int | float, precision: int = 1) -> str:
         value = float(num_bytes or 0)
     except Exception:
         value = 0.0
-    
+
+    # Handle negative values
+    if value < 0:
+        return "0 B"
+
     units = ["B", "KiB", "MiB", "GiB", "TiB", "PiB"]
     unit_index = 0
-    
+
     while value >= 1024.0 and unit_index < len(units) - 1:
         value /= 1024.0
         unit_index += 1
-    
+
     if units[unit_index] == "B":
         return f"{int(value)} B"
-    
+
     return f"{value:.{precision}f} {units[unit_index]}"
 
 
@@ -104,37 +108,40 @@ def format_duration(seconds: float) -> str:
 
 def sanitize_gallery_name(name: str) -> str:
     """Sanitize gallery name to remove characters not accepted in gallery name by imx.to
-    
+
     Replaces characters <>:"/\\|?* with _
-    
+
     Args:
         name: Original gallery name
-        
+
     Returns:
         Sanitized name safe for use as filename
     """
-    if not name:
+    if name is None:
         return "untitled gallery"
-    
+
+    if not name:
+        return "untitled"
+
     # Replace invalid characters
     invalid_chars = '<>:"/\\|?*'
     for char in invalid_chars:
         name = name.replace(char, '_')
-    
+
     # Remove control characters
     name = ''.join(char for char in name if ord(char) >= 32)
-    
+
     # Trim whitespace and dots
     name = name.strip('. ')
-    
-    # Ensure name is not empty
-    if not name:
+
+    # Ensure name is not empty or only underscores
+    if not name or name.replace('_', '').strip() == '':
         name = "untitled"
-    
+
     # Limit length
     if len(name) > 200:
         name = name[:200]
-    
+
     return name
 
 

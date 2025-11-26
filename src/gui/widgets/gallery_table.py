@@ -65,6 +65,32 @@ class GalleryTableWidget(QTableWidget):
     tab_manager: Optional['TabManager']  # Set by parent after instantiation
     icon_manager: Optional['IconManager']  # Set by parent after instantiation
 
+    # Column index type hints for mypy (values set dynamically below)
+    COL_ORDER: int
+    COL_NAME: int
+    COL_UPLOADED: int
+    COL_PROGRESS: int
+    COL_STATUS: int
+    COL_STATUS_TEXT: int
+    COL_ADDED: int
+    COL_FINISHED: int
+    COL_ACTION: int
+    COL_SIZE: int
+    COL_TRANSFER: int
+    COL_RENAMED: int
+    COL_TEMPLATE: int
+    COL_GALLERY_ID: int
+    COL_CUSTOM1: int
+    COL_CUSTOM2: int
+    COL_CUSTOM3: int
+    COL_CUSTOM4: int
+    COL_EXT1: int
+    COL_EXT2: int
+    COL_EXT3: int
+    COL_EXT4: int
+    COL_HOSTS_STATUS: int
+    COL_HOSTS_ACTION: int
+
     # Column definitions - single source of truth for all column metadata
     COLUMNS = [
         # (index, name, header_label, default_width, resize_mode, hidden_by_default, header_align_left)
@@ -233,8 +259,23 @@ class GalleryTableWidget(QTableWidget):
             self.editItem(item)
 
     def keyPressEvent(self, event):
-        """Handle key press events"""
-        if event.key() == Qt.Key.Key_Delete:
+        """Handle key press events with per-tab isolation"""
+        # HOME/END KEYS: Only affect VISIBLE rows in the current tab
+        if event.key() == Qt.Key.Key_Home:
+            # Find first visible row
+            for row in range(self.rowCount()):
+                if not self.isRowHidden(row):
+                    self.selectRow(row)
+                    self.setCurrentCell(row, self.currentColumn())
+                    return
+        elif event.key() == Qt.Key.Key_End:
+            # Find last visible row
+            for row in range(self.rowCount() - 1, -1, -1):
+                if not self.isRowHidden(row):
+                    self.selectRow(row)
+                    self.setCurrentCell(row, self.currentColumn())
+                    return
+        elif event.key() == Qt.Key.Key_Delete:
             # Find the main GUI window by walking up the parent chain
             widget = self
             while widget:

@@ -209,9 +209,10 @@ class GUIImxToUploader(ImxToUploader):
                         # Ensure required fields present
                         enriched.setdefault('original_filename', fname_norm)
                         # Best-effort thumb_url (mirrors engine)
-                        if not enriched.get('thumb_url') and enriched.get('image_url'):
+                        image_url = enriched.get('image_url')
+                        if not enriched.get('thumb_url') and image_url:
                             try:
-                                parts = enriched.get('image_url').split('/i/')
+                                parts = image_url.split('/i/')
                                 if len(parts) == 2 and parts[1]:
                                     img_id = parts[1].split('/')[0]
                                     _, ext2 = os.path.splitext(fname_norm)

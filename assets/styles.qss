@@ -101,6 +101,8 @@ QMenu                { font-size: 14px;  }
 QGroupBox        { font-weight: bold; font-size: 9pt; margin-top: 10px; margin-left: 5px; margin-right: 5px; padding: 3px;   }
 QGroupBox::title { subcontrol-origin: margin; subcontrol-position: top left; left: 25px; padding: 2px 5px; }
 
+QCheckBox { font-weight: 600; }
+
 /* LIGHT_THEME_START */
 
 /* Base colors */
@@ -214,6 +216,8 @@ QPushButton[class="main-action-btn"]:disabled     { opacity: 0.5; font-weight: n
 
 /* Code blocks - LIGHT THEME */
 code.code-block { background-color: #f0f0f0; color: #000000; padding: 5px; display: block; }
+QTextEdit[class="help-content"] code { background-color: #f0f0f0; }
+QTextEdit[class="help-content"] pre { background-color: #f0f0f0; }
 
 /* Combobox and Spinbox - LIGHT THEME */
 QComboBox, QSpinBox, QDoubleSpinBox { background-color: #fbfbfb; border: 1px solid #ccc; border-radius: 3px; }
@@ -430,7 +434,9 @@ QPushButton[class="main-action-btn"]:hover           { background-color: #164d79
 QPushButton[class="main-action-btn"]:disabled        { font-weight: normal; color: #76c5c5c5; border: 1px solid #88666666; border-radius: 3px; font-style: italic; background-color: #33333333; }
 
 /* Code blocks - DARK THEME */
-code.code-block { background-color: #2d2d2d; color: #e0e0e0; padding: 5px; display: block; }
+code.code-block { background-color: #222222; color: #e0e0e0; padding: 5px; display: block; }
+QTextEdit[class="help-content"] code { background-color: #222222; }
+QTextEdit[class="help-content"] pre { background-color: #222222; }
 
 /* Combobox and Spinbox - DARK THEME */
 QComboBox, QSpinBox, QDoubleSpinBox { background-color: #242424; border: 1px solid #464646; }

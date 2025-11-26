@@ -18,15 +18,12 @@ class IconManager:
         'status_completed':     ['status_completed-light.png',  'status_completed-dark.png'],
         'status_failed':        ['status_failed-light.png',     'status_failed-dark.png'],
         'status_uploading':     ['status_uploading-light.png',  'status_uploading-dark.png'],  # Fallback for single frame
+
         # Multi-frame uploading animation (7 frames, light/dark variants)
         'status_uploading_frame_0': ['status_uploading-001-light.png', 'status_uploading-001-dark.png'],
         'status_uploading_frame_1': ['status_uploading-002-light.png', 'status_uploading-002-dark.png'],
         'status_uploading_frame_2': ['status_uploading-003-light.png', 'status_uploading-003-dark.png'],
-        'status_uploading_frame_3': ['status_uploading-004-light.png', 'status_uploading-004-dark.png'],
-        'status_uploading_frame_4': ['status_uploading-005-light.png', 'status_uploading-005-dark.png'],
-        'status_uploading_frame_5': ['status_uploading-006-light.png', 'status_uploading-006-dark.png'],
-        'status_uploading_frame_6': ['status_uploading-007-light.png', 'status_uploading-007-dark.png'],
-        'status_uploading_frame_7': ['status_uploading-008-light.png', 'status_uploading-008-dark.png'],
+
         'status_paused':        ['status_paused-light.png',     'status_paused-dark.png'],
         'status_queued':        ['status_queued-light.png',     'status_queued-dark.png'],
         'status_ready':         ['status_ready-light.png',      'status_ready-dark.png'],
@@ -34,9 +31,11 @@ class IconManager:
         'status_incomplete':    ['status_incomplete-light.png', 'status_incomplete-dark.png'],
         'status_scan_failed':   ['status_scan_failed-light.png','status_scan_failed-dark.png'],
         'status_upload_failed': ['status_error-light.png',      'status_error-dark.png'],
+        'status_error':         ['status_error-light.png',      'status_error-dark.png'],
+        'status_idle':          ['status_ready-light.png',      'status_ready-dark.png'],  # Reuse ready icons for idle state
         'status_scanning':      ['status_scanning-light.png',   'status_scanning-dark.png'],
         'status_validating':    ['status_validating-light.png', 'status_validating-dark.png'],
-                        
+
         # Action button icons    Light icon                      Dark icon
         'action_start':         ['action_start-light.png',      'action_start-dark.png'],
         'action_stop':          ['action_stop-light.png',       'action_stop-dark.png'],
@@ -44,19 +43,23 @@ class IconManager:
         'action_view_error':    ['action_view_error-light.png', 'action_view_error-dark.png'],
         'action_cancel':        ['action_cancel-light.png',     'action_cancel-dark.png'],
         'action_resume':        ['action_resume-light.png',     'action_resume-dark.png'],
-        
+
         # Rename status icons
         'renamed_true':         ['renamed_true-light.png',      'renamed_true-dark.png'],
         'renamed_false':        ['renamed_false-light.png',     'renamed_false-dark.png'],
-        
-        # File host 
+
+        # File host
         'host_enabled':         ['host_enabled-light.png',      'host_enabled-dark.png'],
         'host_disabled':        ['host_disabled-light.png',     'host_disabled-dark.png'],
-        
-        # UI element icons
+        'imx':                  ['imx-light.png',               'imx-dark.png'],
+        'auto':                 ['auto-light.png',              'auto-dark.png'],
+
+        # UI element icons / Quick Settings
         'settings':             ['settings-light.png',          'settings-dark.png'],
         'templates':            ['templates-light.png',         'templates-dark.png'],
         'credentials':          ['credentials-light.png',       'credentials-dark.png'],
+        'filehosts':            ['filehosts-light.png',         'filehosts-dark.png'],
+        'help':                 ['help-light.png',              'help-dark.png'],
         'hooks':                ['hooks-light.png',             'hooks-dark.png'],
         'toggle_theme':         ['toggle_theme-light.png',      'toggle_theme-dark.png'],
         'log_viewer':           ['log_viewer-light.png',        'log_viewer-dark.png'],
@@ -66,7 +69,7 @@ class IconManager:
         'app_icon':             'imxup.ico',
         # Alternative sizes (optional)
     }
-    
+
     # Qt standard icon fallbacks (explicit, not hidden)
     QT_FALLBACKS = {
         'status_completed': QStyle.StandardPixmap.SP_DialogApplyButton,
@@ -80,6 +83,8 @@ class IconManager:
         'status_incomplete': QStyle.StandardPixmap.SP_BrowserReload,
         'status_scanning': QStyle.StandardPixmap.SP_BrowserReload,
         'status_queued': QStyle.StandardPixmap.SP_FileIcon,
+        'status_error': QStyle.StandardPixmap.SP_MessageBoxCritical,
+        'status_idle': QStyle.StandardPixmap.SP_FileIcon,
         
         'action_start': QStyle.StandardPixmap.SP_MediaPlay,
         'action_stop': QStyle.StandardPixmap.SP_MediaStop,
@@ -98,6 +103,11 @@ class IconManager:
         self._icon_cache: Dict[str, QIcon] = {}
         self._missing_icons: Set[str] = set()
         self._validated = False
+
+        # Cache statistics for performance monitoring
+        self._cache_hits = 0
+        self._cache_misses = 0
+        self._disk_loads = 0
 
         # Force convert status icons to use dark variants since they exist
         #status_conversions = {
@@ -181,7 +191,11 @@ class IconManager:
 
         # Check cache first
         if cache_key in self._icon_cache:
+            self._cache_hits += 1
             return self._icon_cache[cache_key]
+
+        # Cache miss - will need to load from disk
+        self._cache_misses += 1
 
         # Get the configuration from our map
         if icon_key not in self.ICON_MAP:
@@ -204,7 +218,9 @@ class IconManager:
         config = self.ICON_MAP[icon_key]
 
         # Determine which icon file to use
-        filename = self._get_themed_filename(config, theme_mode, is_selected)
+        # Convert to list if it's a list type for proper type handling
+        config_value: Union[str, List[str]] = list(config) if isinstance(config, list) else config
+        filename = self._get_themed_filename(config_value, theme_mode, is_selected)
         if not filename:
             return QIcon()
 
@@ -212,6 +228,7 @@ class IconManager:
 
         # Try to load the icon
         if os.path.exists(icon_path):
+            self._disk_loads += 1
             icon = QIcon(icon_path)
             if not icon.isNull():
                 self._icon_cache[cache_key] = icon
@@ -271,14 +288,14 @@ class IconManager:
             theme_mode: Theme mode string ('light', 'dark', or None for auto-detect)
             is_selected: Whether icon is for selected row
             requested_size: Size to generate inverted icons at (for quality)
-            animation_frame: Frame number for animated icons (0-6 for uploading)
+            animation_frame: Frame number for animated icons (0-3 for uploading)
 
         Returns:
             QIcon object
         """
         # Use frame-based icon for uploading status (all frames, including 0)
         if status == 'uploading':
-            icon_key = f'status_uploading_frame_{animation_frame % 8}'
+            icon_key = f'status_uploading_frame_{animation_frame % 3}'
         else:
             icon_key = f'status_{status}'
 
@@ -375,16 +392,23 @@ class IconManager:
         """
         if icon_key not in self.ICON_MAP:
             return None
-        
-        filename = self.ICON_MAP[icon_key]
+
+        config = self.ICON_MAP[icon_key]
+        # Handle both string and list configurations
+        if isinstance(config, str):
+            filename = config
+        elif isinstance(config, list) and len(config) > 0:
+            filename = config[0]  # Return light variant by default
+        else:
+            return None
         return os.path.join(self.assets_dir, filename)
     
-    def list_all_icons(self) -> Dict[str, str]:
+    def list_all_icons(self) -> Dict[str, Union[str, List[str]]]:
         """
         Get a dictionary of all icon mappings.
-        
+
         Returns:
-            Dictionary mapping icon keys to filenames
+            Dictionary mapping icon keys to filenames (str or [light, dark] list)
         """
         return self.ICON_MAP.copy()
     
@@ -392,14 +416,18 @@ class IconManager:
         """Clear the icon cache to force reloading."""
         self._icon_cache.clear()
         self._missing_icons.clear()
+        # Reset statistics
+        self._cache_hits = 0
+        self._cache_misses = 0
+        self._disk_loads = 0
     
     def get_status_tooltip(self, status: str) -> str:
         """
         Get appropriate tooltip text for a status.
-        
+
         Args:
             status: Status string
-            
+
         Returns:
             Tooltip text
         """
@@ -417,6 +445,43 @@ class IconManager:
             'queued': 'Queued',
         }
         return tooltips.get(status, status.replace('_', ' ').title())
+
+    def get_cache_stats(self) -> Dict[str, Union[int, float]]:
+        """
+        Get icon cache performance statistics.
+
+        Returns:
+            Dictionary with cache statistics:
+            - hits: Number of cache hits (icons served from memory)
+            - misses: Number of cache misses (icons needed to be loaded)
+            - disk_loads: Number of actual disk I/O operations
+            - cached_icons: Number of unique icons cached in memory
+            - hit_rate: Cache hit percentage (0-100)
+        """
+        total_requests = self._cache_hits + self._cache_misses
+        hit_rate = (self._cache_hits / total_requests * 100) if total_requests > 0 else 0.0
+
+        return {
+            'hits': self._cache_hits,
+            'misses': self._cache_misses,
+            'disk_loads': self._disk_loads,
+            'cached_icons': len(self._icon_cache),
+            'hit_rate': round(hit_rate, 2)
+        }
+
+    def print_cache_stats(self):
+        """Print formatted cache statistics to console."""
+        stats = self.get_cache_stats()
+        print("=" * 60)
+        print("ICON CACHE STATISTICS")
+        print("=" * 60)
+        print(f"Cache hits:        {stats['hits']:,}")
+        print(f"Cache misses:      {stats['misses']:,}")
+        print(f"Disk I/O ops:      {stats['disk_loads']:,}")
+        print(f"Cached icons:      {stats['cached_icons']:,}")
+        print(f"Hit rate:          {stats['hit_rate']:.2f}%")
+        print(f"Disk I/O saved:    {stats['hits']:,} operations")
+        print("=" * 60)
 
 
 # Global instance (will be initialized by main window)

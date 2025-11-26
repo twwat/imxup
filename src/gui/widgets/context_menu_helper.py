@@ -295,12 +295,13 @@ class GalleryContextMenuHelper(QObject):
             
             if template_names:
                 template_menu = menu.addMenu("Set template to...")
-                for template_name in template_names:
-                    template_action = template_menu.addAction(template_name)
-                    template_action.triggered.connect(
-                        lambda checked, target_template=template_name: 
-                        self._handle_template_selection(selected_paths, target_template)
-                    )
+                if template_menu:
+                    for template_name in template_names:
+                        template_action = template_menu.addAction(template_name)
+                        template_action.triggered.connect(
+                            lambda checked, target_template=template_name:
+                            self._handle_template_selection(selected_paths, target_template)
+                        )
         except Exception as e:
             print(f"Error loading templates for context menu: {e}")
     

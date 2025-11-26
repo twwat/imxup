@@ -8,6 +8,7 @@ import json
 import configparser
 import concurrent.futures
 import time
+import sys
 from typing import Any, Dict, List, Optional, Tuple
 from imxup import get_config_path
 from src.utils.logger import log
@@ -213,7 +214,6 @@ class HooksExecutor:
             # Parse command into argument list to avoid shell escaping issues
             # Use shlex on Unix, manual parsing on Windows (shlex doesn't handle Windows quoting well)
             import shlex
-            import sys
             if sys.platform == 'win32':
                 # Simple Windows-specific parsing that preserves quoted arguments
                 import re

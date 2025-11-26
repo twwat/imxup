@@ -76,10 +76,13 @@ class IconDropFrame(QFrame):
         self.variant_type = variant_type
         self.setAcceptDrops(True)
         
-    def dragEnterEvent(self, event: QDragEnterEvent):
+    def dragEnterEvent(self, event: QDragEnterEvent | None) -> None:
         """Handle drag enter event"""
-        if event.mimeData().hasUrls():
-            urls = event.mimeData().urls()
+        if event is None:
+            return
+        mime_data = event.mimeData()
+        if mime_data and mime_data.hasUrls():
+            urls = mime_data.urls()
             if len(urls) == 1:
                 file_path = urls[0].toLocalFile()
                 if file_path.lower().endswith(('.png', '.ico', '.svg', '.jpg', '.jpeg')):
@@ -87,9 +90,16 @@ class IconDropFrame(QFrame):
                     return
         event.ignore()
         
-    def dropEvent(self, event: QDropEvent):
+    def dropEvent(self, event: QDropEvent | None) -> None:
         """Handle drop event"""
-        urls = event.mimeData().urls()
+        if event is None:
+            return
+        mime_data = event.mimeData()
+        if not mime_data:
+            if event:
+                event.ignore()
+            return
+        urls = mime_data.urls()
         if len(urls) == 1:
             file_path = urls[0].toLocalFile()
             if file_path.lower().endswith(('.png', '.ico', '.svg', '.jpg', '.jpeg')):
@@ -105,7 +115,7 @@ class HostTestDialog(QDialog):
     def __init__(self, host_name: str, parent=None):
         super().__init__(parent)
         self.host_name = host_name
-        self.test_items = {}
+        self.test_items: Dict[str, Dict[str, Any]] = {}
         self.setup_ui()
 
     def setup_ui(self):
@@ -215,7 +225,7 @@ class ComprehensiveSettingsDialog(QDialog):
 
     def __init__(self, parent=None, file_host_manager=None):
         super().__init__(parent)
-        self.parent = parent
+        self.parent_window = parent
         self.file_host_manager = file_host_manager
 
         # Track dirty state per tab
@@ -236,6 +246,9 @@ class ComprehensiveSettingsDialog(QDialog):
         self.setWindowTitle("Settings & Preferences")
         self.setModal(True)
         self.resize(900, 600)
+
+        # Center dialog on parent window or screen
+        self._center_on_parent()
         
         layout = QVBoxLayout(self)
         
@@ -290,7 +303,7 @@ class ComprehensiveSettingsDialog(QDialog):
         defaults = load_user_defaults()
         
         # Upload settings group
-        upload_group = QGroupBox("Upload Settings")
+        upload_group = QGroupBox("Connection")
         upload_layout = QGridLayout(upload_group)
         
         # Max retries
@@ -357,11 +370,11 @@ class ComprehensiveSettingsDialog(QDialog):
 
 
         # Thumbnail settings
-        thumb_group = QGroupBox("Thumbnail Settings")
+        thumb_group = QGroupBox("Thumbnails")
         thumb_layout = QGridLayout(thumb_group)
         
         # Thumbnail size
-        thumb_layout.addWidget(QLabel("<b>Thumbnail Dimensions</b>:"), 0, 0)
+        thumb_layout.addWidget(QLabel("<b>Thumbnail Size</b>:"), 0, 0)
         self.thumbnail_size_combo = QComboBox()
         self.thumbnail_size_combo.addItems([
             "100x100", "180x180", "250x250", "300x300", "150x150"
@@ -381,7 +394,7 @@ class ComprehensiveSettingsDialog(QDialog):
         
         
         # General settings group
-        general_group = QGroupBox("General Settings")
+        general_group = QGroupBox("General Options")
         general_layout = QGridLayout(general_group)
         
         # Confirm delete
@@ -413,12 +426,12 @@ class ComprehensiveSettingsDialog(QDialog):
         general_layout.addWidget(self.auto_clear_completed_check, 4, 0)
 
         # Storage options group
-        storage_group = QGroupBox("Storage Options")
+        storage_group = QGroupBox("Central Storage")
         storage_layout = QGridLayout(storage_group)
         
         
         # Data location section
-        location_label = QLabel("<b>Data location (central store)</b>:")
+        location_label = QLabel("<b>Choose location to save data</b> <i>(database, artifacts, settings, etc.)</i>")
         storage_layout.addWidget(location_label, 2, 0, 1, 3)
         
         # Import path functions
@@ -480,21 +493,24 @@ class ComprehensiveSettingsDialog(QDialog):
         update_custom_path_controls()
         
         # Artifacts group
-        artifacts_group = QGroupBox("Artifacts")
+        artifacts_group = QGroupBox("Gallery Artifacts")
         artifacts_layout = QVBoxLayout(artifacts_group)
-
+        artifacts_info = QLabel("JSON / BBcode files containing uploaded gallery details.")
+        artifacts_info.setWordWrap(True)
+        artifacts_info.setStyleSheet("color: #666; font-style: italic;")
+        artifacts_layout.addWidget(artifacts_info)
         # Store in uploaded folder
-        self.store_in_uploaded_check = QCheckBox("Save artifacts in '.uploaded' subfolder in gallery")
+        self.store_in_uploaded_check = QCheckBox("Save artifacts in '.uploaded' subfolder within the gallery")
         self.store_in_uploaded_check.setChecked(defaults.get('store_in_uploaded', True))
         artifacts_layout.addWidget(self.store_in_uploaded_check)
 
         # Store in central location
-        self.store_in_central_check = QCheckBox("Save artifacts in central store")
+        self.store_in_central_check = QCheckBox("Save artifacts in central storage")
         self.store_in_central_check.setChecked(defaults.get('store_in_central', True))
         artifacts_layout.addWidget(self.store_in_central_check)
 
         # Theme & Display group
-        theme_group = QGroupBox("Theme / Appearance")
+        theme_group = QGroupBox("Appearance / Theme")
         theme_layout = QGridLayout(theme_group)
         
         # Theme setting
@@ -502,8 +518,8 @@ class ComprehensiveSettingsDialog(QDialog):
         self.theme_combo.addItems(["light", "dark"])
 
         # Load current theme from QSettings
-        if self.parent and hasattr(self.parent, 'settings'):
-            current_theme = self.parent.settings.value('ui/theme', 'dark')
+        if self.parent_window and hasattr(self.parent_window, 'settings'):
+            current_theme = self.parent_window.settings.value('ui/theme', 'dark')
             index = self.theme_combo.findText(current_theme)
             if index >= 0:
                 self.theme_combo.setCurrentIndex(index)
@@ -520,8 +536,8 @@ class ComprehensiveSettingsDialog(QDialog):
         self.font_size_spin.setToolTip("Base font size for the interface (affects table, labels, buttons)")
         
         # Load current font size from QSettings (default to 9pt)
-        if self.parent and hasattr(self.parent, 'settings'):
-            current_font_size = int(self.parent.settings.value('ui/font_size', 9))
+        if self.parent_window and hasattr(self.parent_window, 'settings'):
+            current_font_size = int(self.parent_window.settings.value('ui/font_size', 9))
             self.font_size_spin.setValue(current_font_size)
         else:
             self.font_size_spin.setValue(9)
@@ -530,7 +546,21 @@ class ComprehensiveSettingsDialog(QDialog):
         font_label = QLabel("<b>Text size</b>:")
         theme_layout.addWidget(font_label, 1, 0)
         theme_layout.addWidget(self.font_size_spin, 1, 1)
-        
+
+        # Icons-only mode for quick settings buttons
+        self.quick_settings_icons_only_check = QCheckBox("Show icons only on quick settings buttons")
+        self.quick_settings_icons_only_check.setToolTip(
+            "When enabled, quick settings buttons will always show icons only,\n"
+            "regardless of available space (overrides adaptive text display)"
+        )
+
+        # Load current setting from QSettings
+        if self.parent_window and hasattr(self.parent_window, 'settings'):
+            icons_only = self.parent_window.settings.value('ui/quick_settings_icons_only', False, type=bool)
+            self.quick_settings_icons_only_check.setChecked(icons_only)
+
+        theme_layout.addWidget(self.quick_settings_icons_only_check, 2, 0, 1, 2)  # Row 2, span 2 columns
+
         # Set column stretch for 50/50 split
         theme_layout.setColumnStretch(0, 1)  # Label column 50%
         theme_layout.setColumnStretch(1, 1)  # Control column 50%
@@ -572,6 +602,7 @@ class ComprehensiveSettingsDialog(QDialog):
         self.path_edit.textChanged.connect(lambda: self.mark_tab_dirty(0))
         self.theme_combo.currentIndexChanged.connect(lambda: self.mark_tab_dirty(0))
         self.font_size_spin.valueChanged.connect(lambda: self.mark_tab_dirty(0))
+        self.quick_settings_icons_only_check.toggled.connect(lambda: self.mark_tab_dirty(0))
         
         self.tab_widget.addTab(general_widget, "General")
         
@@ -616,8 +647,8 @@ class ComprehensiveSettingsDialog(QDialog):
         
         # Initialize tab manager reference
         self.tab_manager = None
-        if self.parent and hasattr(self.parent, 'tab_manager'):
-            self.tab_manager = self.parent.tab_manager
+        if self.parent_window and hasattr(self.parent_window, 'tab_manager'):
+            self.tab_manager = self.parent_window.tab_manager
         
         # Create splitter for better layout
         splitter = QSplitter(Qt.Orientation.Horizontal)
@@ -1809,9 +1840,19 @@ class ComprehensiveSettingsDialog(QDialog):
                 test_output.setText(f"Running: {test_command}\n\nPlease wait...")
                 QApplication.processEvents()  # Update UI
 
+                # SECURITY: Use shlex.split to safely parse command and prevent injection
+                # shell=False prevents command injection attacks via shell metacharacters
+                import shlex
+                try:
+                    command_parts = shlex.split(test_command)
+                except ValueError as e:
+                    test_output.setText(f"ERROR: Invalid command syntax: {e}\n\n" +
+                                      "Command must use proper quoting for arguments with spaces.")
+                    return
+
                 result = subprocess.run(
-                    test_command,
-                    shell=True,
+                    command_parts,
+                    shell=False,  # SECURITY: Prevents command injection
                     capture_output=True,
                     text=True,
                     timeout=30
@@ -2370,9 +2411,27 @@ class ComprehensiveSettingsDialog(QDialog):
             self.custom_radio.setChecked(True)
             self.path_edit.setText(directory)
             self.mark_tab_dirty(0)
-            
 
-            
+
+    def _center_on_parent(self):
+        """Center dialog on parent window or screen"""
+        if self.parent():
+            # Center on parent window
+            parent_geo = self.parent().geometry()
+            dialog_geo = self.frameGeometry()
+            x = parent_geo.x() + (parent_geo.width() - dialog_geo.width()) // 2
+            y = parent_geo.y() + (parent_geo.height() - dialog_geo.height()) // 2
+            self.move(x, y)
+        else:
+            # Center on screen if no parent
+            screen = QApplication.primaryScreen()
+            if screen:
+                screen_geo = screen.geometry()
+                dialog_geo = self.frameGeometry()
+                x = (screen_geo.width() - dialog_geo.width()) // 2
+                y = (screen_geo.height() - dialog_geo.height()) // 2
+                self.move(x, y)
+
     def load_settings(self):
         """Load current settings"""
         # Settings are loaded in setup_ui for each tab
@@ -2646,39 +2705,47 @@ class ComprehensiveSettingsDialog(QDialog):
         """Save all settings"""
         try:
             # Save to .ini file via parent
-            if self.parent:
+            if self.parent_window:
                 # Update parent's settings objects for checkboxes
-                self.parent.confirm_delete_check.setChecked(self.confirm_delete_check.isChecked())
-                self.parent.auto_rename_check.setChecked(self.auto_rename_check.isChecked())
-                self.parent.store_in_uploaded_check.setChecked(self.store_in_uploaded_check.isChecked())
-                self.parent.store_in_central_check.setChecked(self.store_in_central_check.isChecked())
+                self.parent_window.confirm_delete_check.setChecked(self.confirm_delete_check.isChecked())
+                self.parent_window.auto_rename_check.setChecked(self.auto_rename_check.isChecked())
+                self.parent_window.store_in_uploaded_check.setChecked(self.store_in_uploaded_check.isChecked())
+                self.parent_window.store_in_central_check.setChecked(self.store_in_central_check.isChecked())
                 
                 # Update parent's settings objects for upload settings
-                self.parent.thumbnail_size_combo.setCurrentIndex(self.thumbnail_size_combo.currentIndex())
-                self.parent.thumbnail_format_combo.setCurrentIndex(self.thumbnail_format_combo.currentIndex())
+                self.parent_window.thumbnail_size_combo.setCurrentIndex(self.thumbnail_size_combo.currentIndex())
+                self.parent_window.thumbnail_format_combo.setCurrentIndex(self.thumbnail_format_combo.currentIndex())
                 # Template selection is now handled in the Templates tab
                 
                 # Save via parent
-                self.parent.save_upload_settings()
+                self.parent_window.save_upload_settings()
                 
                 # Save theme
-                if hasattr(self.parent, 'settings'):
+                if hasattr(self.parent_window, 'settings'):
                     theme = self.theme_combo.currentText()
-                    self.parent.settings.setValue('ui/theme', theme)
-                    self.parent.apply_theme(theme)
+                    self.parent_window.settings.setValue('ui/theme', theme)
+                    self.parent_window.apply_theme(theme)
                     # Update theme toggle button tooltip
-                    if hasattr(self.parent, 'theme_toggle_btn'):
+                    if hasattr(self.parent_window, 'theme_toggle_btn'):
                         tooltip = "Switch to light theme" if theme == 'dark' else "Switch to dark theme"
-                        self.parent.theme_toggle_btn.setToolTip(tooltip)
+                        self.parent_window.theme_toggle_btn.setToolTip(tooltip)
 
                 # Save font size
-                if hasattr(self.parent, 'settings'):
+                if hasattr(self.parent_window, 'settings'):
                     font_size = self.font_size_spin.value()
                     #print(f"Saving font size to settings: {font_size}")
-                    self.parent.settings.setValue('ui/font_size', font_size)
-                    if hasattr(self.parent, 'apply_font_size'):
+                    self.parent_window.settings.setValue('ui/font_size', font_size)
+                    if hasattr(self.parent_window, 'apply_font_size'):
                         #print(f"Applying font size: {font_size}")
-                        self.parent.apply_font_size(font_size)
+                        self.parent_window.apply_font_size(font_size)
+
+                # Save icons-only setting
+                icons_only = self.quick_settings_icons_only_check.isChecked()
+                self.parent_window.settings.setValue('ui/quick_settings_icons_only', icons_only)
+
+                # Apply to adaptive panel immediately
+                if hasattr(self.parent_window, 'adaptive_settings_panel'):
+                    self.parent_window.adaptive_settings_panel.set_icons_only_mode(icons_only)
                 
                 # Save scanning settings
                 self._save_scanning_settings()
@@ -3165,21 +3232,21 @@ class ComprehensiveSettingsDialog(QDialog):
         self.path_edit.setText(current_path)
         
         # Reload theme
-        if self.parent and hasattr(self.parent, 'settings'):
-            current_theme = self.parent.settings.value('ui/theme', 'dark')
+        if self.parent_window and hasattr(self.parent_window, 'settings'):
+            current_theme = self.parent_window.settings.value('ui/theme', 'dark')
             index = self.theme_combo.findText(current_theme)
             if index >= 0:
                 self.theme_combo.setCurrentIndex(index)
         
         # Reload font size
-        if self.parent and hasattr(self.parent, 'settings'):
-            current_font_size = int(self.parent.settings.value('ui/font_size', 9))
+        if self.parent_window and hasattr(self.parent_window, 'settings'):
+            current_font_size = int(self.parent_window.settings.value('ui/font_size', 9))
             self.font_size_spin.setValue(current_font_size)
     
     def _reload_scanning_tab(self):
         """Reload Scanning tab form values from saved settings"""
         # Reload scanning settings from QSettings
-        if self.parent and hasattr(self.parent, 'settings'):
+        if self.parent_window and hasattr(self.parent_window, 'settings'):
             # Just call the main load function - it handles everything
             self._load_scanning_settings()
     
@@ -3211,9 +3278,9 @@ class ComprehensiveSettingsDialog(QDialog):
             config.set('DEFAULTS', 'parallel_batch_size', str(new_batch_size))
 
             # Signal uploader to refresh connection pool if batch size changed
-            if old_batch_size != new_batch_size and self.parent and hasattr(self.parent, 'uploader'):
+            if old_batch_size != new_batch_size and self.parent_window and hasattr(self.parent_window, 'uploader'):
                 try:
-                    self.parent.uploader.refresh_session_pool()
+                    self.parent_window.uploader.refresh_session_pool()
                 except Exception as e:
                     print(f"{timestamp()} WARNING: Failed to refresh connection pool: {e}")
 
@@ -3276,11 +3343,11 @@ class ComprehensiveSettingsDialog(QDialog):
                         return True  # Cancel the save
                     elif conflict_msg.clickedButton() == keep_btn:
                         # Just update QSettings, don't write new config file
-                        if self.parent and hasattr(self.parent, 'settings'):
+                        if self.parent_window and hasattr(self.parent_window, 'settings'):
                             if storage_mode == 'home':
-                                self.parent.settings.remove("config/base_path")
+                                self.parent_window.settings.remove("config/base_path")
                             else:
-                                self.parent.settings.setValue("config/base_path", new_path)
+                                self.parent_window.settings.setValue("config/base_path", new_path)
                         QMessageBox.information(self, "Restart Required",
                                               "Please restart the application to use the new storage location.")
                         return True
@@ -3307,11 +3374,11 @@ class ComprehensiveSettingsDialog(QDialog):
                         return True
 
                     # CRITICAL: Save base path to QSettings FIRST (before writing config file)
-                    if self.parent and hasattr(self.parent, 'settings'):
+                    if self.parent_window and hasattr(self.parent_window, 'settings'):
                         if storage_mode == 'home':
-                            self.parent.settings.remove("config/base_path")
+                            self.parent_window.settings.remove("config/base_path")
                         else:
-                            self.parent.settings.setValue("config/base_path", new_path)
+                            self.parent_window.settings.setValue("config/base_path", new_path)
 
                     # Save new settings to INI file in NEW location
                     config.set('DEFAULTS', 'storage_mode', storage_mode)
@@ -3332,11 +3399,11 @@ class ComprehensiveSettingsDialog(QDialog):
                 else:
                     # Old path doesn't exist, just save
                     # CRITICAL: Save base path to QSettings FIRST
-                    if self.parent and hasattr(self.parent, 'settings'):
+                    if self.parent_window and hasattr(self.parent_window, 'settings'):
                         if storage_mode == 'home':
-                            self.parent.settings.remove("config/base_path")
+                            self.parent_window.settings.remove("config/base_path")
                         else:
-                            self.parent.settings.setValue("config/base_path", new_path)
+                            self.parent_window.settings.setValue("config/base_path", new_path)
 
                     config.set('DEFAULTS', 'storage_mode', storage_mode)
                     config.set('DEFAULTS', 'central_store_path', new_path)
@@ -3354,48 +3421,56 @@ class ComprehensiveSettingsDialog(QDialog):
                     config.write(f)
 
                 # CRITICAL: Save base path to QSettings for bootstrap
-                if self.parent and hasattr(self.parent, 'settings'):
+                if self.parent_window and hasattr(self.parent_window, 'settings'):
                     if storage_mode == 'home':
                         # Clear custom path - use default home folder
-                        self.parent.settings.remove("config/base_path")
+                        self.parent_window.settings.remove("config/base_path")
                     elif new_path:
                         # Save custom/portable path
-                        self.parent.settings.setValue("config/base_path", new_path)
+                        self.parent_window.settings.setValue("config/base_path", new_path)
             
             # Update parent GUI controls
-            if self.parent:
-                self.parent.thumbnail_size_combo.setCurrentIndex(self.thumbnail_size_combo.currentIndex())
-                self.parent.thumbnail_format_combo.setCurrentIndex(self.thumbnail_format_combo.currentIndex())
+            if self.parent_window:
+                self.parent_window.thumbnail_size_combo.setCurrentIndex(self.thumbnail_size_combo.currentIndex())
+                self.parent_window.thumbnail_format_combo.setCurrentIndex(self.thumbnail_format_combo.currentIndex())
                 
                 # Update storage settings (only those that exist in parent)
-                if hasattr(self.parent, 'confirm_delete_check'):
-                    self.parent.confirm_delete_check.setChecked(self.confirm_delete_check.isChecked())
-                if hasattr(self.parent, 'auto_rename_check'):
-                    self.parent.auto_rename_check.setChecked(self.auto_rename_check.isChecked())
-                if hasattr(self.parent, 'store_in_uploaded_check'):
-                    self.parent.store_in_uploaded_check.setChecked(self.store_in_uploaded_check.isChecked())
-                if hasattr(self.parent, 'store_in_central_check'):
-                    self.parent.store_in_central_check.setChecked(self.store_in_central_check.isChecked())
+                if hasattr(self.parent_window, 'confirm_delete_check'):
+                    self.parent_window.confirm_delete_check.setChecked(self.confirm_delete_check.isChecked())
+                if hasattr(self.parent_window, 'auto_rename_check'):
+                    self.parent_window.auto_rename_check.setChecked(self.auto_rename_check.isChecked())
+                if hasattr(self.parent_window, 'store_in_uploaded_check'):
+                    self.parent_window.store_in_uploaded_check.setChecked(self.store_in_uploaded_check.isChecked())
+                if hasattr(self.parent_window, 'store_in_central_check'):
+                    self.parent_window.store_in_central_check.setChecked(self.store_in_central_check.isChecked())
                 if storage_mode == 'custom':
-                    self.parent.central_store_path_value = new_path
+                    self.parent_window.central_store_path_value = new_path
                 
                 # Save theme and font size to QSettings
-                if hasattr(self.parent, 'settings'):
+                if hasattr(self.parent_window, 'settings'):
                     font_size = self.font_size_spin.value()
                     theme = self.theme_combo.currentText()
                     #print(f"_save_general_tab: Saving font size to settings: {font_size}")
-                    self.parent.settings.setValue('ui/theme', theme)
-                    self.parent.settings.setValue('ui/font_size', font_size)
+                    self.parent_window.settings.setValue('ui/theme', theme)
+                    self.parent_window.settings.setValue('ui/font_size', font_size)
+
+                    # Save icons-only setting
+                    icons_only = self.quick_settings_icons_only_check.isChecked()
+                    self.parent_window.settings.setValue('ui/quick_settings_icons_only', icons_only)
+
+                    # Apply to adaptive panel immediately
+                    if hasattr(self.parent_window, 'adaptive_settings_panel'):
+                        self.parent_window.adaptive_settings_panel.set_icons_only_mode(icons_only)
 
                     # Apply theme and font size immediately
-                    self.parent.apply_theme(theme)
+                    self.parent_window.apply_theme(theme)
                     # Update theme toggle button tooltip
-                    if hasattr(self.parent, 'theme_toggle_btn'):
+                    if hasattr(self.parent_window, 'theme_toggle_btn'):
                         tooltip = "Switch to light theme" if theme == 'dark' else "Switch to dark theme"
-                        self.parent.theme_toggle_btn.setToolTip(tooltip)
-                    if hasattr(self.parent, 'apply_font_size'):
+                        self.parent_window.theme_toggle_btn.setToolTip(tooltip)
+                    if hasattr(self.parent_window, 'apply_font_size'):
                         #print(f"_save_general_tab: Applying font size: {font_size}")
-                        self.parent.apply_font_size(font_size)
+                        self.parent_window.apply_font_size(font_size)
             
             return True
         except Exception as e:
@@ -3419,10 +3494,10 @@ class ComprehensiveSettingsDialog(QDialog):
             os.makedirs(new_path, exist_ok=True)
             
             # Close database connection if parent has one
-            if self.parent and hasattr(self.parent, 'queue_manager'):
+            if self.parent_window and hasattr(self.parent_window, 'queue_manager'):
                 progress.setLabelText("Closing database connection...")
                 try:
-                    self.parent.queue_manager.shutdown()
+                    self.parent_window.queue_manager.shutdown()
                 except:
                     pass
             
@@ -3481,8 +3556,8 @@ class ComprehensiveSettingsDialog(QDialog):
             msg.exec()
             
             # Restart the application
-            if self.parent:
-                self.parent.close()
+            if self.parent_window:
+                self.parent_window.close()
             python = sys.executable
             subprocess.Popen([python, "imxup.py", "--gui"])
             QApplication.quit()
@@ -3544,10 +3619,10 @@ class ComprehensiveSettingsDialog(QDialog):
                 icon_manager.refresh_cache()
                 
                 # Signal the main window to refresh all status icons
-                if hasattr(self, 'parent') and self.parent and hasattr(self.parent, 'refresh_all_status_icons'):
-                    self.parent.refresh_all_status_icons()
-                elif hasattr(self, 'parent') and self.parent and hasattr(self.parent, '_update_all_status_icons'):
-                    self.parent._update_all_status_icons()
+                if hasattr(self, 'parent') and self.parent_window and hasattr(self.parent_window, 'refresh_all_status_icons'):
+                    self.parent_window.refresh_all_status_icons()
+                elif hasattr(self, 'parent') and self.parent_window and hasattr(self.parent_window, '_update_all_status_icons'):
+                    self.parent_window._update_all_status_icons()
                 
                 #print("Icon changes applied successfully")
                 return True
@@ -3566,9 +3641,7 @@ class ComprehensiveSettingsDialog(QDialog):
         try:
             if hasattr(self, 'log_settings_widget'):
                 self.log_settings_widget.save_settings()
-                # Refresh main window's log display settings cache
-                if self.parent and hasattr(self.parent, '_refresh_log_display_settings'):
-                    self.parent._refresh_log_display_settings()
+                # Cache refresh and re-rendering handled by main_window._handle_settings_dialog_result()
             return True
         except Exception as e:
             print(f"{timestamp()} WARNING: Error saving logs tab: {e}")
@@ -3983,8 +4056,8 @@ class ComprehensiveSettingsDialog(QDialog):
             self.update_selected_icon_preview(icon_key)
             
             # Refresh main window if it exists
-            if self.parent and hasattr(self.parent, 'refresh_icons'):
-                self.parent.refresh_icons()
+            if self.parent_window and hasattr(self.parent_window, 'refresh_icons'):
+                self.parent_window.refresh_icons()
             
             # Don't mark tab as dirty - icon changes are saved immediately
             
@@ -4055,8 +4128,8 @@ class ComprehensiveSettingsDialog(QDialog):
             self.update_icon_previews_dual(icon_key)
             
             # Refresh main window if it exists
-            if self.parent and hasattr(self.parent, 'refresh_icons'):
-                self.parent.refresh_icons()
+            if self.parent_window and hasattr(self.parent_window, 'refresh_icons'):
+                self.parent_window.refresh_icons()
             
             # Don't mark tab as dirty - icon changes are saved immediately
             
@@ -4141,8 +4214,8 @@ class ComprehensiveSettingsDialog(QDialog):
                 self.update_icon_previews_dual(icon_key)
                 
                 # Refresh main window if it exists
-                if self.parent and hasattr(self.parent, 'refresh_icons'):
-                    self.parent.refresh_icons()
+                if self.parent_window and hasattr(self.parent_window, 'refresh_icons'):
+                    self.parent_window.refresh_icons()
                 
                 # Don't mark tab as dirty - reset is an immediate filesystem operation
                 
@@ -4333,7 +4406,7 @@ class LogViewerDialog(QDialog):
         # Prepare logger and settings (used by both tabs)
         try:
             from src.utils.logging import get_logger as _get_logger
-            self._logger = _get_logger()
+            self._logger: Any = _get_logger()
             settings = self._logger.get_settings()
         except Exception:
             self._logger = None
@@ -4368,7 +4441,7 @@ class LogViewerDialog(QDialog):
         self.spn_backup = QSpinBox()
         self.spn_backup.setRange(0, 3650)
         self.spn_backup.setValue(int(settings.get('backup_count', 7)))
-        grid.addWidget(QLabel("Backups to keep:"), 1, 2)
+        grid.addWidget(QLabel("<span style='font-weight: 600'>Backups to keep</span>:"), 1, 2)
         grid.addWidget(self.spn_backup, 1, 3)
 
         self.chk_compress = QCheckBox("Compress rotated logs (.gz)")
@@ -4379,7 +4452,7 @@ class LogViewerDialog(QDialog):
         self.spn_max_bytes.setRange(1024, 1024 * 1024 * 1024)
         self.spn_max_bytes.setSingleStep(1024 * 1024)
         self.spn_max_bytes.setValue(int(settings.get('max_bytes', 10485760)))
-        grid.addWidget(QLabel("Max size (bytes, size mode):"), 2, 2)
+        grid.addWidget(QLabel("<span style='font-weight: 600'>Max size (bytes, size mode)</span>:"), 2, 2)
         grid.addWidget(self.spn_max_bytes, 2, 3)
 
         self.cmb_gui_level = QComboBox()

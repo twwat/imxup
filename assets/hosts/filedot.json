@@ -1,5 +1,5 @@
 {
-  "name": "FileDot.to",
+  "name": "Filedot",
   "icon": "filedot.png",
   "referral_url": "https://filedot.to/free26531.html",
   "requires_auth": true,
@@ -12,7 +12,9 @@
     "file_field": "file_0",
     "extra_fields": {
       "utype": "reg"
-    }
+    },
+    "inactivity_timeout": 300,
+    "upload_timeout": null
   },
   "response": {
     "type": "json",
@@ -44,7 +46,8 @@
     "check_body_on_success": true
   },
   "defaults": {
-    "max_file_size_mb": null,
+    "max_file_size_mb": 5120,
+    "storage_gb": 10000,
     "max_connections": 2,
     "auto_retry": true,
     "max_retries": 3
