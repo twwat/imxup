@@ -13,6 +13,7 @@ from typing import Optional, Dict, Any
 
 from PyQt6.QtCore import QThread, pyqtSignal, pyqtSlot, QSettings, Qt
 
+from imxup import get_credential, decrypt_password
 from src.core.engine import AtomicCounter
 from src.core.file_host_config import get_config_manager, HostConfig, get_file_host_setting
 from src.network.file_host_client import FileHostClient
@@ -31,7 +32,7 @@ class FileHostWorker(QThread):
 
     # Signals for communication with GUI
     upload_started = pyqtSignal(int, str)  # gallery_id, host_name
-    upload_progress = pyqtSignal(int, str, int, int)  # gallery_id, host_name, uploaded_bytes, total_bytes
+    upload_progress = pyqtSignal(int, str, int, int, float)  # gallery_id, host_name, uploaded_bytes, total_bytes, speed_bps
     upload_completed = pyqtSignal(int, str, dict)  # gallery_id, host_name, result_dict
     upload_failed = pyqtSignal(int, str, str)  # gallery_id, host_name, error_message
     bandwidth_updated = pyqtSignal(float)  # Instantaneous KB/s from pycurl
@@ -110,8 +111,6 @@ class FileHostWorker(QThread):
 
     def _load_credentials(self) -> None:
         """Load this host's credentials from QSettings."""
-        from imxup import get_credential, decrypt_password
-
         encrypted_creds = get_credential(f'file_host_{self.host_id}_credentials')
         if encrypted_creds:
             try:
@@ -220,6 +219,70 @@ class FileHostWorker(QThread):
         self.paused = False
         self._log("File host worker resumed", level="info")
 
+    def _is_retryable_error(self, error: Exception, error_msg: str) -> bool:
+        """
+        Determine if an error should trigger a retry attempt.
+
+        Non-retryable errors are permanent failures that won't be fixed by retrying:
+        - Folder/file not found
+        - Permission denied (folder-level)
+        - Invalid path format
+        - Not a directory
+
+        Retryable errors are transient network/server issues:
+        - Connection errors
+        - Timeouts
+        - HTTP 5xx errors
+        - Rate limits
+
+        Args:
+            error: The exception that occurred
+            error_msg: Error message string
+
+        Returns:
+            bool: True if error should trigger retry, False if should fail immediately
+        """
+        # Non-retryable error types (permanent failures)
+        NON_RETRYABLE_ERRORS = (
+            FileNotFoundError,
+            NotADirectoryError,
+            ValueError,  # Invalid path format
+        )
+
+        if isinstance(error, NON_RETRYABLE_ERRORS):
+            self._log(f"Error is non-retryable (type: {type(error).__name__}), failing immediately", level="debug")
+            return False
+
+        # Check error message for folder/path-related issues
+        error_lower = error_msg.lower()
+        non_retryable_keywords = [
+            'folder not found',
+            'does not exist',
+            'not a directory',
+            'not a folder',
+            'invalid path',
+            'path does not exist',
+            'no such file or directory'
+        ]
+
+        if any(keyword in error_lower for keyword in non_retryable_keywords):
+            self._log(f"Error message indicates non-retryable issue: {error_msg}", level="debug")
+            return False
+
+        # Permission errors - only folder-level permission errors are non-retryable
+        # Server-level permission errors (upload denied) may be retryable after re-auth
+        if isinstance(error, PermissionError):
+            if 'folder' in error_lower or 'directory' in error_lower:
+                self._log("Folder permission error is non-retryable", level="debug")
+                return False
+            # Server permission errors may be retryable
+            self._log("Server permission error, allowing retry", level="debug")
+            return True
+
+        # All other errors (network, timeout, server errors) are retryable
+        self._log(f"Error is retryable (type: {type(error).__name__})", level="debug")
+        return True
+
     def cancel_current_upload(self) -> None:
         """Cancel the current upload."""
         self._should_stop_current = True
@@ -243,7 +306,7 @@ class FileHostWorker(QThread):
                 self.running = False
                 return
 
-            self._log("Testing credentials during spinup...", level="info")
+            self._log("Testing credentials during spinup...", level="debug")
 
             spinup_success = False
             spinup_error = ""
@@ -266,7 +329,7 @@ class FileHostWorker(QThread):
                                 left = int(storage_left)
                                 self._save_storage_cache(total, left)
                                 self.storage_updated.emit(self.host_id, total, left)
-                                self._log(f"Cached storage during spinup: {format_binary_size(left)}/{format_binary_size(total)}", level="debug")
+                                #self._log(f"Cached storage during spinup: {format_binary_size(left)}/{format_binary_size(total)}", level="debug")
                             except (ValueError, TypeError) as e:
                                 self._log(f"Failed to parse storage: {e}", level="debug")
 
@@ -326,6 +389,37 @@ class FileHostWorker(QThread):
                 gallery_id = upload['gallery_fk']
                 upload_id = upload['id']
                 gallery_path = upload['gallery_path']
+
+                # Convert WSL2 paths and validate folder exists BEFORE marking as uploading
+                from src.utils.system_utils import convert_to_wsl_path
+                folder_path = convert_to_wsl_path(gallery_path)
+
+                if not folder_path.exists():
+                    error_msg = f"Gallery folder not found: {gallery_path}"
+                    if str(gallery_path) != str(folder_path):
+                        error_msg += f" (tried WSL2 path: {folder_path})"
+
+                    self._log(f"FAIL FAST: {error_msg}", level="error")
+                    self.queue_store.update_file_host_upload(
+                        upload_id,
+                        status='failed',
+                        finished_ts=int(time.time()),
+                        error_message=error_msg
+                    )
+                    self.upload_failed.emit(gallery_id, host_name, error_msg)
+                    continue
+
+                if not folder_path.is_dir():
+                    error_msg = f"Path is not a directory: {gallery_path}"
+                    self._log(f"FAIL FAST: {error_msg}", level="error")
+                    self.queue_store.update_file_host_upload(
+                        upload_id,
+                        status='failed',
+                        finished_ts=int(time.time()),
+                        error_message=error_msg
+                    )
+                    self.upload_failed.emit(gallery_id, host_name, error_msg)
+                    continue
 
                 # Check if host is enabled (should always be true since worker exists)
                 host_config = self.config_manager.get_host(host_name)
@@ -398,6 +492,10 @@ class FileHostWorker(QThread):
         self.current_gallery_id = gallery_id
         self._should_stop_current = False
 
+        # Initialize timing and size tracking for metrics
+        upload_start_time = time.time()
+        zip_size = 0
+
         self._log(
             f"Starting upload to {host_name} for gallery {gallery_id} ({gallery_name})",
             level="info"
@@ -414,10 +512,15 @@ class FileHostWorker(QThread):
         self.upload_started.emit(gallery_id, host_name)
 
         try:
-            # Step 1: Create or reuse ZIP
-            folder_path = Path(gallery_path)
+            # Step 1: Create or reuse ZIP (with WSL2 path conversion)
+            from src.utils.system_utils import convert_to_wsl_path
+            folder_path = convert_to_wsl_path(gallery_path)
+
             if not folder_path.exists():
-                raise FileNotFoundError(f"Gallery folder not found: {gallery_path}")
+                error_msg = f"Gallery folder not found: {gallery_path}"
+                if str(gallery_path) != str(folder_path):
+                    error_msg += f" (WSL2 path: {folder_path})"
+                raise FileNotFoundError(error_msg)
 
             zip_path = self.zip_manager.create_or_reuse_zip(
                 gallery_id=gallery_id,
@@ -437,23 +540,29 @@ class FileHostWorker(QThread):
             # Step 2: Create client and upload (reuses session if available)
             client = self._create_client(host_config)
 
-            def on_progress(uploaded: int, total: int):
-                """Progress callback from pycurl."""
-                # Update database
-                self.queue_store.update_file_host_upload(
-                    upload_id,
-                    uploaded_bytes=uploaded
-                )
+            def on_progress(uploaded: int, total: int, speed_bps: float = 0.0):
+                """Progress callback from pycurl with speed tracking."""
+                try:
+                    # Emit signal for GUI update - no database write needed here
+                    # The final state is saved in success/failure handlers
+                    self.upload_progress.emit(gallery_id, host_name, uploaded, total, speed_bps)
 
-                # Emit progress signal
-                self.upload_progress.emit(gallery_id, host_name, uploaded, total)
-
-                # Emit bandwidth periodically
-                self._emit_bandwidth()
+                    # Emit bandwidth periodically (speed_bps is bytes/sec, convert to KB/s)
+                    if speed_bps > 0:
+                        kbps = speed_bps / 1024.0
+                        self._emit_bandwidth_immediate(kbps)
+                    else:
+                        self._emit_bandwidth()
+                except Exception as e:
+                    self._log(f"Progress callback error: {e}", level="error")
+                    # Continue upload - don't abort on display errors
 
             def should_stop():
                 """Check if upload should be cancelled."""
                 return self._should_stop_current or not self.running
+
+            # Reset upload timing just before actual transfer (after ZIP creation)
+            upload_start_time = time.time()
 
             # Perform upload
             result = client.upload_file(
@@ -461,6 +570,9 @@ class FileHostWorker(QThread):
                 on_progress=on_progress,
                 should_stop=should_stop
             )
+
+            # Calculate transfer time for metrics
+            upload_elapsed_time = time.time() - upload_start_time
 
             # Step 4: Handle result
             if result.get('status') == 'success':
@@ -482,10 +594,21 @@ class FileHostWorker(QThread):
                 # Record success
                 self.coordinator.record_completion(success=True)
 
+                # Record metrics for successful transfer
+                from src.utils.metrics_store import get_metrics_store
+                metrics_store = get_metrics_store()
+                if metrics_store:
+                    metrics_store.record_transfer(
+                        host_name=self.host_id,
+                        bytes_uploaded=zip_size,
+                        transfer_time=upload_elapsed_time,
+                        success=True
+                    )
+
                 # Emit completed signal
                 self.upload_completed.emit(gallery_id, host_name, result)
                 self._log(
-                    f"Successfully uploaded to {host_name}: {download_url}",
+                    f"Successfully uploaded {gallery_name}: {download_url}",
                     level="info")
                 
                 # Log raw server response for debugging (with linebreaks as \n text)
@@ -503,7 +626,7 @@ class FileHostWorker(QThread):
         except Exception as e:
             error_msg = str(e)
             self._log(
-                f"Upload to {host_name} failed for gallery {gallery_id}: {error_msg}",
+                f"Upload failed for gallery {gallery_id}: {error_msg}",
                 level="error")
 
             # Get current retry count
@@ -514,10 +637,15 @@ class FileHostWorker(QThread):
             # Check if we should retry
             auto_retry = get_file_host_setting(host_name, "auto_retry", "bool")
             max_retries = get_file_host_setting(host_name, "max_retries", "int")
+
+            # Check if error is retryable (don't retry folder/permission errors)
+            is_retryable = self._is_retryable_error(e, error_msg)
+
             should_retry = (
                 auto_retry and
-                retry_count < max_retries and
-                not self._should_stop_current
+                retry_count <= max_retries and
+                not self._should_stop_current and
+                is_retryable  # Only retry if error is recoverable
             )
 
             if should_retry:
@@ -530,7 +658,7 @@ class FileHostWorker(QThread):
                 )
 
                 self._log(
-                    f"Will retry upload to {host_name} (attempt {retry_count + 1}/{max_retries})",
+                    f"Retrying upload '{gallery_name}' (attempt {retry_count + 1}/{max_retries})",
                     level="info"
                 )
             else:
@@ -542,8 +670,24 @@ class FileHostWorker(QThread):
                     error_message=error_msg
                 )
 
+                # Force cleanup ZIP on final failure (no more retries)
+                self.zip_manager.cleanup_gallery(gallery_id)
+
                 # Record failure
                 self.coordinator.record_completion(success=False)
+
+                # Record metrics for failed transfer
+                from src.utils.metrics_store import get_metrics_store
+                metrics_store = get_metrics_store()
+                if metrics_store:
+                    # Calculate elapsed time from upload start
+                    elapsed = time.time() - upload_start_time
+                    metrics_store.record_transfer(
+                        host_name=self.host_id,
+                        bytes_uploaded=0,  # Failed uploads don't count bytes
+                        transfer_time=elapsed,
+                        success=False
+                    )
 
                 # Emit failed signal
                 self.upload_failed.emit(gallery_id, host_name, error_msg)
@@ -581,6 +725,20 @@ class FileHostWorker(QThread):
             self._bw_last_bytes = current_bytes
             self._bw_last_time = now
             self._bw_last_emit = now
+
+    def _emit_bandwidth_immediate(self, kbps: float):
+        """Emit bandwidth immediately without throttling (for pycurl-calculated speeds)."""
+        now = time.time()
+
+        # Still throttle to 0.5 seconds to avoid GUI overload
+        if now - self._bw_last_emit < 0.5:
+            return
+
+        # Emit the speed directly (already calculated by pycurl callback)
+        self.bandwidth_updated.emit(kbps)
+
+        # Update tracking
+        self._bw_last_emit = now
 
     def get_current_upload_info(self) -> Optional[Dict[str, Any]]:
         """Get information about the current upload.
@@ -620,7 +778,7 @@ class FileHostWorker(QThread):
             if age < 1800:  # 30 minutes TTL
                 # Cache valid - emit immediately
                 self._log(
-                    f"Using cached storage for {self.host_id} (age: {age}s)",
+                    f"Using cached storage (age: {age}s)",
                     level="debug"
                 )
                 self.storage_updated.emit(self.host_id, cache['total'], cache['left'])
@@ -628,8 +786,8 @@ class FileHostWorker(QThread):
 
         # Step 2: Cache invalid/missing - fetch from server
         self._log(
-            f"Fetching storage from server for {self.host_id}",
-            level="info"
+            f"Fetching storage from server",
+            level="debug"
         )
 
         try:
@@ -649,37 +807,34 @@ class FileHostWorker(QThread):
                 left = int(cached_storage.get('storage_left') or 0)
                 self._log(
                     f"Got storage from login response for {self.host_id} (no /info call needed!)",
-                    level="info"
+                    level="debug"
                 )
             else:
                 # No storage in login - make separate /info call
-                self._log(
-                    f"No storage in login response, fetching from /info endpoint for {self.host_id}",
-                    level="info")
                 user_info = client.get_user_info()
 
                 user_info_formatted = json.dumps(user_info, indent=2).replace(chr(10), '\n') if user_info else "None"
-                self._log(f"user_info from /info call: {user_info_formatted}", level="debug")
+                self._log(f"Fetched from /info call: {user_info_formatted}", level="debug")
 
-                total = user_info.get('storage_total')
-                left = user_info.get('storage_left')
+                total_raw = user_info.get('storage_total')
+                left_raw = user_info.get('storage_left')
 
                 self._log(
-                    f"Extracted storage_total={total}, storage_left={left}",
+                    f"Extracted storage_total={total_raw}, storage_left={left_raw}",
                     level="debug"
                 )
 
                 # Validate before emitting - DO NOT overwrite good data with bad data
-                if total is None or left is None or total <= 0 or left < 0:
+                if total_raw is None or left_raw is None or total_raw <= 0 or left_raw < 0:
                     self._log(
-                        f"Invalid storage data from API (total={total}, left={left}) - keeping cached data",
-                        level="error"
+                        f"Invalid storage data from API (total={total_raw}, left={left_raw}) - keeping cached data",
+                        level="debug"
                     )
                     return  # Do NOT emit signal, do NOT save to cache
 
                 # Convert to int only after validation
-                total = int(total)
-                left = int(left)
+                total = int(total_raw)
+                left = int(left_raw)
 
             # Step 3: Save to cache (only if we have valid data)
             self._save_storage_cache(total, left)
@@ -697,7 +852,7 @@ class FileHostWorker(QThread):
         except Exception as e:
             self._log(
                 f"Storage check failed: {e}",
-                level="error")
+                level="debug")
             # Do NOT emit signal with bad data
 
     @pyqtSlot()
@@ -729,22 +884,26 @@ class FileHostWorker(QThread):
             client = self._create_client(host_config)
 
             # Test 1: Credentials
-            self._log("Testing credentials...", level="debug")
+            #self._log("Testing credentials...", level="debug")
             cred_result = client.test_credentials()
 
             if not cred_result.get('success'):
                 results['error_message'] = cred_result.get('message', 'Credential test failed')
                 self._save_test_results(results)
                 self.test_completed.emit(self.host_id, results)
-                self._log("Credential test failed", level="warning")
+                self._log("Test #1: FAIL - Unable authenticate using credentials", level="warning")
                 return
 
             results['credentials_valid'] = True
             results['user_info_valid'] = bool(cred_result.get('user_info'))
+            self._log("Test #1: PASS - Authenticated successfully using credentials", level="debug")
 
             # Cache storage info if available (opportunistic caching during test)
             user_info = cred_result.get('user_info', {})
-
+            if not user_info:
+                self._log("Test #2: FAIL - Unable to get user info", level="debug")
+            else:
+                self._log("Test #2: PASS - Successfully fetched user info", level="debug")
             # Format user_info for log viewer (with escaped newlines for expansion)
 
             user_info_formatted = json.dumps(user_info, indent=2).replace(chr(10), '\\n') if user_info else "None"
@@ -754,7 +913,7 @@ class FileHostWorker(QThread):
                 storage_total = user_info.get('storage_total')
                 storage_left = user_info.get('storage_left')
                 self._log(
-                    f"Extracted storage values:\n  storage_total = {storage_total} (type: {type(storage_total).__name__})\n  storage_left = {storage_left} (type: {type(storage_left).__name__})",
+                    f"Extracted storage values: storage_total = {storage_total} ({type(storage_total).__name__})  storage_left = {storage_left} ({type(storage_left).__name__})",
                     level="debug"
                 )
                 if storage_total is not None and storage_left is not None:
@@ -763,39 +922,40 @@ class FileHostWorker(QThread):
                         left = int(storage_left or 0)
                         self._save_storage_cache(total, left)
                         self.storage_updated.emit(self.host_id, total, left)
-                        self._log(f"Cached storage during test: {left}/{total} bytes", level="info")
+                        self._log(f"Cached storage during test: {left}/{total} bytes", level="debug")
                     except (ValueError, TypeError) as e:
-                        self._log(f"Failed to parse storage during test: {e}", level="debug")
+                        self._log(f"Failed to parse storage during test: {e}", level="error")
                 else:
                     self._log(
                         f"Storage data missing in test response (total={storage_total}, left={storage_left})",
                         level="debug"
                     )
             else:
-                self._log("No user_info in test credentials response", level="warning")
+                self._log("No user_info in test credentials response", level="debug")
 
             # Test 2: Upload
-            self._log("Testing upload...", level="debug")
+            #self._log("(Test 3/4): Testing upload functionality...", level="debug")
             upload_result = client.test_upload(cleanup=False)
 
             if not upload_result.get('success'):
                 results['error_message'] = upload_result.get('message', 'Upload test failed')
                 self._save_test_results(results)
                 self.test_completed.emit(self.host_id, results)
-                self._log("Upload test failed", level="warning")
+                self._log("Test #3: FAIL - failed to upload test file", level="warning")
                 return
 
             results['upload_success'] = True
-
+            self._log("Test #3: PASS - uploaded test file successfully", level="info")
             # Test 3: Delete (if host supports it)
             file_id = upload_result.get('file_id') or upload_result.get('upload_id')
             if file_id and host_config.delete_url:
                 try:
-                    self._log("Testing delete...", level="debug")
+                    #self._log("(Test 4/4): Testing delete functionality...", level="debug")
                     client.delete_file(file_id)
                     results['delete_success'] = True
+                    self._log("Test #4: PASS - deleted test file successfully", level="info")
                 except Exception as e:
-                    self._log(f"Delete test failed for {self.host_id}: {e}", level="warning")
+                    self._log(f"Test #4: FAIL - failed to delete test file: {e}", level="error")
                     # Don't fail entire test if delete fails
                     results['delete_success'] = False
 
@@ -807,8 +967,14 @@ class FileHostWorker(QThread):
 
             self.test_completed.emit(self.host_id, results)
 
+            passed_count = sum([
+                1 if results['credentials_valid'] else 0,
+                1 if results['user_info_valid'] else 0,
+                1 if results['upload_success'] else 0,
+                1 if results['delete_success'] else 0
+            ])
             self._log(
-                f"Tests completed: {sum([results['credentials_valid'], results['user_info_valid'], results['upload_success'], results['delete_success']])}/4 tests passed",
+                f"Tests completed: {passed_count}/4 tests passed",
                 level="info"
             )
 
