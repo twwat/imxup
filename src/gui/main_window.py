@@ -1358,10 +1358,6 @@ class ImxUploadGUI(QMainWindow):
             icon = icon_mgr.get_status_icon(status, theme_mode=self._current_theme_mode, is_selected=is_selected, animation_frame=animation_frame)
             tooltip = icon_mgr.get_status_tooltip(status)
 
-            # Debug: Log when setting scanning icons
-            if status == "scanning":
-                print(f"[ICON DEBUG] Setting scanning icon: row={row}, theme={self._current_theme_mode}, selected={is_selected}, icon_null={icon.isNull()}")
-
             # Apply the icon to the table cell
             self._apply_icon_to_cell(row, GalleryTableWidget.COL_STATUS, icon, tooltip, status)
 
