@@ -14,15 +14,178 @@ from enum import Enum
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QTableWidget, QTableWidgetItem,
     QHeaderView, QLabel, QComboBox, QPushButton, QFrame, QSizePolicy,
-    QMenu
+    QMenu, QStyle, QStyleOptionHeader, QProgressBar
 )
-from PyQt6.QtCore import Qt, pyqtSignal, pyqtSlot, QSettings, QTimer
-from PyQt6.QtGui import QIcon, QPixmap, QFont, QPalette
+from PyQt6.QtCore import Qt, pyqtSignal, pyqtSlot, QSettings, QTimer, pyqtProperty, QSize, QRect
+from PyQt6.QtGui import QIcon, QPixmap, QFont, QPalette, QColor
 
 from src.utils.format_utils import format_binary_rate
 from src.utils.logger import log
 from src.gui.icon_manager import get_icon_manager
 from src.core.file_host_config import get_config_manager, get_file_host_setting
+from src.gui.widgets.custom_widgets import StorageProgressBar
+
+
+class MultiLineHeaderView(QHeaderView):
+    """Custom header view that renders column names on two lines.
+
+    Splits names like "Uploaded (All Time)" into:
+      Line 1: "Uploaded"
+      Line 2: "(All Time)"
+
+    Styleable via QSS:
+      MultiLineHeaderView { qproperty-primaryColor: #000; qproperty-secondaryColor: #666; }
+    """
+
+    def __init__(self, orientation=Qt.Orientation.Horizontal, parent=None):
+        super().__init__(orientation, parent)
+        self._primaryColor = None
+        self._secondaryColor = None
+        # Increase default section height for two lines
+        self.setMinimumSectionSize(28)  # Allow icon columns to be 28px
+
+    def getPrimaryColor(self):
+        return self._primaryColor or self.palette().color(QPalette.ColorRole.WindowText)
+
+    def setPrimaryColor(self, color):
+        self._primaryColor = color
+        self.update()
+
+    def getSecondaryColor(self):
+        return self._secondaryColor or self.palette().color(QPalette.ColorRole.PlaceholderText)
+
+    def setSecondaryColor(self, color):
+        self._secondaryColor = color
+        self.update()
+
+    # Expose as Qt properties for QSS
+    primaryColor = pyqtProperty(QColor, getPrimaryColor, setPrimaryColor)
+    secondaryColor = pyqtProperty(QColor, getSecondaryColor, setSecondaryColor)
+
+    def sizeHint(self):
+        """Return size hint with room for two lines."""
+        base = super().sizeHint()
+        # Height for two lines + padding
+        return QSize(base.width(), 44)
+
+    def paintSection(self, painter, rect, logicalIndex):
+        """Paint header section with two-line text."""
+        painter.save()
+
+        # Get the header text
+        model = self.model()
+        if model is None:
+            painter.restore()
+            return
+
+        text = model.headerData(logicalIndex, self.orientation(), Qt.ItemDataRole.DisplayRole)
+        if text is None:
+            text = ""
+
+        # Draw background (let default styling handle this)
+        opt = QStyleOptionHeader()
+        self.initStyleOption(opt)
+        opt.rect = rect
+        opt.section = logicalIndex
+        opt.text = ""  # We'll draw text ourselves
+
+        # Check sort indicator
+        if self.isSortIndicatorShown() and self.sortIndicatorSection() == logicalIndex:
+            opt.sortIndicator = (QStyleOptionHeader.SortIndicator.SortUp
+                                if self.sortIndicatorOrder() == Qt.SortOrder.AscendingOrder
+                                else QStyleOptionHeader.SortIndicator.SortDown)
+
+        # CRITICAL: Isolate drawControl() to prevent painter clipping corruption
+        # drawControl() modifies the painter's clipping region; without save/restore,
+        # subsequent drawText() calls are clipped and invisible
+        painter.save()
+        self.style().drawControl(QStyle.ControlElement.CE_Header, opt, painter, self)
+        painter.restore()
+
+        # Parse text into primary and secondary parts
+        primary_text = text
+        secondary_text = ""
+
+        if "(" in text and text.endswith(")"):
+            # Split "Uploaded (All Time)" into "Uploaded" and "(All Time)"
+            paren_idx = text.rfind("(")
+            primary_text = text[:paren_idx].strip()
+            secondary_text = text[paren_idx:]
+
+        # Calculate text rectangles
+        # Determine alignment based on column to set appropriate padding
+        # Get WorkerStatusWidget (header -> table -> widget)
+        col_config = None
+        widget = self.parent().parent() if self.parent() else None
+        if widget and hasattr(widget, '_active_columns') and 0 <= logicalIndex < len(widget._active_columns):
+            col_config = widget._active_columns[logicalIndex]
+
+        # Use more left padding for left-aligned columns (hostname, status)
+        if col_config and col_config.id in ('hostname', 'status'):
+            padding = 4
+            left_padding = 18  # Extra padding for left-aligned text
+            text_rect = rect.adjusted(left_padding, padding, -padding, -padding)
+        else:
+            padding = 4
+            text_rect = rect.adjusted(padding, padding, -padding, -padding)
+
+        if secondary_text:
+            # Two-line layout
+            line_height = text_rect.height() // 2
+            primary_rect = QRect(text_rect.x(), text_rect.y(), text_rect.width(), line_height)
+            secondary_rect = QRect(text_rect.x(), text_rect.y() + line_height, text_rect.width(), line_height)
+
+            # Draw primary text (metric name)
+            painter.setPen(self.getPrimaryColor())
+            primary_font = painter.font()
+            primary_font.setPixelSize(10)
+            primary_font.setBold(True)
+            painter.setFont(primary_font)
+
+            # Use left alignment for hostname and status columns, center for others
+            # (col_config already determined earlier)
+            if col_config and col_config.id in ('hostname', 'status'):
+                alignment = Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignBottom
+            else:
+                alignment = Qt.AlignmentFlag.AlignCenter | Qt.AlignmentFlag.AlignBottom
+
+            # Elide primary text if too long
+            fm = painter.fontMetrics()
+            primary_text = fm.elidedText(primary_text, Qt.TextElideMode.ElideRight, primary_rect.width())
+            painter.drawText(primary_rect, alignment, primary_text)
+
+            # Draw secondary text (period)
+            painter.setPen(self.getSecondaryColor())
+            secondary_font = painter.font()
+            secondary_font.setBold(True)
+            secondary_font.setPixelSize(10)
+            painter.setFont(secondary_font)
+
+            # Elide secondary text if too long
+            fm = painter.fontMetrics()
+            secondary_text = fm.elidedText(secondary_text, Qt.TextElideMode.ElideRight, secondary_rect.width())
+            painter.drawText(secondary_rect, Qt.AlignmentFlag.AlignCenter | Qt.AlignmentFlag.AlignTop, secondary_text)
+        else:
+            # Single line (for columns without periods like "Host", "Speed")
+            painter.setPen(self.getPrimaryColor())
+            single_font = painter.font()
+            single_font.setPixelSize(10)
+            single_font.setBold(True)
+            painter.setFont(single_font)
+
+            # Use left alignment for hostname and status columns, center for others
+            # ALWAYS use AlignVCenter for vertical centering in single-line headers
+            if col_config and col_config.id in ('hostname', 'status'):
+                alignment = Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
+            else:
+                alignment = Qt.AlignmentFlag.AlignCenter | Qt.AlignmentFlag.AlignVCenter
+
+            # Elide single-line text if too long
+            fm = painter.fontMetrics()
+            primary_text = fm.elidedText(primary_text, Qt.TextElideMode.ElideRight, text_rect.width())
+            painter.drawText(text_rect, alignment, primary_text)
+
+        painter.restore()
 
 
 @dataclass
@@ -39,6 +202,10 @@ class WorkerStatus:
     total_bytes: int = 0
     error_message: Optional[str] = None
     last_update: float = 0.0
+    files_remaining: int = 0
+    bytes_remaining: int = 0
+    storage_used_bytes: int = 0
+    storage_total_bytes: int = 0
 
 
 class ColumnType(Enum):
@@ -69,22 +236,39 @@ class ColumnConfig:
 
 # Core columns (always available)
 CORE_COLUMNS = [
-    ColumnConfig('icon', '', 24, ColumnType.ICON, resizable=False, hideable=False),
-    ColumnConfig('hostname', 'Host', 120, ColumnType.TEXT),
-    ColumnConfig('speed', 'Speed', 90, ColumnType.SPEED, alignment=Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter),
-    ColumnConfig('status', 'Status', 80, ColumnType.TEXT, alignment=Qt.AlignmentFlag.AlignCenter | Qt.AlignmentFlag.AlignVCenter),
-    ColumnConfig('settings', '', 32, ColumnType.WIDGET, resizable=False, hideable=False),
+    ColumnConfig('icon', '', 28, ColumnType.ICON, resizable=False, hideable=False, alignment=Qt.AlignmentFlag.AlignCenter | Qt.AlignmentFlag.AlignVCenter),
+    ColumnConfig('hostname', 'host', 120, ColumnType.TEXT),
+    ColumnConfig('speed', 'speed', 90, ColumnType.SPEED, alignment=Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter),
+    ColumnConfig('status', 'status', 80, ColumnType.TEXT, alignment=Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter),
+    ColumnConfig('files_remaining', 'queue (files)', 90, ColumnType.COUNT, default_visible=True, alignment=Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter),
+    ColumnConfig('bytes_remaining', 'queue (bytes)', 110, ColumnType.BYTES, default_visible=True, alignment=Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter),
+    ColumnConfig('storage', 'storage', 140, ColumnType.WIDGET, default_visible=True, alignment=Qt.AlignmentFlag.AlignCenter | Qt.AlignmentFlag.AlignVCenter),
+    ColumnConfig('settings', '', 28, ColumnType.WIDGET, resizable=False, hideable=False, alignment=Qt.AlignmentFlag.AlignCenter | Qt.AlignmentFlag.AlignVCenter),
 ]
 
 # Metric columns (optional, from MetricsStore)
+# Organized by metric type, each available for session/today/all_time periods
 METRIC_COLUMNS = [
-    ColumnConfig('bytes_session', 'Session', 90, ColumnType.BYTES, 'bytes_uploaded', 'session', default_visible=False, alignment=Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter),
-    ColumnConfig('bytes_today', 'Today', 90, ColumnType.BYTES, 'bytes_uploaded', 'today', default_visible=False, alignment=Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter),
-    ColumnConfig('bytes_alltime', 'All Time', 90, ColumnType.BYTES, 'bytes_uploaded', 'all_time', default_visible=False, alignment=Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter),
-    ColumnConfig('files_session', 'Files', 60, ColumnType.COUNT, 'files_uploaded', 'session', default_visible=False, alignment=Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter),
-    ColumnConfig('avg_speed', 'Avg Speed', 90, ColumnType.SPEED, 'avg_speed', 'session', default_visible=False, alignment=Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter),
-    ColumnConfig('peak_speed', 'Peak', 90, ColumnType.SPEED, 'peak_speed', 'session', default_visible=False, alignment=Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter),
-    ColumnConfig('success_rate', 'Success %', 70, ColumnType.PERCENT, 'success_rate', 'session', default_visible=False, alignment=Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter),
+    # Bytes Uploaded - all periods
+    ColumnConfig('bytes_session', 'uploaded (session)', 110, ColumnType.BYTES, 'bytes_uploaded', 'session', default_visible=False, alignment=Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter),
+    ColumnConfig('bytes_today', 'uploaded (today)', 110, ColumnType.BYTES, 'bytes_uploaded', 'today', default_visible=False, alignment=Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter),
+    ColumnConfig('bytes_alltime', 'uploaded (all time)', 110, ColumnType.BYTES, 'bytes_uploaded', 'all_time', default_visible=False, alignment=Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter),
+    # Files Uploaded - all periods
+    ColumnConfig('files_session', 'files (session)', 90, ColumnType.COUNT, 'files_uploaded', 'session', default_visible=False, alignment=Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter),
+    ColumnConfig('files_today', 'files (today)', 90, ColumnType.COUNT, 'files_uploaded', 'today', default_visible=False, alignment=Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter),
+    ColumnConfig('files_alltime', 'files (all time)', 90, ColumnType.COUNT, 'files_uploaded', 'all_time', default_visible=False, alignment=Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter),
+    # Average Speed - all periods
+    ColumnConfig('avg_speed_session', 'avg speed (session)', 120, ColumnType.SPEED, 'avg_speed', 'session', default_visible=False, alignment=Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter),
+    ColumnConfig('avg_speed_today', 'avg speed (today)', 120, ColumnType.SPEED, 'avg_speed', 'today', default_visible=False, alignment=Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter),
+    ColumnConfig('avg_speed_alltime', 'avg speed (all time)', 120, ColumnType.SPEED, 'avg_speed', 'all_time', default_visible=False, alignment=Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter),
+    # Peak Speed - all periods
+    ColumnConfig('peak_speed_session', 'peak (session)', 100, ColumnType.SPEED, 'peak_speed', 'session', default_visible=False, alignment=Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter),
+    ColumnConfig('peak_speed_today', 'peak (today)', 100, ColumnType.SPEED, 'peak_speed', 'today', default_visible=False, alignment=Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter),
+    ColumnConfig('peak_speed_alltime', 'peak (all time)', 100, ColumnType.SPEED, 'peak_speed', 'all_time', default_visible=False, alignment=Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter),
+    # Success Rate - all periods
+    ColumnConfig('success_rate_session', 'success % (session)', 110, ColumnType.PERCENT, 'success_rate', 'session', default_visible=False, alignment=Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter),
+    ColumnConfig('success_rate_today', 'success % (today)', 110, ColumnType.PERCENT, 'success_rate', 'today', default_visible=False, alignment=Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter),
+    ColumnConfig('success_rate_alltime', 'success % (all time)', 110, ColumnType.PERCENT, 'success_rate', 'all_time', default_visible=False, alignment=Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter),
 ]
 
 # Combined list
@@ -183,7 +367,6 @@ class WorkerStatusWidget(QWidget):
         # UI references
         self.status_table: Optional[QTableWidget] = None
         self.filter_combo: Optional[QComboBox] = None
-        self.worker_count_label: Optional[QLabel] = None
 
         # Selection tracking for refresh persistence
         self._selected_worker_id: Optional[str] = None
@@ -195,6 +378,16 @@ class WorkerStatusWidget(QWidget):
         self._init_ui()
         self._load_icons()
 
+    def keyPressEvent(self, event):
+        """Handle keyboard shortcuts for table."""
+        if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            selected = self.status_table.selectedItems()
+            if selected:
+                self._on_row_double_clicked(None)
+                event.accept()
+                return
+        super().keyPressEvent(event)
+
     def _init_ui(self):
         """Initialize the user interface."""
         main_layout = QVBoxLayout(self)
@@ -204,11 +397,6 @@ class WorkerStatusWidget(QWidget):
         # Top control bar
         control_layout = QHBoxLayout()
         control_layout.setSpacing(8)
-
-        # Worker count label
-        self.worker_count_label = QLabel("Workers: 0")
-        self.worker_count_label.setProperty("class", "worker-count-label")
-        control_layout.addWidget(self.worker_count_label)
 
         control_layout.addStretch()
 
@@ -241,16 +429,23 @@ class WorkerStatusWidget(QWidget):
         self.status_table.setAlternatingRowColors(True)
         self.status_table.verticalHeader().setVisible(False)
         self.status_table.horizontalHeader().setVisible(True)
-        self.status_table.setShowGrid(False)
+        self.status_table.setShowGrid(True)
 
         # Row height
-        self.status_table.verticalHeader().setDefaultSectionSize(32)
+        self.status_table.verticalHeader().setDefaultSectionSize(30)
 
         # Disable built-in sorting (conflicts with manual sorting)
         # self.status_table.setSortingEnabled(True)
 
+        # Use custom multi-line header
+        header = MultiLineHeaderView(Qt.Orientation.Horizontal, self.status_table)
+        self.status_table.setHorizontalHeader(header)
+
+        # Enable sort indicators and header clicks
+        header.setSortIndicatorShown(True)
+        header.setSectionsClickable(True)
+
         # Header context menu and drag reorder
-        header = self.status_table.horizontalHeader()
         header.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         header.customContextMenuRequested.connect(self._show_column_context_menu)
         header.setSectionsMovable(True)  # Allow drag reorder
@@ -266,6 +461,9 @@ class WorkerStatusWidget(QWidget):
         # Selection signal
         self.status_table.itemSelectionChanged.connect(self._on_selection_changed)
 
+        # Double-click signal
+        self.status_table.itemDoubleClicked.connect(self._on_row_double_clicked)
+
         main_layout.addWidget(self.status_table)
 
     def _load_icons(self):
@@ -280,6 +478,7 @@ class WorkerStatusWidget(QWidget):
         self._icon_cache['paused'] = icon_mgr.get_icon('status_paused')
         self._icon_cache['error'] = icon_mgr.get_icon('status_error')
         self._icon_cache['completed'] = icon_mgr.get_icon('status_completed')
+        self._icon_cache['disabled'] = icon_mgr.get_icon('disabledhost')
         self._icon_cache['settings'] = icon_mgr.get_icon('settings')
 
         # Host type icons (will load dynamically based on host)
@@ -346,6 +545,32 @@ class WorkerStatusWidget(QWidget):
         self._icon_cache[cache_key] = icon
         return icon
 
+    def _create_storage_progress_widget(self, used_bytes: int, total_bytes: int, worker_id: str) -> QWidget:
+        """Create storage progress bar widget using reusable StorageProgressBar class.
+
+        Args:
+            used_bytes: Used storage in bytes
+            total_bytes: Total storage in bytes
+            worker_id: Worker identifier for tracking
+
+        Returns:
+            StorageProgressBar widget configured with storage values
+        """
+        # Calculate left_bytes from used and total
+        left_bytes = total_bytes - used_bytes if total_bytes > 0 else 0
+
+        # Create widget using reusable StorageProgressBar class
+        storage_widget = StorageProgressBar()
+
+        # CRITICAL: Call update_storage() BEFORE setCellWidget() to avoid race condition
+        # This ensures the widget is fully populated before Qt geometry events fire
+        storage_widget.update_storage(total_bytes, left_bytes)
+
+        # Store worker_id for updates
+        storage_widget.setProperty("worker_id", worker_id)
+
+        return storage_widget
+
     def refresh_icons(self):
         """Refresh all icons for theme changes."""
         # Clear icon cache to force reload with new theme
@@ -358,6 +583,11 @@ class WorkerStatusWidget(QWidget):
     def start_monitoring(self):
         """Connect to metrics store for signal-driven updates."""
         self.connect_metrics_store()
+
+        # Populate initial metrics from database (deferred until after GUI ready)
+        if self._metrics_store and not hasattr(self, '_metrics_populated'):
+            QTimer.singleShot(100, self._populate_initial_metrics)
+            self._metrics_populated = True
 
     def stop_monitoring(self):
         """Disconnect from metrics store."""
@@ -376,17 +606,15 @@ class WorkerStatusWidget(QWidget):
             # Only connect if not already connected (avoid duplicates)
             try:
                 self._metrics_store.signals.host_metrics_updated.disconnect(self._on_host_metrics_updated)
-                self._metrics_store.signals.session_totals_updated.disconnect(self._on_session_totals_updated)
             except TypeError:
                 # Not connected yet, this is fine
                 pass
 
             # Now connect (fresh or reconnect)
             self._metrics_store.signals.host_metrics_updated.connect(self._on_host_metrics_updated)
-            self._metrics_store.signals.session_totals_updated.connect(self._on_session_totals_updated)
 
-            # Populate initial metrics from database (one-time load)
-            self._populate_initial_metrics()
+            # NOTE: _populate_initial_metrics() deferred to start_monitoring()
+            # to avoid blocking database queries during GUI construction
 
     def _populate_initial_metrics(self):
         """Load initial metrics from database asynchronously to prevent GUI freeze.
@@ -468,18 +696,6 @@ class WorkerStatusWidget(QWidget):
                 self._update_worker_metrics(worker_id, merged)
                 break
 
-    @pyqtSlot(dict)
-    def _on_session_totals_updated(self, totals: dict):
-        """Handle session totals update.
-
-        Args:
-            totals: Dict mapping host names to their session metrics
-        """
-        # Could display totals in footer or status bar
-        # For now, just update the cache for all hosts
-        for host_name, metrics in totals.items():
-            self._host_metrics_cache[host_name.lower()] = metrics
-
     def _update_worker_metrics(self, worker_id: str, metrics: dict):
         """Update metric columns for a worker.
 
@@ -548,6 +764,21 @@ class WorkerStatusWidget(QWidget):
             # No _schedule_refresh() call for existing workers
         else:
             # New worker - create entry and schedule full refresh
+            # Load cached storage data from QSettings for file hosts
+            storage_used = 0
+            storage_total = 0
+            if worker_type == 'filehost':
+                settings = QSettings("ImxUploader", "ImxUploadGUI")
+                total_str = settings.value(f"FileHosts/{hostname.lower()}/storage_total", "0")
+                left_str = settings.value(f"FileHosts/{hostname.lower()}/storage_left", "0")
+                try:
+                    storage_total = int(total_str) if total_str else 0
+                    storage_left = int(left_str) if left_str else 0
+                    storage_used = storage_total - storage_left
+                except (ValueError, TypeError):
+                    storage_used = 0
+                    storage_total = 0
+
             self._workers[worker_id] = WorkerStatus(
                 worker_id=worker_id,
                 worker_type=worker_type,
@@ -555,7 +786,9 @@ class WorkerStatusWidget(QWidget):
                 display_name=self._format_display_name(hostname, worker_type),
                 speed_bps=speed_bps,
                 status=status,
-                last_update=datetime.now().timestamp()
+                last_update=datetime.now().timestamp(),
+                storage_used_bytes=storage_used,
+                storage_total_bytes=storage_total
             )
             self._schedule_refresh()  # Only rebuild for new workers
 
@@ -596,6 +829,45 @@ class WorkerStatusWidget(QWidget):
             # Use targeted updates instead of full rebuild
             self._update_worker_status_cell(worker_id, 'error')
             self._update_worker_speed(worker_id, 0.0)
+
+    @pyqtSlot(str, object, object)
+    def update_worker_storage(self, host_id: str, total_bytes: int, left_bytes: int):
+        """Update worker storage quota information.
+
+        Args:
+            host_id: Host identifier (e.g., 'rapidgator')
+            total_bytes: Total storage quota in bytes
+            left_bytes: Remaining storage in bytes
+        """
+        # Convert host_id to worker_id pattern: filehost_{host_id}
+        worker_id = f"filehost_{host_id.lower().replace(' ', '_')}"
+
+        if worker_id in self._workers:
+            worker = self._workers[worker_id]
+            worker.storage_total = total_bytes
+            worker.storage_left = left_bytes
+            worker.last_update = datetime.now().timestamp()
+            # Update storage column cell (used_bytes = total - left)
+            used_bytes = total_bytes - left_bytes
+            self._update_storage_progress(worker_id, used_bytes, total_bytes)
+
+    @pyqtSlot(int, int)
+    def update_queue_columns(self, files_remaining: int, bytes_remaining: int):
+        """Update queue-based columns (Files Left, Remaining) for all workers.
+
+        Args:
+            files_remaining: Total files remaining across all galleries
+            bytes_remaining: Total bytes remaining across all galleries
+        """
+        # For now, we'll update all filehost workers with queue totals
+        # In future, could be per-worker if we track which worker handles which gallery
+        for worker_id, worker in self._workers.items():
+            if worker.worker_type == 'filehost':
+                worker.files_remaining = files_remaining
+                worker.bytes_remaining = bytes_remaining
+                # Update cells using existing methods
+                self._update_files_remaining(worker_id, files_remaining)
+                self._update_bytes_remaining(worker_id, bytes_remaining)
 
     @pyqtSlot(str)
     def remove_worker(self, worker_id: str):
@@ -701,26 +973,42 @@ class WorkerStatusWidget(QWidget):
         if col_idx < 0:
             return
 
-        item = self.status_table.item(row, col_idx)
-        if item:
-            # Update icon - map 'disabled' to 'idle' icon
-            status_icon = self._icon_cache.get(
-                'idle' if status == 'disabled' else status,
-                QIcon()
-            )
-            item.setIcon(status_icon)
-            item.setText(status.capitalize())
+        # Status column is now a widget with icon + text (not QTableWidgetItem)
+        widget = self.status_table.cellWidget(row, col_idx)
+        if widget:
+            # Find the icon label and text label inside the widget
+            layout = widget.layout()
+            if layout and layout.count() >= 2:
+                icon_label = layout.itemAt(0).widget()
+                text_label = layout.itemAt(1).widget()
 
-            # Color coding
-            if status == 'uploading':
-                item.setForeground(Qt.GlobalColor.darkGreen)
-            elif status == 'error':
-                item.setForeground(Qt.GlobalColor.red)
-            elif status == 'paused':
-                item.setForeground(Qt.GlobalColor.darkYellow)
-            else:
-                # Reset to default color for idle/disabled (theme-aware)
-                item.setForeground(self.palette().color(QPalette.ColorRole.WindowText))
+                # Update icon - map 'disabled' to 'idle' icon
+                status_icon = self._icon_cache.get(
+                    'idle' if status == 'disabled' else status,
+                    QIcon()
+                )
+                if isinstance(icon_label, QLabel):
+                    icon_label.setPixmap(status_icon.pixmap(16, 16))
+
+                # Update text and color
+                if isinstance(text_label, QLabel):
+                    text_label.setText(status.capitalize())
+
+                    # Color coding
+                    if status == 'uploading':
+                        text_label.setStyleSheet("color: darkgreen;")
+                    elif status == 'error':
+                        text_label.setStyleSheet("color: red;")
+                    elif status == 'paused':
+                        text_label.setStyleSheet("color: #B8860B;")  # darkYellow
+                    elif status == 'disabled':
+                        text_label.setStyleSheet(f"color: {self.palette().color(QPalette.ColorRole.PlaceholderText).name()};")
+                        font = text_label.font()
+                        font.setItalic(True)
+                        text_label.setFont(font)
+                    else:
+                        # Reset to default color for idle (theme-aware)
+                        text_label.setStyleSheet(f"color: {self.palette().color(QPalette.ColorRole.WindowText).name()};")
 
     def _update_worker_progress_cell(self, worker_id: str, progress_bytes: int, total_bytes: int):
         """Update progress cell for a specific worker - targeted update.
@@ -747,13 +1035,58 @@ class WorkerStatusWidget(QWidget):
                 item.setText(text)
                 self.status_table.blockSignals(False)
 
+    def _update_files_remaining(self, worker_id: str, files_remaining: int):
+        """Update files remaining cell for a worker.
+
+        Args:
+            worker_id: Worker identifier
+            files_remaining: Number of files remaining
+        """
+        col_idx = self._get_column_index('files_remaining')
+        if col_idx >= 0:
+            text = format_count(files_remaining) if files_remaining > 0 else "—"
+            self._update_worker_cell(worker_id, col_idx, files_remaining, lambda v: format_count(v) if v > 0 else "—")
+
+    def _update_bytes_remaining(self, worker_id: str, bytes_remaining: int):
+        """Update bytes remaining cell for a worker.
+
+        Args:
+            worker_id: Worker identifier
+            bytes_remaining: Bytes remaining
+        """
+        col_idx = self._get_column_index('bytes_remaining')
+        if col_idx >= 0:
+            self._update_worker_cell(worker_id, col_idx, bytes_remaining, lambda v: format_bytes(v) if v > 0 else "—")
+
+    def _update_storage_progress(self, worker_id: str, used_bytes: int, total_bytes: int):
+        """Update storage progress bar for a worker using StorageProgressBar.update_storage().
+
+        Args:
+            worker_id: Worker identifier
+            used_bytes: Used storage bytes
+            total_bytes: Total storage bytes
+        """
+        row = self._worker_row_map.get(worker_id)
+        if row is None:
+            return
+
+        col_idx = self._get_column_index('storage')
+        if col_idx < 0:
+            return
+
+        # Get the StorageProgressBar widget
+        widget = self.status_table.cellWidget(row, col_idx)
+        if isinstance(widget, StorageProgressBar):
+            # Calculate left_bytes from used and total
+            left_bytes = total_bytes - used_bytes if total_bytes > 0 else 0
+
+            # Update storage using the widget's update_storage() method
+            widget.update_storage(total_bytes, left_bytes)
+
     def _refresh_display(self):
         """Refresh the table display with current worker data."""
         # Get filtered workers
         filtered_workers = self._apply_filter()
-
-        # Update worker count
-        self.worker_count_label.setText(f"Workers: {len(filtered_workers)}")
 
         # Apply sorting if sort state exists
         if self._sort_column is not None and 0 <= self._sort_column < len(self._active_columns):
@@ -867,13 +1200,15 @@ class WorkerStatusWidget(QWidget):
 
                         layout.addWidget(text_label)
 
-                        # Add auto icon
+                        # Stretch pushes auto icon to the right edge
+                        layout.addStretch()
+
+                        # Add auto icon - SCALED from 126x57 to 42x19 (right-aligned)
                         auto_icon_label = QLabel()
                         auto_icon = get_icon_manager().get_icon('auto')
-                        auto_icon_label.setPixmap(auto_icon.pixmap(16, 16))
+                        auto_icon_label.setPixmap(auto_icon.pixmap(42, 19))
                         layout.addWidget(auto_icon_label)
 
-                        layout.addStretch()
                         self.status_table.setCellWidget(row_idx, col_idx, container)
                     else:
                         # Regular text item for non-auto hosts
@@ -901,37 +1236,85 @@ class WorkerStatusWidget(QWidget):
                     self.status_table.setItem(row_idx, col_idx, speed_item)
 
                 elif col_config.id == 'status':
-                    # Status column
-                    status_item = QTableWidgetItem()
-                    # Map 'disabled' to 'idle' icon since 'disabled' icon doesn't exist
-                    status_icon = self._icon_cache.get(
-                        'idle' if worker.status == 'disabled' else worker.status,
-                        QIcon()
-                    )
-                    status_item.setIcon(status_icon)
-                    status_item.setText(worker.status.capitalize())
-                    status_item.setTextAlignment(col_config.alignment)
+                    # Status column with custom widget for icon padding
+                    # Use a widget container with icon + text to enable 4px left padding
+                    container = QWidget()
+                    layout = QHBoxLayout(container)
+                    layout.setContentsMargins(4, 0, 4, 0)  # 4px left padding for icon
+                    layout.setSpacing(4)
+
+                    # Add icon
+                    icon_label = QLabel()
+                    # Use dedicated 'disabled' icon for disabled workers
+                    status_icon = self._icon_cache.get(worker.status, QIcon())
+                    icon_label.setPixmap(status_icon.pixmap(16, 16))
+                    layout.addWidget(icon_label)
+
+                    # Add text
+                    text_label = QLabel(worker.status.capitalize())
+                    text_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
 
                     # Color coding
                     if worker.status == 'uploading':
-                        status_item.setForeground(Qt.GlobalColor.darkGreen)
+                        text_label.setStyleSheet("color: darkgreen;")
                     elif worker.status == 'error':
-                        status_item.setForeground(Qt.GlobalColor.red)
+                        text_label.setStyleSheet("color: red;")
                     elif worker.status == 'paused':
-                        status_item.setForeground(Qt.GlobalColor.darkYellow)
+                        text_label.setStyleSheet("color: #B8860B;")  # darkYellow
                     elif worker.status == 'disabled':
-                        status_item.setForeground(self.palette().color(QPalette.ColorRole.PlaceholderText))
-                        font = status_item.font()
+                        text_label.setStyleSheet(f"color: {self.palette().color(QPalette.ColorRole.PlaceholderText).name()};")
+                        font = text_label.font()
                         font.setItalic(True)
-                        status_item.setFont(font)
+                        text_label.setFont(font)
 
-                    self.status_table.setItem(row_idx, col_idx, status_item)
+                    layout.addWidget(text_label)
+                    layout.addStretch()
+
+                    self.status_table.setCellWidget(row_idx, col_idx, container)
+
+                elif col_config.id == 'files_remaining':
+                    # Files remaining column
+                    files_text = format_count(worker.files_remaining) if worker.files_remaining > 0 else "—"
+                    files_item = QTableWidgetItem(files_text)
+                    files_item.setTextAlignment(col_config.alignment)
+                    # Monospace font
+                    files_font = QFont("Consolas", 9)
+                    files_font.setStyleHint(QFont.StyleHint.Monospace)
+                    files_item.setFont(files_font)
+                    self.status_table.setItem(row_idx, col_idx, files_item)
+
+                elif col_config.id == 'bytes_remaining':
+                    # Bytes remaining column
+                    bytes_text = format_bytes(worker.bytes_remaining) if worker.bytes_remaining > 0 else "—"
+                    bytes_item = QTableWidgetItem(bytes_text)
+                    bytes_item.setTextAlignment(col_config.alignment)
+                    bytes_item.setData(Qt.ItemDataRole.UserRole + 10, worker.bytes_remaining)
+                    # Monospace font
+                    bytes_font = QFont("Consolas", 9)
+                    bytes_font.setStyleHint(QFont.StyleHint.Monospace)
+                    bytes_item.setFont(bytes_font)
+                    self.status_table.setItem(row_idx, col_idx, bytes_item)
+
+                elif col_config.id == 'storage':
+                    # Storage progress bar column
+                    # IMX.to has unlimited storage - show green bar with infinity symbol
+                    if worker.worker_type == 'imx':
+                        storage_widget = StorageProgressBar()
+                        storage_widget.set_unlimited()
+                        storage_widget.setProperty("worker_id", worker.worker_id)
+                    else:
+                        storage_widget = self._create_storage_progress_widget(
+                            worker.storage_used_bytes,
+                            worker.storage_total_bytes,
+                            worker.worker_id
+                        )
+                    self.status_table.setCellWidget(row_idx, col_idx, storage_widget)
 
                 elif col_config.id == 'settings':
                     # Settings button column
                     settings_btn = QPushButton()
                     settings_btn.setIcon(self._icon_cache.get('settings', QIcon()))
-                    settings_btn.setFixedSize(24, 24)
+                    settings_btn.setFixedSize(26, 26)
                     settings_btn.setFlat(True)
                     settings_btn.setToolTip(f"Configure {worker.display_name}")
                     settings_btn.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -973,9 +1356,20 @@ class WorkerStatusWidget(QWidget):
                     item.setTextAlignment(col_config.alignment)
 
                     # Monospace font for numeric values
+                    # Use 8pt for uploaded/peak/avg speed metrics, 9pt for others
                     if col_config.col_type in (ColumnType.BYTES, ColumnType.SPEED, ColumnType.COUNT, ColumnType.PERCENT):
-                        metric_font = QFont("Consolas", 9)
+                        # Check if this is one of the 9 specific metrics that should use 8pt font
+                        is_small_metric = col_config.id in (
+                            'bytes_session', 'bytes_today', 'bytes_alltime',
+                            'peak_speed_session', 'peak_speed_today', 'peak_speed_alltime',
+                            'avg_speed_session', 'avg_speed_today', 'avg_speed_alltime'
+                        )
+                        metric_font = QFont("Consolas")
                         metric_font.setStyleHint(QFont.StyleHint.Monospace)
+                        if is_small_metric:
+                            metric_font.setPointSizeF(8.0)  # Slightly smaller than 9pt
+                        else:
+                            metric_font.setPointSize(9)
                         item.setFont(metric_font)
 
                     self.status_table.setItem(row_idx, col_idx, item)
@@ -1040,12 +1434,25 @@ class WorkerStatusWidget(QWidget):
                 for host_id, host_config in config_manager.hosts.items():
                     if host_id.lower() not in existing_hosts:
                         is_enabled = get_file_host_setting(host_id, "enabled", "bool")
+                        # Load cached storage data from QSettings for filehost placeholders
+                        settings = QSettings("ImxUploader", "ImxUploadGUI")
+                        total_str = settings.value(f"FileHosts/{host_id}/storage_total", "0")
+                        left_str = settings.value(f"FileHosts/{host_id}/storage_left", "0")
+                        try:
+                            storage_total = int(total_str) if total_str else 0
+                            storage_left = int(left_str) if left_str else 0
+                            storage_used = storage_total - storage_left
+                        except (ValueError, TypeError):
+                            storage_used = 0
+                            storage_total = 0
                         placeholder = WorkerStatus(
                             worker_id=f"placeholder_{host_id}",
                             worker_type="filehost",
                             hostname=host_id,
                             display_name=host_config.name,
-                            status="disabled" if not is_enabled else "idle"
+                            status="disabled" if not is_enabled else "idle",
+                            storage_used_bytes=storage_used,
+                            storage_total_bytes=storage_total
                         )
                         if is_enabled:
                             enabled_hosts.append(placeholder)
@@ -1083,12 +1490,25 @@ class WorkerStatusWidget(QWidget):
                 for host_id, host_config in config_manager.hosts.items():
                     if host_id.lower() not in existing_hosts:
                         if get_file_host_setting(host_id, "enabled", "bool"):
+                            # Load cached storage data from QSettings for enabled filehost placeholders
+                            settings = QSettings("ImxUploader", "ImxUploadGUI")
+                            total_str = settings.value(f"FileHosts/{host_id}/storage_total", "0")
+                            left_str = settings.value(f"FileHosts/{host_id}/storage_left", "0")
+                            try:
+                                storage_total = int(total_str) if total_str else 0
+                                storage_left = int(left_str) if left_str else 0
+                                storage_used = storage_total - storage_left
+                            except (ValueError, TypeError):
+                                storage_used = 0
+                                storage_total = 0
                             placeholder = WorkerStatus(
                                 worker_id=f"placeholder_{host_id}",
                                 worker_type="filehost",
                                 hostname=host_id,
                                 display_name=host_config.name,
-                                status="idle"
+                                status="idle",
+                                storage_used_bytes=storage_used,
+                                storage_total_bytes=storage_total
                             )
                             result.append(placeholder)
                 return result
@@ -1109,11 +1529,16 @@ class WorkerStatusWidget(QWidget):
             speed_bps: Speed in bytes per second
 
         Returns:
-            Formatted speed string always as MiB/s with 2 decimals (e.g., "1.23 MiB/s", "0.00 MiB/s")
+            Formatted speed string as MiB/s with 2 decimals (e.g., "1.23 MiB/s")
+            or em-dash (—) for zero/none values
         """
+        # Return em-dash for zero or None values
+        if speed_bps is None or speed_bps <= 0:
+            return "—"
+
         # Convert bytes/s to MiB/s (divide by 1024^2)
         mib_per_s = speed_bps / (1024.0 * 1024.0)
-        # Always show MiB/s with 2 decimal places for consistency
+        # Show MiB/s with 2 decimal places
         return f"{mib_per_s:.2f} MiB/s"
 
     def _format_display_name(self, hostname: str, worker_type: str) -> str:
@@ -1157,6 +1582,20 @@ class WorkerStatusWidget(QWidget):
                         self.worker_selected.emit(worker_id, worker_type)
         else:
             self._selected_worker_id = None
+
+    def _on_row_double_clicked(self, item):
+        """Handle double-click on table row to open host config."""
+        row = self.status_table.currentRow()
+        icon_col_idx = self._get_column_index('icon')
+        if icon_col_idx >= 0:
+            icon_item = self.status_table.item(row, icon_col_idx)
+            if icon_item:
+                worker_type = icon_item.data(Qt.ItemDataRole.UserRole + 1)
+                hostname = self.status_table.item(row, self._get_column_index('hostname'))
+                if hostname and worker_type == 'filehost':
+                    self.open_host_config_requested.emit(hostname.text().lower())
+                elif worker_type == 'imx':
+                    self.open_settings_tab_requested.emit(1)  # Credentials tab
 
     # =========================================================================
     # Public API
@@ -1209,27 +1648,33 @@ class WorkerStatusWidget(QWidget):
                 action.setData(col.id)
                 action.triggered.connect(lambda checked, cid=col.id: self._toggle_column(cid, checked))
 
-        # Metrics columns section
+        # Metrics columns section - GROUP BY METRIC TYPE
         metrics_menu = menu.addMenu("Metrics Columns")
 
-        # Group by period
-        session_menu = metrics_menu.addMenu("Session")
-        today_menu = metrics_menu.addMenu("Today")
-        alltime_menu = metrics_menu.addMenu("All Time")
+        # Group by metric type instead of period
+        bytes_menu = metrics_menu.addMenu("Bytes Uploaded")
+        files_menu = metrics_menu.addMenu("Files Uploaded")
+        avg_speed_menu = metrics_menu.addMenu("Average Speed")
+        peak_speed_menu = metrics_menu.addMenu("Peak Speed")
+        success_menu = metrics_menu.addMenu("Success Rate")
+
+        # Map metric_key to menu
+        metric_to_menu = {
+            'bytes_uploaded': bytes_menu,
+            'files_uploaded': files_menu,
+            'avg_speed': avg_speed_menu,
+            'peak_speed': peak_speed_menu,
+            'success_rate': success_menu,
+        }
 
         for col in METRIC_COLUMNS:
-            if col.period == 'session':
-                target_menu = session_menu
-            elif col.period == 'today':
-                target_menu = today_menu
-            else:
-                target_menu = alltime_menu
-
-            action = target_menu.addAction(col.name)
-            action.setCheckable(True)
-            action.setChecked(self._is_column_visible(col.id))
-            action.setData(col.id)
-            action.triggered.connect(lambda checked, cid=col.id: self._toggle_column(cid, checked))
+            if col.metric_key in metric_to_menu:
+                target_menu = metric_to_menu[col.metric_key]
+                action = target_menu.addAction(col.name)
+                action.setCheckable(True)
+                action.setChecked(self._is_column_visible(col.id))
+                action.setData(col.id)
+                action.triggered.connect(lambda checked, cid=col.id: self._toggle_column(cid, checked))
 
         menu.addSeparator()
 
@@ -1312,16 +1757,24 @@ class WorkerStatusWidget(QWidget):
             col_config = self._active_columns[logical_index]
             # Only sort on sortable columns (not icon or widget columns)
             if col_config.col_type not in (ColumnType.ICON, ColumnType.WIDGET):
-                # Toggle sort order - FIX: Corrected inverted logic
                 header = self.status_table.horizontalHeader()
-                current_order = header.sortIndicatorOrder()
-                new_order = Qt.SortOrder.AscendingOrder if current_order == Qt.SortOrder.DescendingOrder else Qt.SortOrder.DescendingOrder
+
+                # Toggle sort order if clicking same column, otherwise ascending
+                if self._sort_column == logical_index:
+                    # Toggle current order
+                    new_order = Qt.SortOrder.DescendingOrder if self._sort_order == Qt.SortOrder.AscendingOrder else Qt.SortOrder.AscendingOrder
+                else:
+                    # New column - start with ascending
+                    new_order = Qt.SortOrder.AscendingOrder
 
                 # Store sort state
                 self._sort_column = logical_index
                 self._sort_order = new_order
 
-                # Trigger refresh instead of direct sortItems()
+                # Update sort indicator
+                header.setSortIndicator(logical_index, new_order)
+
+                # Trigger refresh with new sort
                 self._refresh_display()
                 self._save_column_settings()
 
@@ -1337,8 +1790,7 @@ class WorkerStatusWidget(QWidget):
         visible_ids = [col.id for col in self._active_columns]
         settings.setValue("worker_status/visible_columns", visible_ids)
 
-        # Debug logging (only log count, not full list to reduce spam)
-        log(f"Saved {len(visible_ids)} column settings", level="debug", category="ui")
+        # Column settings saved (debug logging removed to prevent spam)
 
         # Save visual order separately (for drag-reorder restoration)
         header = self.status_table.horizontalHeader()
@@ -1388,13 +1840,25 @@ class WorkerStatusWidget(QWidget):
         # Load column widths
         widths = settings.value("worker_status/column_widths", None, type=dict)
 
-        # Rebuild table with loaded columns
+        # RESTORE SORT STATE BEFORE rebuilding table
+        # This ensures _refresh_display() (called by _rebuild_table_columns) uses correct sort
+        sort_column_id = settings.value("worker_status/sort_column", None, type=str)
+        sort_order_val = settings.value("worker_status/sort_order", 0, type=int)
+        if sort_column_id:
+            # Find the column index by ID
+            sort_col_idx = next((i for i, col in enumerate(self._active_columns) if col.id == sort_column_id), -1)
+            if sort_col_idx >= 0:
+                self._sort_column = sort_col_idx
+                self._sort_order = Qt.SortOrder(sort_order_val)
+
+        # NOW rebuild table - _refresh_display() will use the restored sort state
         self._rebuild_table_columns()
 
-        # Apply saved widths after rebuild
+        # Apply saved widths after rebuild (but only for resizable columns)
+        # Non-resizable columns (icon, settings) should always use ColumnConfig.width
         if widths:
             for i, col in enumerate(self._active_columns):
-                if col.id in widths:
+                if col.id in widths and col.resizable:
                     self.status_table.setColumnWidth(i, int(widths[col.id]))
 
         # Restore visual column order from saved settings
@@ -1429,14 +1893,10 @@ class WorkerStatusWidget(QWidget):
                 finally:
                     header.blockSignals(False)
 
-        # Restore sorting state
-        sort_column_id = settings.value("worker_status/sort_column", None, type=str)
-        sort_order = settings.value("worker_status/sort_order", 0, type=int)
-        if sort_column_id:
-            # Find the column index by ID
-            sort_col_idx = next((i for i, col in enumerate(self._active_columns) if col.id == sort_column_id), -1)
-            if sort_col_idx >= 0:
-                self.status_table.sortItems(sort_col_idx, Qt.SortOrder(sort_order))
+        # Update header sort indicator (visual only - sort state already restored above)
+        if self._sort_column is not None:
+            header = self.status_table.horizontalHeader()
+            header.setSortIndicator(self._sort_column, self._sort_order)
 
     def _apply_disabled_style(self, element: Any) -> None:
         """Apply disabled/grayed-out styling to widget or table item.

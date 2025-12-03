@@ -36,10 +36,6 @@ class MetricsSignals(QObject):
     # Args: host_name (str), metrics (dict)
     host_metrics_updated = pyqtSignal(str, dict)
 
-    # Emitted when aggregated session totals change
-    # Args: all_hosts_metrics (dict)
-    session_totals_updated = pyqtSignal(dict)
-
 
 class MetricsStore:
     """
@@ -95,6 +91,16 @@ class MetricsStore:
             # Structure: {host_name: {bytes_uploaded, files_uploaded, files_failed,
             #                         total_transfer_time, peak_speed, avg_speed}}
             self._session_cache: Dict[str, Dict[str, Any]] = {}
+
+            # Today's metrics cache for fast access
+            # Structure: {host_name: {bytes_uploaded, files_uploaded, files_failed,
+            #                         total_transfer_time, peak_speed, avg_speed, success_rate}}
+            self._today_cache: Dict[str, Dict[str, Any]] = {}
+
+            # All-time metrics cache for fast access
+            # Structure: {host_name: {bytes_uploaded, files_uploaded, files_failed,
+            #                         total_transfer_time, peak_speed, avg_speed, success_rate}}
+            self._all_time_cache: Dict[str, Dict[str, Any]] = {}
 
             # Write buffer queue
             self._write_queue: Queue = Queue()
@@ -246,8 +252,73 @@ class MetricsStore:
             else:
                 cache['avg_speed'] = 0.0
 
-            # Copy for signal emission
+            # Update today_cache (initialize empty if not present)
+            today = datetime.now().strftime('%Y-%m-%d')
+            if host_name not in self._today_cache:
+                # Initialize empty cache - avoid blocking DB query during record
+                # Actual historical data loaded via _populate_initial_metrics() in worker_status_widget
+                self._today_cache[host_name] = {
+                    'bytes_uploaded': 0,
+                    'files_uploaded': 0,
+                    'files_failed': 0,
+                    'total_transfer_time': 0.0,
+                    'peak_speed': 0.0,
+                    'speeds': [],
+                    'avg_speed': 0.0
+                }
+
+            today_cache = self._today_cache[host_name]
+            today_cache['bytes_uploaded'] += bytes_uploaded
+            today_cache['total_transfer_time'] += transfer_time
+            if success:
+                today_cache['files_uploaded'] += 1
+            else:
+                today_cache['files_failed'] += 1
+            if speed > today_cache['peak_speed']:
+                today_cache['peak_speed'] = speed
+            today_cache['speeds'].append(speed)
+            if len(today_cache['speeds']) > 10:
+                today_cache['speeds'] = today_cache['speeds'][-10:]
+            if today_cache['speeds']:
+                today_cache['avg_speed'] = sum(today_cache['speeds']) / len(today_cache['speeds'])
+            else:
+                today_cache['avg_speed'] = 0.0
+
+            # Update all_time_cache (initialize empty if not present)
+            if host_name not in self._all_time_cache:
+                # Initialize empty cache - avoid blocking DB query during record
+                # Actual historical data loaded via _populate_initial_metrics() in worker_status_widget
+                self._all_time_cache[host_name] = {
+                    'bytes_uploaded': 0,
+                    'files_uploaded': 0,
+                    'files_failed': 0,
+                    'total_transfer_time': 0.0,
+                    'peak_speed': 0.0,
+                    'speeds': [],
+                    'avg_speed': 0.0
+                }
+
+            all_time_cache = self._all_time_cache[host_name]
+            all_time_cache['bytes_uploaded'] += bytes_uploaded
+            all_time_cache['total_transfer_time'] += transfer_time
+            if success:
+                all_time_cache['files_uploaded'] += 1
+            else:
+                all_time_cache['files_failed'] += 1
+            if speed > all_time_cache['peak_speed']:
+                all_time_cache['peak_speed'] = speed
+            all_time_cache['speeds'].append(speed)
+            if len(all_time_cache['speeds']) > 10:
+                all_time_cache['speeds'] = all_time_cache['speeds'][-10:]
+            if all_time_cache['speeds']:
+                all_time_cache['avg_speed'] = sum(all_time_cache['speeds']) / len(all_time_cache['speeds'])
+            else:
+                all_time_cache['avg_speed'] = 0.0
+
+            # Copy all three caches for signal emission
             metrics_copy = self._format_metrics(cache)
+            today_metrics_copy = self._format_metrics(today_cache)
+            all_time_metrics_copy = self._format_metrics(all_time_cache)
 
         # Queue database write
         self._write_queue.put({
@@ -262,13 +333,13 @@ class MetricsStore:
 
         # Emit signals for UI updates
         try:
-            # Wrap in nested format expected by UI (only session updated here)
-            nested_metrics = {'session': metrics_copy}
+            # Wrap in nested format with all three metric periods
+            nested_metrics = {
+                'session': metrics_copy,
+                'today': today_metrics_copy,
+                'all_time': all_time_metrics_copy
+            }
             self.signals.host_metrics_updated.emit(host_name, nested_metrics)
-
-            # Also emit session totals
-            totals = self.get_all_host_stats()
-            self.signals.session_totals_updated.emit(totals)
         except Exception as e:
             logger.debug(f"Failed to emit metrics signals: {e}")
 
@@ -607,12 +678,8 @@ class MetricsStore:
         """
         with self._cache_lock:
             self._session_cache.clear()
-
-        # Emit empty totals
-        try:
-            self.signals.session_totals_updated.emit({})
-        except Exception as e:
-            logger.debug(f"Failed to emit session reset signal: {e}")
+            self._today_cache.clear()
+            self._all_time_cache.clear()
 
         logger.debug("Session metrics reset")
 

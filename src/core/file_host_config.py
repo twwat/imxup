@@ -371,7 +371,13 @@ def save_file_host_setting(host_id: str, key: str, value: Any) -> None:
             cfg.add_section("FILE_HOSTS")
 
         # Write value
-        cfg.set("FILE_HOSTS", f"{host_id}_{key}", str(value))
+        if value is None:
+            # Don't write None to INI - let get_file_host_setting() use defaults
+            # Remove key if it exists to clean up INI file
+            if cfg.has_option("FILE_HOSTS", f"{host_id}_{key}"):
+                cfg.remove_option("FILE_HOSTS", f"{host_id}_{key}")
+        else:
+            cfg.set("FILE_HOSTS", f"{host_id}_{key}", str(value))
 
         # Save to file
         try:

@@ -151,6 +151,10 @@ QProgressBar[storage_status="medium"]::chunk  { background-color: #5cace2; }
 QProgressBar[storage_status="low"]            { border: 1px solid rgb(190, 65, 51); background-color: #ff9999; }
 QProgressBar[storage_status="low"]::chunk     { background-color: #e74c3c; }
 
+/* Storage progress bars - unknown/unavailable (neutral gray) */
+QProgressBar[storage_status="unknown"]         { border: 1px solid #d0d0d0; background-color: #f5f5f5; }
+QProgressBar[storage_status="unknown"]::chunk  { background-color: #cccccc; }
+
 /* Storage bars font size */
 QProgressBar[class="storage-bar"] { font-size: 11px; font-weight: bold; }
 
@@ -318,6 +322,12 @@ QLineEdit#commandPreview {
 QLabel[class="host-name-disabled"] { color: #888888; font-weight: bold; }
 QLabel[class="host-name-enabled"]  { font-weight: bold; }
 
+/* Multi-line header styling - Light Theme */
+MultiLineHeaderView {
+    qproperty-primaryColor: #1a1a1a;
+    qproperty-secondaryColor: #666666;
+}
+
 /* LIGHT_THEME_END */
 
 /* ************************************************************************************************************************************************ */
@@ -371,6 +381,10 @@ QProgressBar[storage_status="medium"]::chunk  { background-color: #1d98de; }
 /* Storage progress bars - low space (red, uses failed colors) */
 QProgressBar[storage_status="low"]            { border: 1px solid #a71d2a; background-color: #6b2424; }
 QProgressBar[storage_status="low"]::chunk     { background-color: #a71d2a; }
+
+/* Storage progress bars - unknown/unavailable (neutral gray) */
+QProgressBar[storage_status="unknown"]         { border: 1px solid #555555; background-color: #2a2a2a; }
+QProgressBar[storage_status="unknown"]::chunk  { background-color: #444444; }
 
 QProgressBar[class="overall-progress"]      { color: #eeeeee; }
 QLabel[class="progress-text"]               { color: #eeeeee; }
@@ -525,6 +539,12 @@ QLineEdit#commandPreview {
 
 QLabel[class="host-name-disabled"] { color: #888888; font-weight: bold; }
 QLabel[class="host-name-enabled"]  { font-weight: bold; }
+
+/* Multi-line header styling - Dark Theme */
+MultiLineHeaderView {
+    qproperty-primaryColor: #e0e0e0;
+    qproperty-secondaryColor: #888888;
+}
 
 /* DARK_THEME_END */
 

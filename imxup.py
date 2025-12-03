@@ -63,7 +63,7 @@ except ImportError:
     winreg = None  # Not available on Linux/Mac
 import mimetypes
 
-__version__ = "0.6.03"  # Application version number
+__version__ = "0.6.04"  # Application version number
 
 # Lazy User-Agent string builder to avoid platform.system() hang during module import
 # (platform.system() can hang on some Windows systems, breaking splash screen initialization)
@@ -2454,6 +2454,7 @@ def main():
     
     # Handle GUI launch
     if args.gui:
+        debug_print(f"Launching ImxUp v{__version__} in GUI mode...")
         try:
             # Set environment variable to indicate GUI mode BEFORE stripping --gui from sys.argv
             # This allows ImxToUploader to detect GUI mode even after sys.argv is modified
@@ -2462,8 +2463,8 @@ def main():
             # Import only lightweight PyQt6 basics for splash screen FIRST
             debug_print("Importing PyQt6.QtWidgets...")
             from PyQt6.QtWidgets import QApplication, QProgressDialog
-            from PyQt6.QtCore import Qt
-            debug_print("Importing splash_screen...")
+            from PyQt6.QtCore import Qt, QTimer
+            #debug_print("Importing splash screen...")
             from src.gui.splash_screen import SplashScreen
 
             # Check if folder paths were provided for GUI
@@ -2477,9 +2478,10 @@ def main():
             # Create QApplication and show splash IMMEDIATELY (before heavy imports)
             debug_print("Creating QApplication...")
             app = QApplication(sys.argv)
+            #debug_print("Setting Fusion style...")
             app.setStyle("Fusion")
+            #debug_print("Setting setQuitOnLastWindowClosed to True...")
             app.setQuitOnLastWindowClosed(True)
-            debug_print("Setting setQuitOnLastWindowClosed to True")
 
             # Install Qt message handler to suppress QPainter warnings
             from PyQt6.QtCore import qInstallMessageHandler, QtMsgType
@@ -2592,13 +2594,19 @@ def main():
 
             window._initialize_table_from_queue(progress_callback=update_progress)
 
-            # Process events to ensure the QTimer.singleShot(0) in _initialize_table_from_queue completes
-            QApplication.processEvents()
+            # DO NOT call processEvents() here - it would force immediate execution of the
+            # QTimer.singleShot(100, _create_deferred_widgets) callback, creating 997 widgets
+            # synchronously and blocking the UI for 10+ seconds BEFORE the window is shown.
+            # Let the deferred widget creation happen naturally after window.show().
 
             progress.close()
 
             # NOW show the main window (galleries already loaded)
             window.show()
+            window.raise_()        # Bring to front of window stack
+
+            # Defer window activation to avoid blocking the event loop
+            QTimer.singleShot(0, window.activateWindow)
 
             # Initialize file host workers AFTER GUI is loaded and displayed
             if hasattr(window, "file_host_manager") and window.file_host_manager:
@@ -2624,10 +2632,10 @@ def main():
             sys.exit(app.exec())
 
         except ImportError as e:
-            debug_print(f"{timestamp()} CRITICAL: Import error: {e}")
+            debug_print(f"CRITICAL: Import error: {e}")
             sys.exit(1)
         except Exception as e:
-            debug_print(f"{timestamp()} CRITICAL: Error launching GUI: {e}")
+            debug_print(f"CRITICAL: Error launching GUI: {e}")
             import traceback
             traceback.print_exc()
             sys.exit(1)

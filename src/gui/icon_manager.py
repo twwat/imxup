@@ -53,6 +53,7 @@ class IconManager:
         'host_disabled':        ['host_disabled-light.png',     'host_disabled-dark.png'],
         'imx':                  ['imx-light.png',               'imx-dark.png'],
         'auto':                 ['auto-light.png',              'auto-dark.png'],
+        'disabledhost':         ['disabledhost-dark.png',       'disabledhost-light.png'],
 
         # UI element icons / Quick Settings
         'settings':             ['settings-light.png',          'settings-dark.png'],

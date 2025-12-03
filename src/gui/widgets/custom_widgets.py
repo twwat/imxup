@@ -878,7 +878,7 @@ class FileHostsStatusWidget(QWidget):
         self._initialized = False
 
     def update_hosts(self, host_uploads: Dict[str, Dict[str, Any]]):
-        """Update host status icons.
+        """Update host status icons - OPTIMIZED to reuse existing widgets.
 
         Args:
             host_uploads: Dict of {host_name: upload_data}
@@ -896,25 +896,27 @@ class FileHostsStatusWidget(QWidget):
         if icon_manager is None:
             return
 
-        # Clear existing widgets (buttons + stretch) if reinitializing
-        if self._initialized:
-            # Clear all widgets from layout
-            while layout.count():
-                item = layout.takeAt(0)
-                if item and item.widget():
-                    widget = item.widget()
-                    if widget:
-                        widget.deleteLater()
-            self.host_buttons.clear()
-
         # Get all enabled hosts
         enabled_hosts = config_manager.get_enabled_hosts()
 
         # Also include hosts that have uploads (even if now disabled)
         all_hosts_to_show = set(enabled_hosts.keys())
         all_hosts_to_show.update(host_uploads.keys())
+        sorted_hosts = sorted(all_hosts_to_show)
 
-        for host_name in sorted(all_hosts_to_show):
+        # OPTIMIZATION: Reuse existing buttons instead of deleting/recreating
+        if self._initialized:
+            existing_hosts = set(self.host_buttons.keys())
+
+            # Remove buttons ONLY for hosts that are no longer needed
+            hosts_to_remove = existing_hosts - all_hosts_to_show
+            for host_name in hosts_to_remove:
+                btn = self.host_buttons.pop(host_name)
+                layout.removeWidget(btn)
+                btn.deleteLater()
+
+        # Update or create buttons
+        for idx, host_name in enumerate(sorted_hosts):
             # Get host config
             host_config = config_manager.get_host(host_name)
             if not host_config:
@@ -922,30 +924,22 @@ class FileHostsStatusWidget(QWidget):
 
             # Get upload status
             upload = host_uploads.get(host_name, {})
-            has_upload = bool(upload)  # Track if this gallery has an upload for this host
-            status = upload.get('status', 'not_uploaded')  # Default to 'not_uploaded' if no record
+            has_upload = bool(upload)
+            status = upload.get('status', 'not_uploaded')
 
-            # Create button
-            btn = QPushButton()
-            btn.setFixedSize(24, 24)
-
-            # Set tooltip based on upload state
+            # Calculate tooltip based on upload state
             if has_upload:
                 if status == 'completed':
-                    btn.setToolTip(f"{host_config.name}: Click to view download link")
+                    tooltip = f"{host_config.name}: Click to view download link"
                 else:
-                    btn.setToolTip(f"{host_config.name}: {status}")
+                    tooltip = f"{host_config.name}: {status}"
             else:
-                btn.setToolTip(f"{host_config.name}: Click to upload")
-
-            btn.setProperty("class", "icon-btn")
+                tooltip = f"{host_config.name}: Click to upload"
 
             # Load host icon - use -dim variant for not_uploaded status
             if status == 'not_uploaded':
-                # Try dimmed variant first for not uploaded hosts
                 host_icon_path = f"hosts/logo/{host_name}-icon-dim.png"
             else:
-                # Full color for all other statuses
                 host_icon_path = f"hosts/logo/{host_name}-icon.png"
 
             try:
@@ -954,7 +948,7 @@ class FileHostsStatusWidget(QWidget):
                 if icon_path.exists():
                     base_icon = QIcon(str(icon_path))
                 else:
-                    # Fallback to regular icon (for not_uploaded if -dim doesn't exist)
+                    # Fallback to regular icon
                     if status == 'not_uploaded':
                         fallback_path = Path(icon_manager.assets_dir) / f"hosts/logo/{host_name}-icon.png"
                     else:
@@ -972,18 +966,40 @@ class FileHostsStatusWidget(QWidget):
             # Apply status overlay
             final_icon = self._apply_status_overlay(base_icon, status, icon_manager)
 
-            btn.setIcon(final_icon)
-            btn.setIconSize(QSize(19, 19))
+            # Reuse existing button or create new one
+            if host_name in self.host_buttons:
+                # REUSE existing button - just update its properties
+                btn = self.host_buttons[host_name]
 
-            # Connect click handler (click handler queries database for current status)
-            btn.clicked.connect(lambda checked, h=host_name: self.host_clicked.emit(self.gallery_path, h))
+                # Update icon and tooltip (fast operations)
+                btn.setIcon(final_icon)
+                btn.setToolTip(tooltip)
+            else:
+                # CREATE new button only if needed
+                btn = QPushButton()
+                btn.setFixedSize(24, 24)
+                btn.setToolTip(tooltip)
+                btn.setProperty("class", "icon-btn")
+                btn.setIcon(final_icon)
+                btn.setIconSize(QSize(19, 19))
 
-            self.host_buttons[host_name] = btn
-            layout.addWidget(btn)
+                # Connect click handler
+                btn.clicked.connect(lambda checked, h=host_name: self.host_clicked.emit(self.gallery_path, h))
 
+                self.host_buttons[host_name] = btn
+                layout.addWidget(btn)
+
+        # Ensure stretch is at the end
         from PyQt6.QtWidgets import QHBoxLayout
         if isinstance(layout, QHBoxLayout):
+            # Remove existing stretch items
+            for i in range(layout.count() - 1, -1, -1):
+                item = layout.itemAt(i)
+                if item and item.spacerItem():
+                    layout.removeItem(item)
+            # Add stretch at the end
             layout.addStretch()
+
         self._initialized = True
         self.update()  # Force visual refresh after icon updates
 
@@ -1056,3 +1072,241 @@ class FileHostsActionWidget(QWidget):
         layout.addStretch()
 
         self.setLayout(layout)
+
+
+class StorageProgressBar(QWidget):
+    """Reusable storage progress bar with compact 'X.X TiB free' format.
+
+    Matches the File Hosts settings tab display exactly:
+    - Shows free space only ("9.4 TiB free")
+    - Green when plenty of space (< 75% used)
+    - Yellow when medium space (75-90% used)
+    - Red when low space (>= 90% used)
+    - Tooltip with detailed storage information
+
+    Widget Lifecycle:
+    1. Construction: __init__() creates widget and sets up UI
+    2. Pre-insertion: update_storage() MUST be called BEFORE setCellWidget()
+       to populate data and avoid race conditions
+    3. Insertion: setCellWidget() adds widget to table (triggers geometry events)
+    4. Updates: update_storage() can be called any time to refresh data
+    5. Resize: Responsive text formatting adjusts to available width
+
+    Thread Safety:
+    - All methods MUST be called from the main GUI thread only
+    - Use QMetaObject.invokeMethod for cross-thread updates
+    """
+
+    def __init__(self, parent=None):
+        """Initialize storage progress bar widget."""
+        super().__init__(parent)
+
+        # Cache storage values for responsive text formatting
+        self._total_bytes = 0
+        self._left_bytes = 0
+        self._left_formatted = ""  # Cache formatted string for performance
+
+        self._setup_ui()
+
+    def _setup_ui(self):
+        """Initialize the UI with progress bar matching File Hosts tab style."""
+        from PyQt6.QtWidgets import QSizePolicy
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(2, 2, 2, 2)
+        layout.setSpacing(0)
+
+        # Create progress bar with exact settings from file_hosts_settings_widget.py
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setMinimumWidth(50)
+        self.progress_bar.setMaximumHeight(20)
+        self.progress_bar.setMaximum(100)
+        self.progress_bar.setValue(0)
+        self.progress_bar.setTextVisible(True)
+        self.progress_bar.setFormat("")
+        self.progress_bar.setProperty("class", "storage-bar")
+        self.progress_bar.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+
+        layout.addWidget(self.progress_bar)
+
+    def update_storage(self, total_bytes: int, left_bytes: int):
+        """Update storage display with new values.
+
+        Thread Safety: This method MUST be called from the main GUI thread only.
+        Calling from worker threads will cause Qt assertion failures and crashes.
+        Use QMetaObject.invokeMethod with Qt.ConnectionType.QueuedConnection for
+        cross-thread updates.
+
+        Args:
+            total_bytes: Total storage capacity in bytes
+            left_bytes: Free storage remaining in bytes
+        """
+        from PyQt6.QtCore import QThread
+        assert QThread.currentThread() == self.thread(), \
+            "update_storage() must be called from main GUI thread"
+        from src.utils.format_utils import format_binary_size
+
+        # Validate inputs
+        if total_bytes <= 0:
+            # Unknown storage - show empty neutral bar with no text
+            self.progress_bar.setValue(0)
+            self.progress_bar.setFormat("")  # Empty bar, no "Unknown" text
+
+            # Informative tooltip explaining why storage is unavailable
+            tooltip = (
+                "Storage information unavailable\n\n"
+                "Possible reasons:\n"
+                "• Host doesn't report storage quota\n"
+                "• Credentials not configured\n"
+                "• Quota check not yet performed"
+            )
+            self.progress_bar.setToolTip(tooltip)
+
+            # Use new "unknown" status for neutral gray styling
+            self.progress_bar.setProperty("storage_status", "unknown")
+
+            # Cache as invalid so resizeEvent doesn't try to format
+            self._total_bytes = 0
+            self._left_bytes = 0
+
+            self._refresh_style()
+            return
+
+        if left_bytes < 0 or left_bytes > total_bytes:
+            # Invalid data - keep current display unchanged
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.warning(f"Invalid storage data: left_bytes={left_bytes}, total_bytes={total_bytes}")
+            return
+
+        # Cache values for responsive text formatting during resize
+        self._total_bytes = total_bytes
+        self._left_bytes = left_bytes
+
+        # Cache formatted string for performance (avoid re-formatting on resize)
+        self._left_formatted = format_binary_size(left_bytes)
+
+        # Calculate percentages
+        used_bytes = total_bytes - left_bytes
+        percent_used = int((used_bytes / total_bytes) * 100) if total_bytes > 0 else 0
+        percent_free = 100 - percent_used
+
+        # Format strings for tooltip
+        left_formatted = self._left_formatted
+        total_formatted = format_binary_size(total_bytes)
+        used_formatted = format_binary_size(used_bytes)
+
+        # Update progress bar - setValue shows FREE percentage (green when high)
+        self.progress_bar.setValue(percent_free)
+
+        # Set responsive text format based on current width
+        self._update_text_format(self.width())
+
+        # Detailed tooltip matching File Hosts tab format
+        tooltip = f"Storage: {left_formatted} free / {total_formatted} total\nUsed: {used_formatted} ({percent_used}%)"
+        self.progress_bar.setToolTip(tooltip)
+
+        # Color coding based on usage (EXACT thresholds from file_hosts_settings_widget.py)
+        if percent_used >= 90:
+            self.progress_bar.setProperty("storage_status", "low")  # Red - critical
+        elif percent_used >= 75:
+            self.progress_bar.setProperty("storage_status", "medium")  # Yellow - warning
+        else:
+            self.progress_bar.setProperty("storage_status", "plenty")  # Green - good
+
+        # Refresh styling to apply storage_status property
+        self._refresh_style()
+
+    def _update_text_format(self, width: int):
+        """Update text format based on available width.
+
+        Responsive tiers:
+        - width >= 70px: "X.X TiB free"
+        - 50px <= width < 70px: "X.X TiB" (remove "free")
+        - width < 50px: "" (no text)
+
+        Args:
+            width: Current widget width in pixels
+        """
+        # If no valid storage data, don't update format
+        if self._total_bytes <= 0:
+            return
+
+        # Use cached formatted string (set in update_storage) instead of re-formatting
+        left_formatted = self._left_formatted
+
+        if width >= 70:
+            # Normal width: "X.X TiB free"
+            text = f"{left_formatted} free"
+        elif width >= 50:
+            # Narrow width: "X.X TiB" (drop "free")
+            text = left_formatted
+        else:
+            # Very narrow: No text (tooltip still available)
+            text = ""
+
+        self.progress_bar.setFormat(text)
+
+    def set_unlimited(self):
+        """Set storage display to unlimited/infinity mode for hosts with no storage limit.
+
+        This displays a full green bar with an infinity symbol (∞) to indicate
+        that the host has no storage quota restrictions (e.g., IMX.to).
+
+        Thread Safety: This method MUST be called from the main GUI thread only.
+        """
+        from PyQt6.QtCore import QThread
+        assert QThread.currentThread() == self.thread(), \
+            "set_unlimited() must be called from main GUI thread"
+
+        # Cache as unlimited state
+        self._total_bytes = -1  # Special sentinel value for unlimited
+        self._left_bytes = -1
+        self._left_formatted = "∞"
+
+        # Full bar (100%) to indicate maximum available space
+        self.progress_bar.setValue(100)
+
+        # Show infinity symbol - responsive to width
+        self._update_unlimited_text_format(self.width())
+
+        # Tooltip explaining unlimited storage
+        self.progress_bar.setToolTip("Unlimited storage - no quota restrictions")
+
+        # Green color to indicate "plenty" of space
+        self.progress_bar.setProperty("storage_status", "plenty")
+
+        self._refresh_style()
+
+    def _update_unlimited_text_format(self, width: int):
+        """Update text format for unlimited storage based on width.
+
+        Args:
+            width: Current widget width in pixels
+        """
+        if width >= 50:
+            # Show infinity symbol
+            self.progress_bar.setFormat("∞")
+        else:
+            # Very narrow: No text
+            self.progress_bar.setFormat("")
+
+    def resizeEvent(self, event):
+        """Update text format when widget is resized.
+
+        Args:
+            event: QResizeEvent containing old and new sizes
+        """
+        super().resizeEvent(event)
+
+        # Check if unlimited mode (sentinel value)
+        if self._total_bytes == -1:
+            self._update_unlimited_text_format(event.size().width())
+        elif self._total_bytes > 0:
+            # Normal storage mode
+            self._update_text_format(event.size().width())
+
+    def _refresh_style(self):
+        """Force style refresh to apply property changes."""
+        # Use update() instead of unpolish/polish for better performance
+        self.progress_bar.update()
