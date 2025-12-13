@@ -527,6 +527,7 @@ class ImxUploadGUI(QMainWindow):
                 self.file_host_manager.upload_completed.connect(self._on_filehost_worker_completed)
                 self.file_host_manager.upload_failed.connect(self._on_filehost_worker_failed)
                 self.file_host_manager.storage_updated.connect(self.worker_status_widget.update_worker_storage)
+                self.file_host_manager.enabled_workers_changed.connect(self._on_file_hosts_enabled_changed)
 
                 # Connect MetricsStore signals for IMX and file host metrics display
                 from src.utils.metrics_store import get_metrics_store
@@ -5984,6 +5985,26 @@ class ImxUploadGUI(QMainWindow):
             "File Hosts",
             f"File Host Details Dialog will be implemented in Phase 6.\n\nGallery: {os.path.basename(gallery_path)}"
         )
+
+    def _on_file_hosts_enabled_changed(self, _enabled_worker_ids: list):
+        """Refresh all file host widgets when enabled hosts change."""
+        # Get all gallery paths
+        items = self.queue_manager.get_all_items()
+
+        # Batch query for all file host uploads
+        file_host_uploads_map = {}
+        for item in items:
+            uploads = self.queue_manager.store.get_file_host_uploads(item.path)
+            file_host_uploads_map[item.path] = {u['host_name']: u for u in uploads}
+
+        # Update all FileHostsStatusWidget instances
+        for row in range(self.gallery_table.rowCount()):
+            path = self.row_to_path.get(row)
+            if path:
+                status_widget = self.gallery_table.cellWidget(row, GalleryTableWidget.COL_HOSTS_STATUS)
+                if status_widget and hasattr(status_widget, 'update_hosts'):
+                    host_uploads = file_host_uploads_map.get(path, {})
+                    status_widget.update_hosts(host_uploads)
 
     def handle_view_button(self, path: str):
         """Handle view button click - show BBCode for completed, start upload for ready, retry/file manager for failed"""
