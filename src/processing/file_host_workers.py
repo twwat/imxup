@@ -353,6 +353,9 @@ class FileHostWorker(QThread):
             if not spinup_success:
                 self.running = False
                 return
+        else:
+            # No auth required - immediately signal ready
+            self.spinup_complete.emit(self.host_id, "")
 
         while self.running:
             try:

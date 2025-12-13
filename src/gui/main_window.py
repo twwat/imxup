@@ -437,6 +437,13 @@ class ImxUploadGUI(QMainWindow):
         self._loading_abort = False
         self._loading_phase = 0  # Track loading progress (0=not started, 1=phase1, 2=phase2, 3=complete)
 
+        # Thread-safe file host startup tracking
+        from PyQt6.QtCore import QMutex
+        self._file_host_startup_mutex = QMutex()
+        self._file_host_startup_expected = 0
+        self._file_host_startup_completed = 0
+        self._file_host_startup_complete = False
+
         # MILESTONE 4: Track which rows have widgets created for viewport-based lazy loading
         self._rows_with_widgets = set()  # Rows that have progress/action widgets created
 
@@ -528,6 +535,7 @@ class ImxUploadGUI(QMainWindow):
                 self.file_host_manager.upload_failed.connect(self._on_filehost_worker_failed)
                 self.file_host_manager.storage_updated.connect(self.worker_status_widget.update_worker_storage)
                 self.file_host_manager.enabled_workers_changed.connect(self._on_file_hosts_enabled_changed)
+                self.file_host_manager.spinup_complete.connect(self._on_file_host_startup_spinup)
 
                 # Connect MetricsStore signals for IMX and file host metrics display
                 from src.utils.metrics_store import get_metrics_store
@@ -3732,6 +3740,18 @@ class ImxUploadGUI(QMainWindow):
         worker_id = f"filehost_{host_name.lower().replace(' ', '_')}"
         self.worker_status_widget.update_worker_error(worker_id, error)
 
+    def _on_file_host_startup_spinup(self, host_id: str, error: str):
+        """Track worker spinup during startup to know when all are ready."""
+        from PyQt6.QtCore import QMutexLocker
+
+        with QMutexLocker(self._file_host_startup_mutex):
+            if self._file_host_startup_complete:
+                return
+
+            self._file_host_startup_completed += 1
+            if self._file_host_startup_completed >= self._file_host_startup_expected:
+                self._file_host_startup_complete = True
+
     def _update_worker_queue_stats(self):
         """Poll queue manager and update worker status widget with queue statistics.
 
@@ -5988,6 +6008,10 @@ class ImxUploadGUI(QMainWindow):
 
     def _on_file_hosts_enabled_changed(self, _enabled_worker_ids: list):
         """Refresh all file host widgets when enabled hosts change."""
+        # Skip during startup - icons are created via normal widget creation
+        if not self._file_host_startup_complete:
+            return
+
         # Get all gallery paths
         items = self.queue_manager.get_all_items()
 
@@ -7336,6 +7360,12 @@ def main():
     # Initialize file host workers AFTER GUI is loaded and displayed
     if hasattr(window, "file_host_manager") and window.file_host_manager:
         QTimer.singleShot(100, lambda: window.file_host_manager.init_enabled_hosts())
+        # Count how many workers we're waiting for
+        enabled_hosts = [h for h in window.file_host_manager.config_manager.hosts
+                         if window.file_host_manager.is_enabled(h)]
+        window._file_host_startup_expected = len(enabled_hosts)
+        if window._file_host_startup_expected == 0:
+            window._file_host_startup_complete = True
         log("File Host Manager workers will spawn after initial load", level="debug", category="file_hosts")
 
     try:
