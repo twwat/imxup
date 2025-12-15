@@ -2608,14 +2608,26 @@ def main():
             # Defer window activation to avoid blocking the event loop
             QTimer.singleShot(0, window.activateWindow)
 
-            # NOTE: File host workers are initialized later in the event loop after
-            # setting expected count (see main_window.py around line 7376-7391)
-            # This ensures the counting code runs BEFORE workers are started.
-            # Previously this happened here immediately, which was too early.
-            # if hasattr(window, "file_host_manager") and window.file_host_manager:
-            #     from src.utils.logger import log
-            #     log("Initializing file host workers on startup...", level="debug", category="file_hosts")
-            #     window.file_host_manager.init_enabled_hosts()
+            # Initialize file host workers AFTER GUI is loaded and displayed
+            if hasattr(window, "file_host_manager") and window.file_host_manager:
+                # Count enabled hosts BEFORE starting them (read from INI directly)
+                from src.core.file_host_config import get_config_manager, get_file_host_setting
+                config_manager = get_config_manager()
+                enabled_count = 0
+                for host_id in config_manager.hosts:
+                    if get_file_host_setting(host_id, 'enabled', 'bool'):
+                        enabled_count += 1
+
+                window._file_host_startup_expected = enabled_count
+                if window._file_host_startup_expected == 0:
+                    window._file_host_startup_complete = True
+                    log("No file host workers enabled, skipping startup tracking", level="debug", category="startup")
+                else:
+                    log(f"Expecting {window._file_host_startup_expected} file host workers to complete spinup",
+                        level="debug", category="startup")
+
+                # Now start the workers
+                QTimer.singleShot(100, lambda: window.file_host_manager.init_enabled_hosts())
 
             # Now that GUI is visible, hide the console window (unless --debug)
             if os.name == 'nt' and '--debug' not in sys.argv:

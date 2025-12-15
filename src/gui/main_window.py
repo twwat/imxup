@@ -7320,94 +7320,101 @@ def check_single_instance(folder_path=None):
         return False  # No other instance running
 
 
-def main():
-    """Main function - EMERGENCY PERFORMANCE FIX: Show window first, load in background"""
-    app = QApplication(sys.argv)
-    app.setQuitOnLastWindowClosed(True)  # Exit when window closes
-
-    # Show splash screen immediately
-    print(f"{timestamp()} Loading splash screen")
-    splash = SplashScreen()
-    splash.show()
-    splash.update_status("Initialization sequence")
-
-    # Handle command line arguments
-    folders_to_add = []
-    if len(sys.argv) > 1:
-        # Accept multiple folder args (Explorer passes all selections to %V)
-        for arg in sys.argv[1:]:
-            if os.path.isdir(arg):
-                folders_to_add.append(arg)
-        # If another instance is running, forward the first folder (server is single-path)
-        if folders_to_add and check_single_instance(folders_to_add[0]):
-            splash.finish_and_hide()
-            return
-    else:
-        # Check for existing instance even when no folders provided
-        if check_single_instance():
-            print(f"{timestamp()} WARNING: ImxUp GUI already running, attempting to bring existing instance to front.")
-            splash.finish_and_hide()
-            return
-
-    splash.set_status("Qt")
-
-    # Create main window with splash updates
-    window = ImxUploadGUI(splash)
-
-    # Add folder from command line if provided
-    if folders_to_add:
-        window.add_folders(folders_to_add)
-
-    # EMERGENCY FIX: Hide splash and show main window IMMEDIATELY (< 2 seconds)
-    splash.finish_and_hide()
-    window.show()
-    QApplication.processEvents()  # Force window to render NOW
-
-    print(f"{timestamp()} Window visible - starting background gallery load")
-    log(f"Window shown, starting background gallery load", level="info", category="performance")
-
-    # EMERGENCY FIX: Load galleries in background with non-blocking progress
-    # Phase 1: Load critical data (gallery names, status) - batched with yields
-    # Phase 2: Create expensive widgets in background
-    QTimer.singleShot(50, lambda: window._load_galleries_phase1())
-
-    # Initialize file host workers AFTER GUI is loaded and displayed
-    if hasattr(window, "file_host_manager") and window.file_host_manager:
-        # Count enabled hosts BEFORE starting them (read from INI directly)
-        enabled_count = 0
-        for host_id in window.file_host_manager.config_manager.hosts:
-            if window.file_host_manager.get_file_host_setting(host_id, 'enabled', 'bool', False):
-                enabled_count += 1
-
-        window._file_host_startup_expected = enabled_count
-        if window._file_host_startup_expected == 0:
-            window._file_host_startup_complete = True
-            log("No file host workers enabled, skipping startup tracking", level="debug", category="startup")
-        else:
-            log(f"Expecting {window._file_host_startup_expected} file host workers to complete spinup",
-                level="debug", category="startup")
-
-        # Now start the workers
-        QTimer.singleShot(100, lambda: window.file_host_manager.init_enabled_hosts())
-
-    try:
-        sys.exit(app.exec())
-    except KeyboardInterrupt:
-
-        # Clean shutdown
-        if hasattr(window, 'worker') and window.worker:
-            window.worker.stop()
-        if hasattr(window, 'server') and window.server:
-            window.server.stop()
-        if hasattr(window, '_loading_abort'):
-            window._loading_abort = True  # Stop background loading
-        app.quit()
-
-
-
-
-
-# ComprehensiveSettingsDialog moved to imxup_settings.py
-
-if __name__ == "__main__":
-    main()
+# ==============================================================================
+# ORPHANED MAIN FUNCTION - COMMENTED OUT
+# ==============================================================================
+# This main() function is never called. The actual application entry is in imxup.py.
+# The file host initialization code (lines 7374-7391) has been moved to imxup.py
+# around line 2611 where it runs AFTER window.show() but BEFORE app.exec().
+#
+# def main():
+#     """Main function - EMERGENCY PERFORMANCE FIX: Show window first, load in background"""
+#     app = QApplication(sys.argv)
+#     app.setQuitOnLastWindowClosed(True)  # Exit when window closes
+# 
+#     # Show splash screen immediately
+#     print(f"{timestamp()} Loading splash screen")
+#     splash = SplashScreen()
+#     splash.show()
+#     splash.update_status("Initialization sequence")
+# 
+#     # Handle command line arguments
+#     folders_to_add = []
+#     if len(sys.argv) > 1:
+#         # Accept multiple folder args (Explorer passes all selections to %V)
+#         for arg in sys.argv[1:]:
+#             if os.path.isdir(arg):
+#                 folders_to_add.append(arg)
+#         # If another instance is running, forward the first folder (server is single-path)
+#         if folders_to_add and check_single_instance(folders_to_add[0]):
+#             splash.finish_and_hide()
+#             return
+#     else:
+#         # Check for existing instance even when no folders provided
+#         if check_single_instance():
+#             print(f"{timestamp()} WARNING: ImxUp GUI already running, attempting to bring existing instance to front.")
+#             splash.finish_and_hide()
+#             return
+# 
+#     splash.set_status("Qt")
+# 
+#     # Create main window with splash updates
+#     window = ImxUploadGUI(splash)
+# 
+#     # Add folder from command line if provided
+#     if folders_to_add:
+#         window.add_folders(folders_to_add)
+# 
+#     # EMERGENCY FIX: Hide splash and show main window IMMEDIATELY (< 2 seconds)
+#     splash.finish_and_hide()
+#     window.show()
+#     QApplication.processEvents()  # Force window to render NOW
+# 
+#     print(f"{timestamp()} Window visible - starting background gallery load")
+#     log(f"Window shown, starting background gallery load", level="info", category="performance")
+# 
+#     # EMERGENCY FIX: Load galleries in background with non-blocking progress
+#     # Phase 1: Load critical data (gallery names, status) - batched with yields
+#     # Phase 2: Create expensive widgets in background
+#     QTimer.singleShot(50, lambda: window._load_galleries_phase1())
+# 
+#     # Initialize file host workers AFTER GUI is loaded and displayed
+#     if hasattr(window, "file_host_manager") and window.file_host_manager:
+#         # Count enabled hosts BEFORE starting them (read from INI directly)
+#         enabled_count = 0
+#         for host_id in window.file_host_manager.config_manager.hosts:
+#             if window.file_host_manager.get_file_host_setting(host_id, 'enabled', 'bool', False):
+#                 enabled_count += 1
+# 
+#         window._file_host_startup_expected = enabled_count
+#         if window._file_host_startup_expected == 0:
+#             window._file_host_startup_complete = True
+#             log("No file host workers enabled, skipping startup tracking", level="debug", category="startup")
+#         else:
+#             log(f"Expecting {window._file_host_startup_expected} file host workers to complete spinup",
+#                 level="debug", category="startup")
+# 
+#         # Now start the workers
+#         QTimer.singleShot(100, lambda: window.file_host_manager.init_enabled_hosts())
+# 
+#     try:
+#         sys.exit(app.exec())
+#     except KeyboardInterrupt:
+# 
+#         # Clean shutdown
+#         if hasattr(window, 'worker') and window.worker:
+#             window.worker.stop()
+#         if hasattr(window, 'server') and window.server:
+#             window.server.stop()
+#         if hasattr(window, '_loading_abort'):
+#             window._loading_abort = True  # Stop background loading
+#         app.quit()
+# 
+# 
+# 
+# 
+# 
+# # ComprehensiveSettingsDialog moved to imxup_settings.py
+# 
+# # if __name__ == "__main__":
+# #     main()
