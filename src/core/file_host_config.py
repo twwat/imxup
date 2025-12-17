@@ -231,7 +231,8 @@ _HARDCODED_DEFAULTS = {
     "auto_retry": True,
     "max_retries": 3,
     "inactivity_timeout": 300,
-    "upload_timeout": None
+    "upload_timeout": None,
+    "bbcode_format": ""
 }
 
 
@@ -323,7 +324,8 @@ def save_file_host_setting(host_id: str, key: str, value: Any) -> None:
 
     # Validate key (whitelist approach)
     valid_keys = {"enabled", "trigger", "max_connections", "max_file_size_mb",
-                  "auto_retry", "max_retries", "inactivity_timeout", "upload_timeout"}
+                  "auto_retry", "max_retries", "inactivity_timeout", "upload_timeout",
+                  "bbcode_format"}
     if key not in valid_keys:
         raise ValueError(f"Invalid setting key: {key}")
 
@@ -356,6 +358,9 @@ def save_file_host_setting(host_id: str, key: str, value: Any) -> None:
     elif key == "auto_retry":
         if not isinstance(value, bool):
             raise ValueError(f"auto_retry must be bool, got {type(value).__name__}")
+    elif key == "bbcode_format":
+        if value is not None and not isinstance(value, str):
+            raise ValueError(f"bbcode_format must be str or None, got {type(value).__name__}")
 
     # Thread-safe read-modify-write operation
     with _ini_file_lock:

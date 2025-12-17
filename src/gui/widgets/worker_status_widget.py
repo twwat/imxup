@@ -1193,6 +1193,7 @@ class WorkerStatusWidget(QWidget):
                     icon_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
                     icon_item.setData(Qt.ItemDataRole.UserRole, worker.worker_id)
                     icon_item.setData(Qt.ItemDataRole.UserRole + 1, worker.worker_type)
+                    icon_item.setData(Qt.ItemDataRole.UserRole + 2, worker.hostname)
                     self.status_table.setItem(row_idx, col_idx, icon_item)
 
                 elif col_config.id == 'hostname':
@@ -1460,8 +1461,8 @@ class WorkerStatusWidget(QWidget):
                 existing_hosts = {w.hostname.lower() for w in all_workers}
 
                 # Add imx.to placeholder if not already present
-                imx_worker_id = "imx"
-                if imx_worker_id not in self._workers:
+                imx_exists = any(w.worker_type == "imx" for w in self._workers.values())
+                if not imx_exists:
                     imx_placeholder = WorkerStatus(
                         worker_id="placeholder_imx",
                         worker_type="imx",
@@ -1522,8 +1523,8 @@ class WorkerStatusWidget(QWidget):
                 existing_hosts = {w.hostname.lower() for w in all_workers}
 
                 # Add imx.to placeholder if not already present (imx.to is always enabled)
-                imx_worker_id = "imx"
-                if imx_worker_id not in self._workers:
+                imx_exists = any(w.worker_type == "imx" for w in self._workers.values())
+                if not imx_exists:
                     imx_placeholder = WorkerStatus(
                         worker_id="placeholder_imx",
                         worker_type="imx",
@@ -1639,14 +1640,13 @@ class WorkerStatusWidget(QWidget):
         if icon_col_idx >= 0:
             icon_item = self.status_table.item(row, icon_col_idx)
             if icon_item:
-                # Get worker_id from icon column
-                worker_id = icon_item.data(Qt.ItemDataRole.UserRole)
-                worker = self._workers.get(worker_id)
+                # Get data directly from icon column (works for both real and placeholder workers)
+                worker_type = icon_item.data(Qt.ItemDataRole.UserRole + 1)
+                hostname = icon_item.data(Qt.ItemDataRole.UserRole + 2)
 
-                if worker and worker.worker_type == 'filehost':
-                    # Use hostname from worker object (works with both widgets and items)
-                    self.open_host_config_requested.emit(worker.hostname.lower())
-                elif worker and worker.worker_type == 'imx':
+                if hostname and worker_type == 'filehost':
+                    self.open_host_config_requested.emit(hostname.lower())
+                elif worker_type == 'imx':
                     self.open_settings_tab_requested.emit(1)  # Credentials tab
 
     # =========================================================================

@@ -64,6 +64,7 @@ from src.utils.format_utils import timestamp, format_binary_size
 from src.gui.dialogs.message_factory import MessageBoxFactory, show_info, show_error, show_warning
 from src.gui.dialogs.template_manager import TemplateManagerDialog, PlaceholderHighlighter
 from src.gui.dialogs.credential_setup import CredentialSetupDialog
+from src.gui.widgets.advanced_settings_widget import AdvancedSettingsWidget
 
 
 class IconDropFrame(QFrame):
@@ -267,6 +268,7 @@ class ComprehensiveSettingsDialog(QDialog):
         self.setup_scanning_tab()
         self.setup_external_apps_tab()
         self.setup_file_hosts_tab()
+        self.setup_advanced_tab()
 
         # Buttons
         button_layout = QHBoxLayout()
@@ -2202,6 +2204,62 @@ class ComprehensiveSettingsDialog(QDialog):
         # Add tab
         self.tab_widget.addTab(self.file_hosts_widget, "File Hosts")
 
+    def setup_advanced_tab(self):
+        """Setup the Advanced settings tab."""
+        self.advanced_widget = AdvancedSettingsWidget()
+        self.advanced_widget.settings_changed.connect(lambda: self.mark_tab_dirty(7))
+        self.tab_widget.addTab(self.advanced_widget, "Advanced")
+
+    def _load_advanced_settings(self):
+        """Load advanced settings from INI file."""
+        from imxup import get_config_path
+
+        config = configparser.ConfigParser()
+        config_file = get_config_path()
+
+        if os.path.exists(config_file):
+            config.read(config_file)
+            if config.has_section('Advanced'):
+                values = {}
+                for key, value in config.items('Advanced'):
+                    # Convert string values back to appropriate types
+                    if value.lower() in ('true', 'false'):
+                        values[key] = value.lower() == 'true'
+                    else:
+                        try:
+                            values[key] = int(value)
+                        except ValueError:
+                            try:
+                                values[key] = float(value)
+                            except ValueError:
+                                values[key] = value
+                self.advanced_widget.set_values(values)
+
+    def _save_advanced_settings(self):
+        """Save advanced settings to INI file (only non-default values)."""
+        from imxup import get_config_path
+
+        config = configparser.ConfigParser()
+        config_file = get_config_path()
+
+        if os.path.exists(config_file):
+            config.read(config_file)
+
+        # Remove existing Advanced section and recreate with current values
+        if config.has_section('Advanced'):
+            config.remove_section('Advanced')
+
+        non_defaults = self.advanced_widget.get_non_default_values()
+        if non_defaults:
+            config.add_section('Advanced')
+            for key, value in non_defaults.items():
+                config.set('Advanced', key, str(value))
+
+        with open(config_file, 'w') as f:
+            config.write(f)
+
+        return True
+
     def setup_icons_tab(self):
         """Setup the Icon Manager tab with improved side-by-side light/dark preview"""
         icons_widget = QWidget()
@@ -2443,7 +2501,9 @@ class ComprehensiveSettingsDialog(QDialog):
         self._load_external_apps_settings()
         # Load file hosts settings
         self._load_file_hosts_settings()
-    
+        # Load advanced settings
+        self._load_advanced_settings()
+
     def _load_scanning_settings(self):
         """Load scanning settings from INI file"""
         try:
@@ -3045,6 +3105,8 @@ class ComprehensiveSettingsDialog(QDialog):
             elif current_index == 6:  # File Hosts tab
                 self._save_file_hosts_settings()
                 return True
+            elif current_index == 7:  # Advanced tab
+                return self._save_advanced_settings()
             else:
                 return True
         except Exception as e:

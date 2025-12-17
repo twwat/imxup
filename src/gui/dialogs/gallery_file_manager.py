@@ -18,6 +18,7 @@ from PyQt6.QtGui import QIcon, QPixmap, QDragEnterEvent, QDropEvent, QImage
 from PyQt6.QtNetwork import QNetworkAccessManager, QNetworkRequest
 
 from src.core.constants import IMAGE_EXTENSIONS
+from src.utils.logger import log
 
 
 class FileScanner(QThread):
@@ -404,6 +405,9 @@ class GalleryFileManagerDialog(QDialog):
                 height = img_data.get('height', 0)
                 if width and height:
                     details += f"<b>Dimensions:</b> {width} x {height}<br>"
+                elif width == 0 and height == 0:
+                    log(f"DEBUG: Missing dimensions for image '{filename}' in artifact data",
+                        category="fileio", level="debug")
 
                 # Upload URLs
                 details += f"<b>Image URL:</b> <a href='{img_data.get('image_url', '')}'>{img_data.get('image_url', '')}</a><br>"

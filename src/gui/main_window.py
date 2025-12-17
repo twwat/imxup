@@ -7478,7 +7478,15 @@ class ImxUploadGUI(QMainWindow):
         # Load JSON data
         with open(json_path, 'r', encoding='utf-8') as f:
             json_data = json.load(f)
-        
+
+        # Debug: Log the stats section from JSON to diagnose 0x0 dimension issues
+        stats = json_data.get('stats', {})
+        avg_width = stats.get('avg_width', 0)
+        avg_height = stats.get('avg_height', 0)
+        if avg_width == 0 or avg_height == 0:
+            log(f"WARNING: Dimensions are 0 for gallery regeneration. "
+                f"JSON path: {json_path}, stats section: {stats}", category="fileio")
+
         # Reuse existing save_gallery_artifacts function with the new template
         # It will handle BBCode generation, file saving, and JSON updates
         # Use current gallery name from database (which could be renamed), not from old JSON
@@ -7488,16 +7496,16 @@ class ImxUploadGUI(QMainWindow):
             'gallery_id': json_data['meta']['gallery_id'],
             'gallery_name': current_gallery_name,
             'images': json_data.get('images', []),
-            'total_size': json_data['stats']['total_size'],
-            'successful_count': json_data['stats']['successful_count'],
-            'failed_count': json_data['stats'].get('failed_count', 0),
+            'total_size': stats.get('total_size', 0),
+            'successful_count': stats.get('successful_count', 0),
+            'failed_count': stats.get('failed_count', 0),
             'failed_details': [(img.get('filename', ''), 'Previous failure') for img in json_data.get('failures', [])],
-            'avg_width': json_data['stats']['avg_width'],
-            'avg_height': json_data['stats']['avg_height'],
-            'max_width': json_data['stats']['max_width'],
-            'max_height': json_data['stats']['max_height'],
-            'min_width': json_data['stats']['min_width'],
-            'min_height': json_data['stats']['min_height']
+            'avg_width': avg_width,
+            'avg_height': avg_height,
+            'max_width': stats.get('max_width', 0),
+            'max_height': stats.get('max_height', 0),
+            'min_width': stats.get('min_width', 0),
+            'min_height': stats.get('min_height', 0)
         }
         
         # Prepare custom fields dict from the item

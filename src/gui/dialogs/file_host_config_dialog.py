@@ -459,6 +459,18 @@ class FileHostConfigDialog(QDialog):
         self.upload_timeout_spin.valueChanged.connect(self._mark_dirty)
         settings_layout.addRow("Max upload time:", self.upload_timeout_spin)
 
+        # 7. bbcode_format - QLineEdit
+        bbcode_format = get_file_host_setting(self.host_id, "bbcode_format", "str")
+        self.bbcode_format_edit = QLineEdit()
+        self.bbcode_format_edit.setText(bbcode_format if bbcode_format else "")
+        self.bbcode_format_edit.setPlaceholderText("[url=#link#]#hostName#[/url]")
+        self.bbcode_format_edit.setToolTip(
+            "Format for download links in BBCode. Use #link# for URL and #hostName# for host name. "
+            "Leave empty for raw URL."
+        )
+        self.bbcode_format_edit.textChanged.connect(self._mark_dirty)
+        settings_layout.addRow("BBCode Format:", self.bbcode_format_edit)
+
         content_layout.addWidget(settings_group)
 
         # Test Results section
@@ -1343,6 +1355,10 @@ class FileHostConfigDialog(QDialog):
             # Handle nullable upload_timeout (0 = None)
             upload_timeout_value = self.upload_timeout_spin.value()
             save_file_host_setting(self.host_id, "upload_timeout", upload_timeout_value if upload_timeout_value > 0 else None)
+
+            # Save BBCode format (empty string if not set)
+            bbcode_format_value = self.bbcode_format_edit.text().strip()
+            save_file_host_setting(self.host_id, "bbcode_format", bbcode_format_value if bbcode_format_value else "")
 
         except IOError as e:
             errors.append(f"Host settings file I/O failed: {str(e)}")
