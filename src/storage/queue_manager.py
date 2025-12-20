@@ -1089,14 +1089,6 @@ class QueueManager(QObject):
 
                 self._inc_version()
 
-                # Trigger BBCode regeneration when custom field changes
-                parent_obj = getattr(self, 'parent', None)
-                if parent_obj and hasattr(parent_obj, 'regenerate_bbcode_for_gallery'):
-                    try:
-                        parent_obj.regenerate_bbcode_for_gallery(path)
-                    except Exception as e:
-                        print(f"{timestamp()} Error auto-regenerating BBCode for {path}: {e}")
-
                 return True
         return False
 
@@ -1169,16 +1161,6 @@ class QueueManager(QObject):
             self._schedule_debounced_save([path])
 
             self._inc_version()
-
-            # Trigger BBCode regeneration when gallery name changes
-            parent_obj = getattr(self, 'parent', None)
-            if parent_obj and hasattr(parent_obj, 'regenerate_bbcode_for_gallery'):
-                try:
-                    parent_obj.regenerate_bbcode_for_gallery(path)
-                    log(f" Regenerated bbcode for {path}")
-
-                except Exception as e:
-                    log(f" Error auto-regenerating BBCode for {path}: {e}")
 
             return True
 

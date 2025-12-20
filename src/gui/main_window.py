@@ -3776,6 +3776,8 @@ class ImxUploadGUI(QMainWindow):
         QTimer.singleShot(0, lambda: self._refresh_file_host_widgets_for_db_id(db_id))
         # Trigger artifact regeneration if auto-regenerate is enabled (non-blocking, after UI refresh)
         QTimer.singleShot(100, lambda: self._auto_regenerate_for_db_id(db_id))
+        # Update queue display for this host (event-driven, not polled)
+        self._update_filehost_queue_for_host(host_name)
 
     def on_file_host_upload_failed(self, db_id: int, host_name: str, error_message: str):
         """Handle file host upload failed - ASYNC to prevent blocking main thread"""
@@ -3783,6 +3785,27 @@ class ImxUploadGUI(QMainWindow):
         # Defer UI refresh to avoid blocking signal emission
         from PyQt6.QtCore import QTimer
         QTimer.singleShot(0, lambda: self._refresh_file_host_widgets_for_db_id(db_id))
+        # Update queue display for this host (event-driven, not polled)
+        self._update_filehost_queue_for_host(host_name)
+
+    def _update_filehost_queue_for_host(self, host_name: str):
+        """Update queue columns for a specific file host after upload state change.
+
+        Event-driven update: called when uploads complete/fail, not on timer.
+        Queries only the affected host's stats for efficiency.
+
+        Args:
+            host_name: Name of the file host (e.g., 'rapidgator', 'keep2share')
+        """
+        try:
+            if self.queue_manager and self.queue_manager.store:
+                stats = self.queue_manager.store.get_file_host_pending_stats(host_name)
+                self.worker_status_widget.update_filehost_queue_columns(
+                    host_name, stats['files'], stats['bytes']
+                )
+        except (AttributeError, KeyError) as e:
+            # AttributeError: queue_manager not initialized; KeyError: missing stats key
+            log(f"Error updating {host_name} queue stats: {e}", level="warning", category="ui")
 
     def on_file_host_bandwidth_updated(self, kbps: float):
         """Handle file host bandwidth update with smoothing.
@@ -4002,6 +4025,11 @@ class ImxUploadGUI(QMainWindow):
                 return
 
             self._file_host_startup_completed += 1
+
+            # Initialize queue display for this host (shows pending uploads from DB)
+            if not error:
+                self._update_filehost_queue_for_host(host_id)
+
             if self._file_host_startup_completed >= self._file_host_startup_expected:
                 self._file_host_startup_complete = True
                 log(f"All {self._file_host_startup_expected} workers complete, startup finished",

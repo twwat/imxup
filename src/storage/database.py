@@ -157,6 +157,7 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
         CREATE INDEX IF NOT EXISTS file_host_uploads_gallery_idx ON file_host_uploads(gallery_fk);
         CREATE INDEX IF NOT EXISTS file_host_uploads_status_idx ON file_host_uploads(status);
         CREATE INDEX IF NOT EXISTS file_host_uploads_host_idx ON file_host_uploads(host_name);
+        CREATE INDEX IF NOT EXISTS file_host_uploads_host_status_idx ON file_host_uploads(host_name, status);
         """
     )
     # Run migrations after core schema creation (this adds tab_name column and indexes)
@@ -1631,5 +1632,30 @@ class QueueStore:
                 })
 
             return uploads
+
+    def get_file_host_pending_stats(self, host_name: str) -> dict:
+        """Get queue statistics for a specific file host.
+
+        Efficient aggregated query for event-driven queue display updates.
+
+        Args:
+            host_name: Name of the file host
+
+        Returns:
+            Dict with 'files' (count) and 'bytes' (remaining bytes)
+        """
+        with _ConnectionContext(self.db_path) as conn:
+            _ensure_schema(conn)
+            cursor = conn.execute(
+                """
+                SELECT COUNT(*) as files,
+                       COALESCE(SUM(total_bytes - uploaded_bytes), 0) as bytes
+                FROM file_host_uploads
+                WHERE host_name = ? AND status IN ('pending', 'uploading')
+                """,
+                (host_name,)
+            )
+            row = cursor.fetchone()
+            return {'files': row[0], 'bytes': row[1]} if row else {'files': 0, 'bytes': 0}
 
 

@@ -349,8 +349,8 @@ class FileHostWorker(QThread):
 
                     self._log("Successfully validated credentials; spinup complete!", level="info")
                     spinup_success = True
-                    self.status_updated.emit(self.host_id, "ready")
-                    log(f"DEBUG: Emitted status signal: {self.host_id} -> ready", level="debug", category="file_hosts")
+                    self.status_updated.emit(self.host_id, "idle")
+                    log(f"Emitted status signal: {self.host_id} -> idle", level="debug", category="file_hosts")
 
                     # Persist session from first login
                     self._update_session_from_client(client)
@@ -370,9 +370,9 @@ class FileHostWorker(QThread):
                 self.running = False
                 return
         else:
-            # No auth required - immediately signal ready
-            self.status_updated.emit(self.host_id, "ready")
-            log(f"DEBUG: Emitted status signal: {self.host_id} -> ready", level="debug", category="file_hosts")
+            # No auth required - immediately signal idle
+            self.status_updated.emit(self.host_id, "idle")
+            log(f"Emitted status signal: {self.host_id} -> idle", level="debug", category="file_hosts")
             self.spinup_complete.emit(self.host_id, "")
 
         while self.running:

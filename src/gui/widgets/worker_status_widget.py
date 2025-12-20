@@ -14,9 +14,9 @@ from enum import Enum
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QTableWidget, QTableWidgetItem,
     QHeaderView, QLabel, QComboBox, QPushButton, QFrame, QSizePolicy,
-    QMenu, QStyle, QStyleOptionHeader, QProgressBar, QAbstractItemView
+    QMenu, QStyle, QStyleOptionHeader, QProgressBar, QAbstractItemView, QToolTip
 )
-from PyQt6.QtCore import Qt, pyqtSignal, pyqtSlot, QSettings, QTimer, pyqtProperty, QSize, QRect
+from PyQt6.QtCore import Qt, pyqtSignal, pyqtSlot, QSettings, QTimer, pyqtProperty, QSize, QRect, QEvent, QMutex, QMutexLocker
 from PyQt6.QtGui import QIcon, QPixmap, QFont, QPalette, QColor, QFontMetrics
 
 from src.utils.format_utils import format_binary_rate
@@ -28,7 +28,8 @@ from src.core.constants import (
     METRIC_FONT_SIZE_SMALL,
     METRIC_FONT_SIZE_DEFAULT,
     METRIC_CELL_PADDING,
-    METRIC_MIN_FONT_SIZE
+    METRIC_MIN_FONT_SIZE,
+    METRIC_MAX_FONT_SIZE
 )
 
 
@@ -56,10 +57,11 @@ class MultiLineHeaderView(QHeaderView):
       MultiLineHeaderView { qproperty-primaryColor: #000; qproperty-secondaryColor: #666; }
     """
 
-    def __init__(self, orientation=Qt.Orientation.Horizontal, parent=None):
+    def __init__(self, orientation=Qt.Orientation.Horizontal, parent=None, worker_widget=None):
         super().__init__(orientation, parent)
         self._primaryColor = None
         self._secondaryColor = None
+        self._worker_widget = worker_widget  # Direct reference for tooltip access
         # Increase default section height for two lines
         self.setMinimumSectionSize(28)  # Allow icon columns to be 28px
 
@@ -206,6 +208,32 @@ class MultiLineHeaderView(QHeaderView):
 
         painter.restore()
 
+    def event(self, event):
+        """Handle tooltip events for column headers.
+
+        Args:
+            event: The incoming event
+
+        Returns:
+            True if event was handled, False otherwise
+        """
+        if event.type() == QEvent.Type.ToolTip:
+            pos = event.position().toPoint()
+            logical_index = self.logicalIndexAt(pos)
+
+            # Use stored reference (parent traversal unreliable with Qt scroll areas)
+            widget = self._worker_widget
+            if widget and hasattr(widget, '_active_columns'):
+                if 0 <= logical_index < len(widget._active_columns):
+                    col_config = widget._active_columns[logical_index]
+                    # Build tooltip: use tooltip field or fall back to full column name
+                    tooltip_text = col_config.tooltip or col_config.name
+                    if tooltip_text:
+                        QToolTip.showText(event.globalPosition().toPoint(), tooltip_text, self)
+                        return True
+
+        return super().event(event)
+
 
 @dataclass
 class WorkerStatus:
@@ -251,6 +279,7 @@ class ColumnConfig:
     hideable: bool = True                      # Can user hide
     default_visible: bool = True               # Visible by default
     alignment: Qt.AlignmentFlag = field(default_factory=lambda: Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+    tooltip: str = ""                          # Tooltip text for header
 
 
 # Core columns (always available)
@@ -321,16 +350,18 @@ def format_bytes(value: int) -> str:
 
 
 def format_percent(value: float) -> str:
-    """Format percentage.
+    """Format percentage, showing 100% without decimal.
 
     Args:
         value: Percentage value (0-100)
 
     Returns:
-        Formatted percentage string
+        Formatted percentage string (e.g., "50.5%", "100%")
     """
     if value <= 0:
         return "—"
+    if value >= 100:
+        return "100%"
     return f"{value:.1f}%"
 
 
@@ -378,6 +409,7 @@ class WorkerStatusWidget(QWidget):
 
         # Data storage
         self._workers: Dict[str, WorkerStatus] = {}
+        self._workers_mutex = QMutex()  # Thread-safe access to _workers
         self._icon_cache: Dict[str, QIcon] = {}
         # Worker ID → row index mapping for O(1) row lookups
         # IMPORTANT: Only valid between full refreshes (_full_table_rebuild)
@@ -387,6 +419,13 @@ class WorkerStatusWidget(QWidget):
         self._preserved_widths: Dict[str, int] = {}
         # Font cache for metric columns (column_id -> (QFont, QFontMetrics))
         self._column_font_cache: Dict[str, Tuple[QFont, QFontMetrics]] = {}
+
+        # Timer for debounced column resize text re-fitting
+        self._resize_refit_timer = QTimer()
+        self._resize_refit_timer.setSingleShot(True)
+        self._resize_refit_timer.setInterval(150)  # 150ms debounce
+        self._resize_refit_timer.timeout.connect(self._refit_resized_columns)
+        self._pending_resize_columns: set = set()  # Track which columns need re-fitting
 
         # Active columns (user's current selection)
         self._active_columns: List[ColumnConfig] = []
@@ -468,8 +507,8 @@ class WorkerStatusWidget(QWidget):
         # Disable built-in sorting (conflicts with manual sorting)
         # self.status_table.setSortingEnabled(True)
 
-        # Use custom multi-line header
-        header = MultiLineHeaderView(Qt.Orientation.Horizontal, self.status_table)
+        # Use custom multi-line header (pass self for tooltip access)
+        header = MultiLineHeaderView(Qt.Orientation.Horizontal, self.status_table, worker_widget=self)
         self.status_table.setHorizontalHeader(header)
 
         # Enable sort indicators and header clicks
@@ -885,21 +924,43 @@ class WorkerStatusWidget(QWidget):
 
     @pyqtSlot(int, int)
     def update_queue_columns(self, files_remaining: int, bytes_remaining: int):
-        """Update queue-based columns (Files Left, Remaining) for all workers.
+        """Update queue-based columns (Files Left, Remaining) for IMX worker.
+
+        Thread-safe via QMutexLocker on _workers dictionary.
 
         Args:
-            files_remaining: Total files remaining across all galleries
+            files_remaining: Total images remaining across all galleries
             bytes_remaining: Total bytes remaining across all galleries
         """
-        # For now, we'll update all filehost workers with queue totals
-        # In future, could be per-worker if we track which worker handles which gallery
-        for worker_id, worker in self._workers.items():
-            if worker.worker_type == 'filehost':
-                worker.files_remaining = files_remaining
-                worker.bytes_remaining = bytes_remaining
-                # Update cells using existing methods
-                self._update_files_remaining(worker_id, files_remaining)
-                self._update_bytes_remaining(worker_id, bytes_remaining)
+        with QMutexLocker(self._workers_mutex):
+            for worker_id, worker in self._workers.items():
+                if worker.worker_type == 'imx':
+                    worker.files_remaining = files_remaining
+                    worker.bytes_remaining = bytes_remaining
+                    self._update_files_remaining(worker_id, files_remaining)
+                    self._update_bytes_remaining(worker_id, bytes_remaining)
+                    break  # Only one IMX worker
+
+    @pyqtSlot(str, int, int)
+    def update_filehost_queue_columns(self, host_name: str, files_remaining: int, bytes_remaining: int):
+        """Update queue columns for a specific file host worker.
+
+        Called when file host uploads complete/fail (event-driven, not polled).
+        Thread-safe via QMutexLocker on _workers dictionary.
+
+        Args:
+            host_name: Name of the file host (e.g., 'rapidgator', 'keep2share')
+            files_remaining: Number of pending zip uploads for this host
+            bytes_remaining: Total bytes remaining for pending uploads
+        """
+        with QMutexLocker(self._workers_mutex):
+            for worker_id, worker in self._workers.items():
+                if worker.worker_type == 'filehost' and worker.hostname.lower() == host_name.lower():
+                    worker.files_remaining = files_remaining
+                    worker.bytes_remaining = bytes_remaining
+                    self._update_files_remaining(worker_id, files_remaining)
+                    self._update_bytes_remaining(worker_id, bytes_remaining)
+                    break
 
     @pyqtSlot(str)
     def remove_worker(self, worker_id: str):
@@ -989,6 +1050,15 @@ class WorkerStatusWidget(QWidget):
         col_idx = self._get_column_index('speed')
         if col_idx >= 0:
             self._update_worker_cell(worker_id, col_idx, speed_bps, self._format_speed)
+            # Also update tooltip
+            row = self._worker_row_map.get(worker_id)
+            if row is not None:
+                item = self.status_table.item(row, col_idx)
+                if item:
+                    worker = self._workers.get(worker_id)
+                    display_name = worker.display_name if worker else worker_id
+                    speed_text = self._format_speed(speed_bps)
+                    item.setToolTip(f"Current Speed\n{display_name}: {speed_text}")
 
     def _update_worker_status_cell(self, worker_id: str, status: str):
         """Update status icon and text cells separately.
@@ -1009,6 +1079,7 @@ class WorkerStatusWidget(QWidget):
                 # Use status directly for icon - no mapping needed
                 status_icon = self._icon_cache.get(status, QIcon())
                 icon_item.setIcon(status_icon)
+                icon_item.setToolTip(f"Status: {status.capitalize()}")
 
         # Update text column
         text_col_idx = self._get_column_index('status_text')
@@ -1016,6 +1087,7 @@ class WorkerStatusWidget(QWidget):
             text_item = self.status_table.item(row, text_col_idx)
             if text_item:
                 text_item.setText(status.capitalize())
+                text_item.setToolTip(f"Status: {status.capitalize()}")
 
                 # Apply color coding based on status
                 if status == 'uploading':
@@ -1194,6 +1266,7 @@ class WorkerStatusWidget(QWidget):
                     icon_item.setData(Qt.ItemDataRole.UserRole, worker.worker_id)
                     icon_item.setData(Qt.ItemDataRole.UserRole + 1, worker.worker_type)
                     icon_item.setData(Qt.ItemDataRole.UserRole + 2, worker.hostname)
+                    icon_item.setToolTip(worker.display_name)
                     self.status_table.setItem(row_idx, col_idx, icon_item)
 
                 elif col_config.id == 'hostname':
@@ -1232,11 +1305,13 @@ class WorkerStatusWidget(QWidget):
                         auto_icon_label.setPixmap(auto_icon.pixmap(42, 19))
                         layout.addWidget(auto_icon_label)
 
+                        container.setToolTip(f"{worker.display_name} (auto-upload enabled)")
                         self.status_table.setCellWidget(row_idx, col_idx, container)
                     else:
                         # Regular text item for non-auto hosts
                         hostname_item = QTableWidgetItem(worker.display_name)
                         hostname_item.setTextAlignment(col_config.alignment)
+                        hostname_item.setToolTip(worker.display_name)
 
                         # Apply disabled styling
                         if worker.status == 'disabled':
@@ -1250,6 +1325,7 @@ class WorkerStatusWidget(QWidget):
                     speed_item = QTableWidgetItem(speed_text)
                     speed_item.setTextAlignment(col_config.alignment)
                     speed_item.setData(Qt.ItemDataRole.UserRole + 10, worker.speed_bps)
+                    speed_item.setToolTip(f"Current Speed\n{worker.display_name}: {speed_text}")
 
                     # Monospace font for speed
                     speed_font = QFont("Consolas")
@@ -1266,12 +1342,14 @@ class WorkerStatusWidget(QWidget):
                     status_icon = self._icon_cache.get(worker.status, QIcon())
                     status_icon_item.setIcon(status_icon)
                     status_icon_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                    status_icon_item.setToolTip(f"Status: {worker.status.capitalize()}")
                     self.status_table.setItem(row_idx, col_idx, status_icon_item)
 
                 elif col_config.id == 'status_text':
                     # Status text column (text only with color coding)
                     status_text_item = QTableWidgetItem(worker.status.capitalize())
                     status_text_item.setTextAlignment(col_config.alignment)
+                    status_text_item.setToolTip(f"Status: {worker.status.capitalize()}")
 
                     # Color coding
                     if worker.status == 'uploading':
@@ -1293,6 +1371,7 @@ class WorkerStatusWidget(QWidget):
                     files_text = format_count(worker.files_remaining) if worker.files_remaining > 0 else "—"
                     files_item = QTableWidgetItem(files_text)
                     files_item.setTextAlignment(col_config.alignment)
+                    files_item.setToolTip(f"Queue (Files)\n{worker.display_name}: {worker.files_remaining:,} files")
                     # Monospace font
                     files_font = QFont("Consolas")
                     files_font.setPointSizeF(METRIC_FONT_SIZE_DEFAULT)
@@ -1306,6 +1385,7 @@ class WorkerStatusWidget(QWidget):
                     bytes_item = QTableWidgetItem(bytes_text)
                     bytes_item.setTextAlignment(col_config.alignment)
                     bytes_item.setData(Qt.ItemDataRole.UserRole + 10, worker.bytes_remaining)
+                    bytes_item.setToolTip(f"Queue (Bytes)\n{worker.display_name}: {worker.bytes_remaining:,} bytes")
                     # Monospace font
                     bytes_font = QFont("Consolas")
                     bytes_font.setPointSizeF(METRIC_FONT_SIZE_DEFAULT)
@@ -1363,17 +1443,24 @@ class WorkerStatusWidget(QWidget):
                     # Format value based on column type
                     if col_config.col_type == ColumnType.BYTES:
                         text = format_bytes(value)
+                        raw_value = f"{value:,} bytes" if value else "—"
                     elif col_config.col_type == ColumnType.SPEED:
                         text = self._format_speed(value)
+                        raw_value = f"{value:,.0f} B/s" if value else "—"
                     elif col_config.col_type == ColumnType.PERCENT:
                         text = format_percent(value)
+                        raw_value = f"{value:.2f}%" if value > 0 else "—"
                     elif col_config.col_type == ColumnType.COUNT:
                         text = format_count(value)
+                        raw_value = f"{value:,}" if value else "—"
                     else:
                         text = str(value) if value else "—"
+                        raw_value = str(value) if value else "—"
 
                     item = QTableWidgetItem(text)
                     item.setTextAlignment(col_config.alignment)
+                    # Build detailed tooltip: column name, host, value
+                    item.setToolTip(f"{col_config.name.capitalize()}\n{worker.display_name}: {raw_value}")
 
                     # Monospace font for numeric values
                     # Use 8pt for uploaded/peak/avg speed metrics, 9pt for others
@@ -1811,10 +1898,93 @@ class WorkerStatusWidget(QWidget):
         self._preserved_widths = {}
 
     def _on_column_resized(self, logical_index: int, old_size: int, new_size: int):
-        """Handle column resize - save settings."""
-        # Only save if columns are fully initialized (not during startup)
+        """Handle column resize - save settings and schedule text re-fitting."""
+        # Only process if columns are fully initialized (not during startup)
         if self._active_columns:
             self._save_column_settings()
+
+            # Schedule debounced text re-fitting for this column
+            self._pending_resize_columns.add(logical_index)
+            self._resize_refit_timer.start()  # Restart timer (debounce)
+
+    def _refit_resized_columns(self):
+        """Re-fit text in columns that were resized (debounced)."""
+        if not self._pending_resize_columns or not self._active_columns:
+            return
+
+        columns_to_refit = self._pending_resize_columns.copy()
+        self._pending_resize_columns.clear()
+
+        # Get column configs for metric columns only
+        for col_idx in columns_to_refit:
+            if col_idx >= len(self._active_columns):
+                continue
+
+            col_config = self._active_columns[col_idx]
+
+            # Only re-fit metric columns (they have shrink-to-fit)
+            if col_config.col_type not in (ColumnType.BYTES, ColumnType.SPEED, ColumnType.COUNT, ColumnType.PERCENT):
+                continue
+
+            self._refit_column_text(col_idx, col_config)
+
+    def _refit_column_text(self, col_idx: int, col_config: 'ColumnConfig') -> None:
+        """Re-fit text in a single column after resize.
+
+        Args:
+            col_idx: Column index in the table
+            col_config: Column configuration object
+        """
+        col_width = self.status_table.columnWidth(col_idx)
+        available_width = max(0, col_width - METRIC_CELL_PADDING)
+
+        if available_width <= 0:
+            return
+
+        # Get cached base font or create new one
+        cache_entry = self._column_font_cache.get(col_config.id)
+        if cache_entry:
+            base_font, base_fm = cache_entry
+        else:
+            # Fallback: create font if not cached
+            is_small_metric = col_config.id in SMALL_METRIC_COLUMN_IDS
+            base_font_size = METRIC_FONT_SIZE_SMALL if is_small_metric else METRIC_FONT_SIZE_DEFAULT
+            base_font = QFont("Consolas")
+            base_font.setPointSizeF(base_font_size)
+            base_font.setStyleHint(QFont.StyleHint.Monospace)
+            base_font.setStretch(QFont.Stretch.SemiCondensed)
+            base_fm = QFontMetrics(base_font)
+
+        # Block signals during batch update
+        self.status_table.blockSignals(True)
+        try:
+            for row in range(self.status_table.rowCount()):
+                item = self.status_table.item(row, col_idx)
+                if not item:
+                    continue
+
+                text = item.text()
+                if not text:
+                    continue
+
+                # Measure with base font
+                text_width = base_fm.horizontalAdvance(text)
+
+                if text_width > available_width:
+                    # Scale font DOWN to fit - clone base font and adjust
+                    scaled_font = QFont(base_font)
+                    scale = available_width / text_width
+                    new_size = max(METRIC_MIN_FONT_SIZE, base_font.pointSizeF() * scale)
+                    scaled_font.setPointSizeF(new_size)
+                    item.setFont(scaled_font)
+                else:
+                    # Text fits - use base font but cap at max size
+                    capped_size = min(base_font.pointSizeF(), METRIC_MAX_FONT_SIZE)
+                    capped_font = QFont(base_font)
+                    capped_font.setPointSizeF(capped_size)
+                    item.setFont(capped_font)
+        finally:
+            self.status_table.blockSignals(False)
 
     def _on_column_moved(self, logical_index: int, old_visual: int, new_visual: int):
         """Handle column reorder - save settings."""

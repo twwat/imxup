@@ -100,8 +100,9 @@ ICON_SIZE = 16
 # Worker Status Widget - Font Configuration
 METRIC_FONT_SIZE_SMALL = 8.0   # For historical metrics (session/today/alltime bytes, speeds)
 METRIC_FONT_SIZE_DEFAULT = 9.0 # For other metric columns
-METRIC_CELL_PADDING = 8        # Padding in metric cells for shrink-to-fit calculation
+METRIC_CELL_PADDING = 4        # Padding in metric cells for shrink-to-fit calculation
 METRIC_MIN_FONT_SIZE = 7.0     # Minimum font size for readability
+METRIC_MAX_FONT_SIZE = 10.0    # Maximum font size cap for metric cells
 
 # Performance Settings
 MAX_CONCURRENT_UPLOADS = 8
