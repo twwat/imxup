@@ -114,6 +114,7 @@ from src.gui.widgets.gallery_table import GalleryTableWidget, NumericColumnDeleg
 from src.gui.widgets.tabbed_gallery import TabbedGalleryWidget, DropEnabledTabBar
 from src.gui.widgets.adaptive_settings_panel import AdaptiveQuickSettingsPanel
 from src.gui.widgets.worker_status_widget import WorkerStatusWidget
+from src.gui.progress_tracker import ProgressTracker
 
 
 class AdaptiveGroupBox(QGroupBox):
@@ -754,6 +755,9 @@ class ImxUploadGUI(QMainWindow):
             from src.gui.widgets.worker_status_widget import WorkerStatusWidget
             self.worker_status_widget = WorkerStatusWidget()
 
+        # Initialize progress tracker for bandwidth/progress monitoring
+        self.progress_tracker = ProgressTracker(self)
+
         # Initialize file host worker manager for background file host uploads
         if self.splash:
             self.splash.set_status("File Host Worker Manager")
@@ -920,8 +924,8 @@ class ImxUploadGUI(QMainWindow):
         # Connect tab change signal to refresh filter and update button counts and progress
         if hasattr(self.gallery_table, 'tab_changed'):
             self.gallery_table.tab_changed.connect(self.refresh_filter)
-            self.gallery_table.tab_changed.connect(self._update_button_counts)
-            self.gallery_table.tab_changed.connect(self.update_progress_display)
+            self.gallery_table.tab_changed.connect(self.progress_tracker._update_button_counts)
+            self.gallery_table.tab_changed.connect(self.progress_tracker.update_progress_display)
         
         # Connect gallery move signal to handle tab assignments
         # Connect tab bar drag-drop signal directly to our handler
@@ -2101,9 +2105,7 @@ class ImxUploadGUI(QMainWindow):
         self.statusBar().addPermanentWidget(self.bandwidth_status_label)
 
         self._log_viewer_dialog = None # Log viewer dialog reference
-        self._current_transfer_kbps = 0.0 # Current transfer speed tracking
-        self._bandwidth_samples = []  # Rolling window of recent samples (max 20 = 4 seconds at 200ms)
-        
+
         # Main layout - vertical to stack queue and progress
         main_layout = QVBoxLayout(central_widget)
         # Tight outer margins/spacing to keep boxes close to each other
@@ -3606,7 +3608,7 @@ class ImxUploadGUI(QMainWindow):
             self.worker.ext_fields_updated.connect(self.on_ext_fields_updated)
             self.worker.log_message.connect(self.add_log_message)
             self.worker.queue_stats.connect(self.on_queue_stats)
-            self.worker.bandwidth_updated.connect(self.on_bandwidth_updated)
+            self.worker.bandwidth_updated.connect(self.progress_tracker.on_bandwidth_updated)
 
             # Connect to worker status widget
             self.worker.gallery_started.connect(self._on_imx_worker_started)
@@ -3676,60 +3678,6 @@ class ImxUploadGUI(QMainWindow):
             self.stats_label.setText(" • ".join(parts) if parts else "No galleries in queue")
         except Exception:
             # Fall back to previous text if formatting fails
-            pass
-
-    def on_bandwidth_updated(self, instant_kbps: float):
-        """Update Speed box with rolling average + compression-style smoothing"""
-        try:
-            # Add to rolling window (keep last 20 samples = 4 seconds at 200ms polling)
-            self._bandwidth_samples.append(instant_kbps)
-            if len(self._bandwidth_samples) > 20:
-                self._bandwidth_samples.pop(0)
-
-            # Calculate average of recent samples to smooth out file completion spikes
-            if self._bandwidth_samples:
-                averaged_kbps = sum(self._bandwidth_samples) / len(self._bandwidth_samples)
-            else:
-                averaged_kbps = instant_kbps
-
-            # Apply compression-style smoothing to the averaged value
-            if averaged_kbps > self._current_transfer_kbps:
-                # Moderate attack - follow increases reasonably fast
-                alpha = 0.3
-            else:
-                # Very slow release - heavily smooth out drops from file completion
-                alpha = 0.05
-
-            # Exponential moving average with asymmetric alpha
-            self._current_transfer_kbps = alpha * averaged_kbps + (1 - alpha) * self._current_transfer_kbps
-
-            # Always show MiB/s with 3 decimal places
-            mib_per_sec = self._current_transfer_kbps / 1024.0
-            speed_str = f"{mib_per_sec:.3f} MiB/s"
-
-            # Dim the text if speed is essentially zero (use opacity instead of color)
-            if mib_per_sec < 0.001:  # Essentially zero
-                self.speed_current_value_label.setStyleSheet("opacity: 0.4;")
-            else:
-                self.speed_current_value_label.setStyleSheet("opacity: 1.0;")
-
-            self.speed_current_value_label.setText(speed_str)
-
-            # Track fastest speed (still in KiB/s internally for compatibility)
-            settings = QSettings("ImxUploader", "ImxUploadGUI")
-            fastest_kbps = settings.value("fastest_kbps", 0.0, type=float)
-            if self._current_transfer_kbps > fastest_kbps and self._current_transfer_kbps < 10000:  # Sanity check
-                settings.setValue("fastest_kbps", self._current_transfer_kbps)
-                # Save timestamp when new record is set
-                from datetime import datetime
-                timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                settings.setValue("fastest_kbps_timestamp", timestamp)
-                fastest_mib = self._current_transfer_kbps / 1024.0  # Use NEW value for display
-                fastest_str = f"{fastest_mib:.3f} MiB/s"
-                self.speed_fastest_value_label.setText(fastest_str)
-                # Update tooltip with timestamp
-                self.speed_fastest_value_label.setToolTip(f"Record set: {timestamp}")
-        except Exception:
             pass
 
     # File Host Upload Signal Handlers
@@ -3850,7 +3798,7 @@ class ImxUploadGUI(QMainWindow):
 
             # Aggregate with IMX.to bandwidth for total speed display
             # The Speed box shows combined upload speed from both IMX.to and file hosts
-            total_kbps = self._current_transfer_kbps + self._fh_current_transfer_kbps
+            total_kbps = self.progress_tracker._current_transfer_kbps + self._fh_current_transfer_kbps
             total_mib = total_kbps / 1024.0
             speed_str = f"{total_mib:.3f} MiB/s"
 
@@ -5358,7 +5306,7 @@ class ImxUploadGUI(QMainWindow):
         
         # Update button counts if any scans completed (status may have changed to ready)
         if updated_any:
-            QTimer.singleShot(0, self._update_button_counts)
+            QTimer.singleShot(0, self.progress_tracker._update_button_counts)
 
     def _get_current_tab_items(self):
         """Get items filtered by current tab"""
@@ -5380,176 +5328,6 @@ class ImxUploadGUI(QMainWindow):
             except Exception:
                 return []
 
-    def _update_counts_and_progress(self):
-        """Update both button counts and progress display together"""
-        self._update_button_counts()
-        self.update_progress_display()
-    
-    def _update_button_counts(self):
-        """Update button counts and states based on currently visible items (respecting filter)"""
-        try:
-            # Get items that are currently visible (not filtered out)
-            visible_items = []
-            all_items = self.queue_manager.get_all_items()
-            
-            # Build path to row mapping for quick lookup
-            path_to_row = {}
-            for row in range(self.gallery_table.rowCount()):
-                name_item = self.gallery_table.item(row, GalleryTableWidget.COL_NAME)
-                if name_item:
-                    path = name_item.data(Qt.ItemDataRole.UserRole)
-                    if path:
-                        path_to_row[path] = row
-            
-            # Only count items that are visible in the current filter
-            for item in all_items:
-                row = path_to_row.get(item.path)
-                if row is not None and not self.gallery_table.isRowHidden(row):
-                    visible_items.append(item)
-            
-            # Count statuses from visible items only
-            count_startable = sum(1 for item in visible_items if item.status in ("ready", "paused", "incomplete", "scanning"))
-            count_pausable = sum(1 for item in visible_items if item.status in ("uploading", "queued"))
-            count_completed = sum(1 for item in visible_items if item.status == "completed")
-
-            # Update button texts with counts (preserve leading space for visual alignment)
-            self.start_all_btn.setText(" Start All " + (f"({count_startable})" if count_startable else ""))
-            self.pause_all_btn.setText(" Pause All " + (f"({count_pausable})" if count_pausable else ""))
-            self.clear_completed_btn.setText(" Clear Completed " + (f"({count_completed})" if count_completed else ""))
-
-            # Enable/disable based on counts
-            self.start_all_btn.setEnabled(count_startable > 0)
-            self.pause_all_btn.setEnabled(count_pausable > 0)
-            self.clear_completed_btn.setEnabled(count_completed > 0)
-        except Exception:
-            # Controls may not be initialized yet during early calls
-            pass
-    
-    def update_progress_display(self):
-        """Update current tab progress and statistics"""
-        items = self._get_current_tab_items()
-        
-        if not items:
-            self.overall_progress.setValue(0)
-            self.overall_progress.setText("Ready")
-            # Blue for active/ready
-            self.overall_progress.setProgressProperty("status", "ready")
-            current_tab_name = getattr(self.gallery_table, 'current_tab', 'All Tabs')
-            self.stats_label.setText(f"No galleries in {current_tab_name}")
-            return
-        
-        # Calculate overall progress (account for resumed items' previously uploaded files)
-        total_images = sum(item.total_images for item in items if item.total_images > 0)
-        uploaded_images = 0
-        for item in items:
-            if item.total_images > 0:
-                base_uploaded = item.uploaded_images
-                if hasattr(item, 'uploaded_files') and item.uploaded_files:
-                    base_uploaded = max(base_uploaded, len(item.uploaded_files))
-                uploaded_images += base_uploaded
-        
-        if total_images > 0:
-            overall_percent = int((uploaded_images / total_images) * 100)
-            self.overall_progress.setValue(overall_percent)
-            self.overall_progress.setText(f"{overall_percent}% ({uploaded_images}/{total_images})")
-            # Blue while in progress, green when 100%
-            if overall_percent >= 100:
-                self.overall_progress.setProgressProperty("status", "completed")
-            else:
-                self.overall_progress.setProgressProperty("status", "uploading")
-        else:
-            self.overall_progress.setValue(0)
-            self.overall_progress.setText("Preparing...")
-            # Blue while preparing
-            self.overall_progress.setProgressProperty("status", "uploading")
-        
-        # Update stats label with current tab status counts
-        current_tab_name = getattr(self.gallery_table, 'current_tab', 'All Tabs')
-        status_counts = {
-            'uploading': sum(1 for item in items if item.status == 'uploading'),
-            'queued': sum(1 for item in items if item.status == 'queued'),
-            'completed': sum(1 for item in items if item.status == 'completed'),
-            'ready': sum(1 for item in items if item.status in ('ready', 'paused', 'incomplete', 'scanning')),
-            'failed': sum(1 for item in items if item.status == 'failed')
-        }
-        
-        # Build status summary - only show non-zero counts
-        status_parts = []
-        if status_counts['uploading'] > 0:
-            status_parts.append(f"Uploading: {status_counts['uploading']}")
-        if status_counts['queued'] > 0:
-            status_parts.append(f"Queued: {status_counts['queued']}")
-        if status_counts['completed'] > 0:
-            status_parts.append(f"Completed: {status_counts['completed']}")
-        if status_counts['ready'] > 0:
-            status_parts.append(f"Ready: {status_counts['ready']}")
-        if status_counts['failed'] > 0:
-            status_parts.append(f"Error: {status_counts['failed']}")
-        
-        if status_parts:
-            self.stats_label.setText(" | ".join(status_parts))
-        else:
-            self.stats_label.setText(f"No galleries in {current_tab_name}")
-        
-        # Update Stats and Speed box values
-        # Skip expensive network call for unnamed count - defer to background update
-        QTimer.singleShot(100, self._update_unnamed_count_background)
-        # Totals persisted in QSettings
-        settings = QSettings("ImxUploader", "Stats")
-        total_galleries = settings.value("total_galleries", 0, type=int)
-        total_images_acc = settings.value("total_images", 0, type=int)
-        # Prefer v2 string key to avoid int-size issues; fall back to legacy
-        total_size_bytes_v2 = settings.value("total_size_bytes_v2", "0")
-        try:
-            total_size_acc = int(str(total_size_bytes_v2))
-        except Exception:
-            total_size_acc = settings.value("total_size_bytes", 0, type=int)
-        fastest_kbps = settings.value("fastest_kbps", 0.0, type=float)
-        self.stats_total_galleries_value_label.setText(f"{total_galleries}")
-        self.stats_total_images_value_label.setText(f"{total_images_acc}")
-        # Use consistent size formatting
-        total_size_str = self._format_size_consistent(total_size_acc)
-        # Show transferred and fastest speed in Speed box
-        try:
-            self.speed_transferred_value_label.setText(f"{total_size_str}")
-            # Display fastest speed (convert KiB/s to MiB/s)
-            fastest_mib = fastest_kbps / 1024.0
-            fastest_str = f"{fastest_mib:.3f} MiB/s"
-            self.speed_fastest_value_label.setText(fastest_str)
-            # Set tooltip with timestamp only if there's a record and timestamp
-            fastest_timestamp = settings.value("fastest_kbps_timestamp", "", type=str)
-            if fastest_kbps > 0 and fastest_timestamp:
-                self.speed_fastest_value_label.setToolTip(f"Record set: {fastest_timestamp}")
-            else:
-                self.speed_fastest_value_label.setToolTip("")  # Clear tooltip
-        except Exception as e:
-            log(f"ERROR: Exception in main_window: {e}", level="error", category="ui")
-            raise
-        # Current transfer speed: calculate from ALL uploading items (not tab-filtered)
-        all_items = self.queue_manager.get_all_items()
-        current_kibps = 0.0
-        uploading_count = 0
-        for item in all_items:
-            if item.status == "uploading":
-                item_speed = float(getattr(item, 'current_kibps', 0.0) or 0.0)
-                current_kibps += item_speed
-                uploading_count += 1
-        
-        # Speed labels are now updated ONLY by on_bandwidth_updated() signal handler
-        # Fastest speed is tracked there and persists across all uploads
-
-        # Clear bandwidth samples when no uploads are active to reset display
-        if uploading_count == 0:
-            self._bandwidth_samples.clear()
-            self._current_transfer_kbps = 0.0
-            self.speed_current_value_label.setText("0.000 MiB/s")
-            self.speed_current_value_label.setStyleSheet("opacity: 0.4;")
-        # Status summary text is updated via signal handlers to avoid timer-driven churn
-    
-    
-    
-    # Removed _refresh_active_upload_indicators to prevent GUI blocking
-    
     def on_gallery_started(self, path: str, total_images: int):
         """Handle gallery start"""
         with QMutexLocker(self.queue_manager.mutex):
@@ -5616,7 +5394,7 @@ class ImxUploadGUI(QMainWindow):
                 break
         
         # Update button counts and progress after gallery starts
-        QTimer.singleShot(0, self._update_counts_and_progress)
+        QTimer.singleShot(0, self.progress_tracker._update_counts_and_progress)
     
     def on_progress_updated(self, path: str, completed: int, total: int, progress_percent: int, current_image: str):
         """Handle progress updates from worker - NON-BLOCKING"""
@@ -5753,7 +5531,7 @@ class ImxUploadGUI(QMainWindow):
                 self.gallery_table.setItem(matched_row, GalleryTableWidget.COL_TRANSFER, xfer_item)
                 
             # Update overall progress bar and info/speed displays after individual table updates
-            self.update_progress_display()
+            self.progress_tracker.update_progress_display()
                 
         except Exception as e:
             log(f"Exception in main_window: {e}", level="error", category="ui")
@@ -5833,12 +5611,12 @@ class ImxUploadGUI(QMainWindow):
         # Update current transfer speed immediately
         try:
             transfer_speed = float(results.get('transfer_speed', 0) or 0)
-            self._current_transfer_kbps = transfer_speed / 1024.0
+            self.progress_tracker._current_transfer_kbps = transfer_speed / 1024.0
             # Also update the item's speed for consistency
             with QMutexLocker(self.queue_manager.mutex):
                 if path in self.queue_manager.items:
                     item = self.queue_manager.items[path]
-                    item.final_kibps = self._current_transfer_kbps
+                    item.final_kibps = self.progress_tracker._current_transfer_kbps
         except Exception as e:
             log(f"ERROR: Exception in main_window: {e}", level="error", category="ui")
             raise
@@ -5860,7 +5638,7 @@ class ImxUploadGUI(QMainWindow):
 
 
         # Update button counts and progress after status change
-        QTimer.singleShot(0, self._update_counts_and_progress)
+        QTimer.singleShot(0, self.progress_tracker._update_counts_and_progress)
 
         # Defer only the heavy stats update to avoid blocking
         QTimer.singleShot(50, lambda: self._update_stats_deferred(results))
@@ -5874,18 +5652,6 @@ class ImxUploadGUI(QMainWindow):
     #    except Exception as e:
     #        log(f"ERROR: Exception in main_window: {e}", level="error", category="ui")
     #        raise
-    
-    def _update_unnamed_count_background(self):
-        """Update unnamed gallery count in background"""
-        try:
-            from imxup import get_unnamed_galleries
-            unnamed_galleries = get_unnamed_galleries()
-            unnamed_count = len(unnamed_galleries)
-            # Update on main thread
-            QTimer.singleShot(0, lambda: self.stats_unnamed_value_label.setText(f"{unnamed_count}"))
-        except Exception:
-            # On error, show 0 and don't retry
-            QTimer.singleShot(0, lambda: self.stats_unnamed_value_label.setText("0"))
     
     def _update_stats_deferred(self, results: dict):
         """Update cumulative stats in background"""
@@ -5911,7 +5677,7 @@ class ImxUploadGUI(QMainWindow):
             settings.setValue("fastest_kbps", fastest_kbps)
             settings.sync()
             # Refresh progress display to show updated stats
-            self.update_progress_display()
+            self.progress_tracker.update_progress_display()
         except Exception as e:
             log(f"ERROR: Exception in main_window: {e}", level="error", category="ui")
             raise
@@ -6020,7 +5786,7 @@ class ImxUploadGUI(QMainWindow):
     def on_gallery_renamed(self, gallery_id: str):
         """Mark cells for the given gallery_id as renamed (check icon) - optimized version."""
         # Update unnamed gallery count
-        self._update_unnamed_count_background()
+        self.progress_tracker._update_unnamed_count_background()
         # Defer the expensive operation to avoid blocking GUI
         QTimer.singleShot(1, lambda: self._handle_gallery_renamed_background(gallery_id))
     
@@ -6062,7 +5828,7 @@ class ImxUploadGUI(QMainWindow):
         self._update_specific_gallery_display(path)
         
         # Update button counts and progress after status change
-        QTimer.singleShot(0, self._update_counts_and_progress)
+        QTimer.singleShot(0, self.progress_tracker._update_counts_and_progress)
         
         gallery_name = os.path.basename(path)
         log(f"Failed: {gallery_name} - {error_message}", level="warning")
@@ -6176,7 +5942,7 @@ class ImxUploadGUI(QMainWindow):
         dialog = UnrenamedGalleriesDialog(self)
 
         # Connect signal to update count when galleries are removed
-        dialog.galleries_changed.connect(self._update_unnamed_count_background)
+        dialog.galleries_changed.connect(self.progress_tracker._update_unnamed_count_background)
 
         dialog.exec()
 
@@ -6186,7 +5952,7 @@ class ImxUploadGUI(QMainWindow):
             log(f"Started: {os.path.basename(path)}", level="info", category="queue")
             self._update_specific_gallery_display(path)
             # Update button counts after status change
-            QTimer.singleShot(0, self._update_button_counts)
+            QTimer.singleShot(0, self.progress_tracker._update_button_counts)
         else:
             log(f"Failed to start: {os.path.basename(path)}", level="warning", category="queue")
     
@@ -6196,7 +5962,7 @@ class ImxUploadGUI(QMainWindow):
             log(f"Paused: {os.path.basename(path)}", level="info", category="queue")
             self._update_specific_gallery_display(path)
             # Update button counts after status change
-            QTimer.singleShot(0, self._update_button_counts)
+            QTimer.singleShot(0, self.progress_tracker._update_button_counts)
         else:
             log(f"Failed to pause: {os.path.basename(path)}", level="warning", category="queue")
     
@@ -6208,7 +5974,7 @@ class ImxUploadGUI(QMainWindow):
             self.queue_manager.update_item_status(path, "incomplete")
             self._update_specific_gallery_display(path)
             # Update button counts after status change
-            QTimer.singleShot(0, self._update_button_counts)
+            QTimer.singleShot(0, self.progress_tracker._update_button_counts)
             log(f"Will stop after current transfers: {os.path.basename(path)}", level="debug", category="queue")
         else:
             # If not the actively uploading one, nothing to do
@@ -6233,7 +5999,7 @@ class ImxUploadGUI(QMainWindow):
                 
                 self._update_specific_gallery_display(path)
                 # Force immediate button count and progress update
-                self._update_counts_and_progress()
+                self.progress_tracker._update_counts_and_progress()
     
     def cancel_multiple_items(self, paths: list):
         """Cancel multiple queued items using batch processing to prevent GUI hang"""
@@ -6267,9 +6033,9 @@ class ImxUploadGUI(QMainWindow):
                 
                 # Update display for each item
                 self._update_specific_gallery_display(path)
-            
+
             # Single update for button counts and progress
-            self._update_counts_and_progress()
+            self.progress_tracker._update_counts_and_progress()
     
     def start_upload_for_item(self, path: str):
         """Start upload for a specific item"""
@@ -6601,7 +6367,7 @@ class ImxUploadGUI(QMainWindow):
             for path in started_paths:
                 self._update_specific_gallery_display(path)
             # Update button counts and progress after state changes
-            QTimer.singleShot(0, self._update_counts_and_progress)
+            QTimer.singleShot(0, self.progress_tracker._update_counts_and_progress)
         else:
             log(f"No items to start", category="queue", level="info")
         
@@ -6629,7 +6395,7 @@ class ImxUploadGUI(QMainWindow):
             for path in reset_paths:
                 self._update_specific_gallery_display(path)
             # Update button counts and progress after state changes
-            QTimer.singleShot(0, self._update_counts_and_progress)
+            QTimer.singleShot(0, self.progress_tracker._update_counts_and_progress)
         else:
             log(f"No queued items to reset", level="info", category="queue")
     
@@ -6689,7 +6455,7 @@ class ImxUploadGUI(QMainWindow):
                 log(f"Exception while deleting from database: {e}", level="error", category="db")
 
             # Update button counts and progress
-            QTimer.singleShot(0, self._update_counts_and_progress)
+            QTimer.singleShot(0, self.progress_tracker._update_counts_and_progress)
 
             # Update tab tooltips
             if hasattr(self.gallery_table, '_update_tab_tooltips'):
@@ -6782,7 +6548,7 @@ class ImxUploadGUI(QMainWindow):
                 log(f"Exception deleting from database: {e}", level="error", category="database")
 
             # Update button counts and progress
-            QTimer.singleShot(0, self._update_counts_and_progress)
+            QTimer.singleShot(0, self.progress_tracker._update_counts_and_progress)
 
             # Update tab tooltips to reflect new counts
             if hasattr(self.gallery_table, '_update_tab_tooltips'):
