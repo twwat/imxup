@@ -502,6 +502,9 @@ class GalleryTableWidget(QTableWidget):
         if sel_model is not None:
             for idx in sel_model.selectedRows(1):
                 row = idx.row()
+                # Skip hidden rows - they're filtered out by tab but still in selection model
+                if self.isRowHidden(row):
+                    continue
                 name_item = self.item(row, GalleryTableWidget.COL_NAME)
                 if name_item:
                     path = name_item.data(Qt.ItemDataRole.UserRole)

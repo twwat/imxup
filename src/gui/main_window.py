@@ -1348,6 +1348,15 @@ class ImxUploadGUI(QMainWindow):
             # SKIP expensive widgets (progress bars, action buttons, file host widgets)
             # These will be created in Phase 2
 
+            # IMX Status column - restore from database
+            if item.imx_status and item.imx_status_checked:
+                match = re.match(r'\w+\s*\((\d+)/(\d+)\)', item.imx_status)
+                if match:
+                    online = int(match.group(1))
+                    total_count = int(match.group(2))
+                    check_datetime = datetime.fromtimestamp(item.imx_status_checked).strftime('%Y-%m-%d %H:%M')
+                    self.gallery_table.set_online_imx_status(row, online, total_count, check_datetime)
+
         except Exception as e:
             log(f"Error in _populate_table_row_minimal for row {row}: {e}",
                 level="warning", category="performance")
@@ -5708,6 +5717,9 @@ class ImxUploadGUI(QMainWindow):
         log(f"File host refresh triggered (startup_complete={self._file_host_startup_complete})",
             level="debug", category="startup")
 
+        # Remove disabled workers from status widget
+        self.worker_signal_handler._on_enabled_workers_changed(_enabled_worker_ids)
+
         # Get all gallery paths
         items = self.queue_manager.get_all_items()
 
@@ -5858,6 +5870,10 @@ class ImxUploadGUI(QMainWindow):
             return
 
         # Delegate to ImageStatusChecker
+        # Clean up previous checker if exists
+        if hasattr(self, '_image_status_checker') and self._image_status_checker:
+            self._image_status_checker._cleanup_connections()
+
         # Store reference on self to prevent garbage collection before callbacks fire
         self._image_status_checker = ImageStatusChecker(
             parent=self,

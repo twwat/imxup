@@ -1555,7 +1555,7 @@ class WorkerStatusWidget(QWidget):
                         worker_type="imx",
                         hostname="imx.to",
                         display_name="IMX.to",
-                        status="disabled"
+                        status="idle"
                     )
                     result.append(imx_placeholder)
 
@@ -1617,7 +1617,7 @@ class WorkerStatusWidget(QWidget):
                         worker_type="imx",
                         hostname="imx.to",
                         display_name="IMX.to",
-                        status="disabled"
+                        status="idle"
                     )
                     result.append(imx_placeholder)
 

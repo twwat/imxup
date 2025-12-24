@@ -36,9 +36,9 @@ def format_binary_size(num_bytes: int | float, precision: int = 1) -> str:
 
     # Handle negative values
     if value < 0:
-        return "0 B"
+        return "0\u00A0B"
 
-    units = ["B", "KiB", "MiB", "GiB", "TiB", "PiB"]
+    units = ["B", "K", "M", "G", "T", "P"]
     unit_index = 0
 
     while value >= 1024.0 and unit_index < len(units) - 1:
@@ -46,9 +46,9 @@ def format_binary_size(num_bytes: int | float, precision: int = 1) -> str:
         unit_index += 1
 
     if units[unit_index] == "B":
-        return f"{int(value)} B"
+        return f"{int(value)}\u00A0B"
 
-    return f"{value:.{precision}f} {units[unit_index]}"
+    return f"{value:.{precision}f}\u00A0{units[unit_index]}"
 
 
 def format_binary_rate(kib_per_s: float | int, precision: int = 1) -> str:
@@ -69,14 +69,14 @@ def format_binary_rate(kib_per_s: float | int, precision: int = 1) -> str:
     except Exception:
         rate = 0.0
     
-    units = ["KiB/s", "MiB/s", "GiB/s", "TiB/s"]
+    units = ["K/s", "M/s", "G/s", "T/s"]
     unit_index = 0
-    
+
     while rate >= 1024.0 and unit_index < len(units) - 1:
         rate /= 1024.0
         unit_index += 1
-    
-    return f"{rate:.{precision}f} {units[unit_index]}"
+
+    return f"{rate:.{precision}f}\u00A0{units[unit_index]}"
 
 
 def format_duration(seconds: float) -> str:

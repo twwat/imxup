@@ -976,6 +976,15 @@ def save_gallery_artifacts(
     successful_images = results.get('successful_count', len(results.get('images', [])))
     avg_width = int(results.get('avg_width', 0) or 0)
     avg_height = int(results.get('avg_height', 0) or 0)
+
+    # Fallback: Calculate from files if dimensions are missing
+    if (avg_width == 0 or avg_height == 0) and os.path.isdir(folder_path):
+        from src.utils.sampling_utils import calculate_folder_dimensions
+        calc = calculate_folder_dimensions(folder_path)
+        if calc:
+            avg_width = int(calc.get('avg_width', 0))
+            avg_height = int(calc.get('avg_height', 0))
+
     extension = "JPG"
     try:
         # Best-effort derive the most common extension from images if present

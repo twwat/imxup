@@ -60,6 +60,9 @@ class GalleryContextMenuHelper(QObject):
         if sel_model is not None:
             for idx in sel_model.selectedRows(1):
                 row = idx.row()
+                # Skip hidden rows - they're filtered out by tab but still in selection model
+                if table_widget.isRowHidden(row):
+                    continue
                 name_item = table_widget.item(row, 1)
                 if name_item:
                     path = name_item.data(Qt.ItemDataRole.UserRole)

@@ -183,3 +183,41 @@ def calculate_dimensions_with_outlier_exclusion(
         'max_width': float(max(widths)),
         'max_height': float(max(heights))
     }
+
+
+def calculate_folder_dimensions(folder_path: str) -> Dict[str, float]:
+    """Calculate image dimensions from a folder with sampling.
+
+    Args:
+        folder_path: Path to folder containing images
+
+    Returns:
+        Dict with avg_width, avg_height, max_width, max_height, min_width, min_height
+        or empty dict if calculation fails
+    """
+    image_extensions = ('.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp')
+    try:
+        files = [f for f in os.listdir(folder_path)
+                 if f.lower().endswith(image_extensions)
+                 and os.path.isfile(os.path.join(folder_path, f))]
+    except OSError:
+        return {}
+
+    if not files:
+        return {}
+
+    # Sample up to 25 images
+    sampled = files[:25] if len(files) <= 25 else files[::len(files)//25][:25]
+
+    dims = []
+    for f in sampled:
+        try:
+            with Image.open(os.path.join(folder_path, f)) as img:
+                dims.append(img.size)
+        except (OSError, IOError):
+            continue
+
+    if not dims:
+        return {}
+
+    return calculate_dimensions_with_outlier_exclusion(dims, use_median=True)

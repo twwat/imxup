@@ -173,8 +173,10 @@ class FileHostWorkerManager(QObject):
             category="file_hosts"
         )
 
+        # Connect finished signal for cleanup, then stop (non-blocking)
+        worker.finished.connect(lambda w=worker: w.deleteLater())
         worker.stop()
-        worker.wait()  # Wait for thread to finish
+        # Don't wait() - let it finish in background
 
         log(f"[File Host Manager] {host_id} Worker stopped (remaining workers: {len(self.workers)})",
             level="info",

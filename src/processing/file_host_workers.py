@@ -303,9 +303,9 @@ class FileHostWorker(QThread):
 
     def run(self):
         """Main worker thread loop - process uploads for this host only."""
-        self._log("Worker started", level="info")
+        self._log("Worker started", level="debug")
         self.status_updated.emit(self.host_id, "starting")
-        log(f"DEBUG: Emitted status signal: {self.host_id} -> starting", level="debug", category="file_hosts")
+        #log(f"Emitted status signal: {self.host_id} -> starting", level="trace", category="file_hosts")
 
         # Test credentials during spinup (power button paradigm)
         host_config = self.config_manager.get_host(self.host_id)
@@ -320,7 +320,7 @@ class FileHostWorker(QThread):
 
             self._log("Testing credentials during spinup...", level="debug")
             self.status_updated.emit(self.host_id, "authenticating")
-            log(f"DEBUG: Emitted status signal: {self.host_id} -> authenticating", level="debug", category="file_hosts")
+            #log(f"Emitted status signal: {self.host_id} -> authenticating", level="debug", category="file_hosts")
 
             spinup_success = False
             spinup_error = ""
@@ -347,10 +347,10 @@ class FileHostWorker(QThread):
                             except (ValueError, TypeError) as e:
                                 self._log(f"Failed to parse storage: {e}", level="debug")
 
-                    self._log("Successfully validated credentials; spinup complete!", level="info")
+                    self._log("Ready", level="info")
                     spinup_success = True
                     self.status_updated.emit(self.host_id, "idle")
-                    log(f"Emitted status signal: {self.host_id} -> idle", level="debug", category="file_hosts")
+                    #log(f"Emitted status signal: {self.host_id} -> idle", level="debug", category="file_hosts")
 
                     # Persist session from first login
                     self._update_session_from_client(client)

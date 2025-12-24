@@ -472,6 +472,29 @@ class WorkerSignalHandler(QObject):
                     status=status_text
                 )
 
+    def _on_enabled_workers_changed(self, enabled_host_ids: list) -> None:
+        """Remove workers from status widget when they are disabled.
+
+        Args:
+            enabled_host_ids: List of currently enabled file host IDs
+        """
+        mw = self._main_window
+        if not hasattr(mw, 'worker_status_widget') or not mw.worker_status_widget:
+            return
+
+        # Build set of currently enabled worker IDs
+        enabled_worker_ids = {f"filehost_{host_id.lower().replace(' ', '_')}"
+                             for host_id in enabled_host_ids}
+
+        # Find file host workers that are no longer enabled and remove them
+        workers_to_remove = []
+        for worker_id in list(mw.worker_status_widget._workers.keys()):
+            if worker_id.startswith('filehost_') and worker_id not in enabled_worker_ids:
+                workers_to_remove.append(worker_id)
+
+        for worker_id in workers_to_remove:
+            mw.worker_status_widget.remove_worker(worker_id)
+
     def _update_worker_queue_stats(self):
         """Poll queue manager and update worker status widget with queue statistics.
 

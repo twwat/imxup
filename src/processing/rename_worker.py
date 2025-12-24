@@ -12,6 +12,7 @@ import requests
 import configparser
 import os
 from typing import List, Dict, Callable, Optional, Any
+from PyQt6.QtCore import QObject, pyqtSignal
 from src.utils.logger import log
 
 
@@ -102,12 +103,17 @@ def clear_session_cookies_from_keyring():
         pass
 
 
-class RenameWorker:
-    """Background worker that handles gallery renames and image status checking.
+class RenameWorker(QObject):
+    """Background worker that handles gallery renames and image status checking on imx.to.
 
     Uses its own web session for authentication to imx.to.
     Supports both rename operations and image status checking via the /user/moderate endpoint.
     """
+
+    # Status check signals (thread-safe cross-thread communication)
+    status_check_progress = pyqtSignal(int, int)  # current, total
+    status_check_completed = pyqtSignal(dict)     # results dict
+    status_check_error = pyqtSignal(str)          # error_message
 
     def __init__(self):
         """Initialize RenameWorker with own web session.
@@ -117,8 +123,9 @@ class RenameWorker:
         - HTTP session with retry strategy
         - Queue for rename requests
         - Queue for status check requests
-        - Callbacks for status check progress/completion/error
+        - Signals for status check progress/completion/error
         """
+        super().__init__()
         # Import existing functions
         from imxup import (get_config_path, decrypt_password, get_firefox_cookies,
                           load_cookies_from_file, get_unnamed_galleries,
@@ -143,11 +150,6 @@ class RenameWorker:
 
         # Queue for status check requests (separate from renames)
         self.status_check_queue: queue.Queue = queue.Queue()
-
-        # Callbacks for status check operations (set by caller)
-        self._status_check_progress_callback: Optional[Callable[[int, int], None]] = None
-        self._status_check_completed_callback: Optional[Callable[[Dict[str, Dict[str, Any]]], None]] = None
-        self._status_check_error_callback: Optional[Callable[[str], None]] = None
 
         # Cancellation flag for status check operations (thread-safe)
         self._status_check_cancelled = threading.Event()
@@ -521,23 +523,6 @@ class RenameWorker:
     # Image Status Checking Methods
     # =========================================================================
 
-    def set_status_check_callbacks(
-        self,
-        on_progress: Optional[Callable[[int, int], None]] = None,
-        on_completed: Optional[Callable[[Dict[str, Dict[str, Any]]], None]] = None,
-        on_error: Optional[Callable[[str], None]] = None
-    ) -> None:
-        """Set callbacks for status check operations.
-
-        Args:
-            on_progress: Called with (current, total) during URL processing
-            on_completed: Called with results dict when check completes
-            on_error: Called with error message string on failure
-        """
-        self._status_check_progress_callback = on_progress
-        self._status_check_completed_callback = on_completed
-        self._status_check_error_callback = on_error
-
     def cancel_status_check(self) -> None:
         """Cancel any in-progress status check."""
         self._status_check_cancelled.set()
@@ -546,7 +531,7 @@ class RenameWorker:
         """Queue image status check for multiple galleries.
 
         Collects all image URLs from galleries and checks their online status
-        via imx.to/moderate endpoint. Results are returned via callbacks.
+        via imx.to/moderate endpoint. Results are returned via signals.
 
         Args:
             galleries_data: List of dicts, each containing:
@@ -555,7 +540,7 @@ class RenameWorker:
                 - name: str - Gallery display name
                 - image_urls: List[str] - List of imx.to image URLs
 
-        Results are delivered via the on_completed callback with structure:
+        Results are delivered via the status_check_completed signal with structure:
             {
                 path: {
                     "db_id": int,
@@ -571,8 +556,7 @@ class RenameWorker:
         """
         if not galleries_data:
             log("check_image_status called with empty galleries_data", level="debug", category="status_check")
-            if self._status_check_completed_callback:
-                self._status_check_completed_callback({})
+            self.status_check_completed.emit({})
             return
 
         # Queue the status check request
@@ -600,27 +584,23 @@ class RenameWorker:
                 # Wait for login to complete before processing
                 if not self.login_complete.wait(timeout=30):
                     log("Status check: Login timeout", level="warning", category="status_check")
-                    if self._status_check_error_callback:
-                        self._status_check_error_callback("Login timeout - please try again later")
+                    self.status_check_error.emit("Login timeout - please try again later")
                     self.status_check_queue.task_done()
                     continue
 
                 if not self.login_successful:
                     log("Status check: Not authenticated", level="warning", category="status_check")
-                    if self._status_check_error_callback:
-                        self._status_check_error_callback("Not authenticated - please login first")
+                    self.status_check_error.emit("Not authenticated - please login first")
                     self.status_check_queue.task_done()
                     continue
 
                 # Perform the status check
                 try:
                     results = self._perform_status_check(galleries_data)
-                    if self._status_check_completed_callback:
-                        self._status_check_completed_callback(results)
+                    self.status_check_completed.emit(results)
                 except Exception as e:
                     log(f"Status check error: {e}", level="error", category="status_check")
-                    if self._status_check_error_callback:
-                        self._status_check_error_callback(str(e))
+                    self.status_check_error.emit(str(e))
 
                 self.status_check_queue.task_done()
 
@@ -680,8 +660,7 @@ class RenameWorker:
             level="info", category="status_check")
 
         # Emit initial progress
-        if self._status_check_progress_callback:
-            self._status_check_progress_callback(0, total_urls)
+        self.status_check_progress.emit(0, total_urls)
 
         # Check if cancelled before making the request
         if self._status_check_cancelled.is_set():
@@ -730,8 +709,7 @@ class RenameWorker:
         response_text = response.text
 
         # Emit progress (all URLs processed)
-        if self._status_check_progress_callback:
-            self._status_check_progress_callback(total_urls, total_urls)
+        self.status_check_progress.emit(total_urls, total_urls)
 
         # Build results per gallery by checking if each URL appears in the response
         # URLs that are online will be present in the response textarea
