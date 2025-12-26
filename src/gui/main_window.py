@@ -1637,8 +1637,8 @@ class ImxUploadGUI(QMainWindow):
         try:
             icon_mgr = get_icon_manager()
             if icon_mgr:
-                # Clear icon cache to force reload of changed icons
-                icon_mgr.refresh_cache()
+                # Don't clear cache - icon keys include theme_mode, so both themes can coexist
+                # This avoids expensive disk I/O when switching themes
 
                 # Get the actual table (handle tabbed interface)
                 table = self.gallery_table
@@ -1718,7 +1718,7 @@ class ImxUploadGUI(QMainWindow):
                     self.worker_status_widget.refresh_icons()
 
         except Exception as e:
-            print(f"Error refreshing icons: {e}")
+            log(f"Error refreshing icons: {e}", level="error", category="ui")
     
     def _apply_icon_to_cell(self, row: int, col: int, icon, tooltip: str, status: str):
         """Apply icon to table cell - runs on main thread"""
@@ -3130,8 +3130,7 @@ class ImxUploadGUI(QMainWindow):
             if hasattr(self, 'gallery_table') and hasattr(self.gallery_table, 'update_theme'):
                 self.gallery_table.update_theme()
 
-            # Refresh all icons to use correct light/dark variants for new theme
-            self.refresh_all_status_icons()
+            # Note: refresh_all_status_icons() is already called inside apply_theme()
 
             # Update theme toggle button tooltip
             if hasattr(self, 'theme_toggle_btn'):
@@ -3256,76 +3255,81 @@ class ImxUploadGUI(QMainWindow):
             if qapp is None or not isinstance(qapp, QApplication):
                 return
 
-            # Load base QSS stylesheet
-            base_qss = self._load_base_stylesheet()
-
-            if mode == 'dark':
-                # Simple dark palette and base stylesheet
-                palette = qapp.palette()
-                try:
-                    palette.setColor(palette.ColorRole.Window, QColor(30,30,30))
-                    palette.setColor(palette.ColorRole.WindowText, QColor(230,230,230))
-                    palette.setColor(palette.ColorRole.Base, QColor(25,25,25))
-                    palette.setColor(palette.ColorRole.Text, QColor(230,230,230))
-                    palette.setColor(palette.ColorRole.Button, QColor(45,45,45))
-                    palette.setColor(palette.ColorRole.ButtonText, QColor(230,230,230))
-                    palette.setColor(palette.ColorRole.Highlight, QColor(47,106,160))
-                    palette.setColor(palette.ColorRole.HighlightedText, QColor(255,255,255))
-                except Exception as e:
-                    log(f"Exception in main_window: {e}", level="error", category="ui")
-                    raise
-                qapp.setPalette(palette)
-
-                # Load dark theme styles from styles.qss
-                theme_qss = self._load_theme_styles('dark')
-                qapp.setStyleSheet(base_qss + "\n" + theme_qss)
-            elif mode == 'light':
-                palette = qapp.palette()
-                try:
-                    palette.setColor(palette.ColorRole.Window, QColor(255,255,255))
-                    palette.setColor(palette.ColorRole.WindowText, QColor(33,33,33))
-                    palette.setColor(palette.ColorRole.Base, QColor(255,255,255))
-                    palette.setColor(palette.ColorRole.Text, QColor(33,33,33))
-                    palette.setColor(palette.ColorRole.Button, QColor(245,245,245))
-                    palette.setColor(palette.ColorRole.ButtonText, QColor(33,33,33))
-                    palette.setColor(palette.ColorRole.Highlight, QColor(41,128,185))
-                    palette.setColor(palette.ColorRole.HighlightedText, QColor(255,255,255))
-                except Exception as e:
-                    log(f"Exception in main_window: {e}", level="error", category="ui")
-                    raise
-                qapp.setPalette(palette)
-
-                # Load light theme styles from styles.qss
-                theme_qss = self._load_theme_styles('light')
-                qapp.setStyleSheet(base_qss + "\n" + theme_qss)
-            else:
-                # Default to dark if unknown mode
-                return self.apply_theme('dark')
-
-            self._current_theme_mode = mode
-            # Trigger a light refresh on key widgets
+            # Disable updates during theme switch to prevent intermediate repaints
+            self.setUpdatesEnabled(False)
             try:
-                #import time
-                #t1 = time.time()
-                # Just apply font sizes instead of full refresh when changing theme
-                if hasattr(self, 'gallery_table') and self.gallery_table:
-                    font_size = self._get_current_font_size()
-                    self.apply_font_size(font_size)
-                #t2 = time.time()
-                #log(f"apply_font_size took {(t2-t1)*1000:.1f}ms", level="debug", category="ui")
+                # Load base QSS stylesheet
+                base_qss = self._load_base_stylesheet()
 
-                # Refresh all button icons that use the icon manager for theme changes
-                self._refresh_button_icons()
-                #t3 = time.time()
-                #log(f"_refresh_button_icons took {(t3-t2)*1000:.1f}ms", level="debug", category="ui")
+                if mode == 'dark':
+                    # Simple dark palette and base stylesheet
+                    palette = qapp.palette()
+                    try:
+                        palette.setColor(palette.ColorRole.Window, QColor(30,30,30))
+                        palette.setColor(palette.ColorRole.WindowText, QColor(230,230,230))
+                        palette.setColor(palette.ColorRole.Base, QColor(25,25,25))
+                        palette.setColor(palette.ColorRole.Text, QColor(230,230,230))
+                        palette.setColor(palette.ColorRole.Button, QColor(45,45,45))
+                        palette.setColor(palette.ColorRole.ButtonText, QColor(230,230,230))
+                        palette.setColor(palette.ColorRole.Highlight, QColor(47,106,160))
+                        palette.setColor(palette.ColorRole.HighlightedText, QColor(255,255,255))
+                    except Exception as e:
+                        log(f"Exception in main_window: {e}", level="error", category="ui")
+                        raise
+                    qapp.setPalette(palette)
 
-                self.refresh_all_status_icons()
-                #t4 = time.time()
-                #log(f"refresh_all_status_icons took {(t4-t3)*1000:.1f}ms", level="debug", category="ui")
-                #log(f"TOTAL widget refresh: {(t4-t1)*1000:.1f}ms", level="debug", category="ui")
-            except Exception as e:
-                log(f"Exception in main_window: {e}", level="error", category="ui")
-                raise
+                    # Load dark theme styles from styles.qss
+                    theme_qss = self._load_theme_styles('dark')
+                    qapp.setStyleSheet(base_qss + "\n" + theme_qss)
+                elif mode == 'light':
+                    palette = qapp.palette()
+                    try:
+                        palette.setColor(palette.ColorRole.Window, QColor(255,255,255))
+                        palette.setColor(palette.ColorRole.WindowText, QColor(33,33,33))
+                        palette.setColor(palette.ColorRole.Base, QColor(255,255,255))
+                        palette.setColor(palette.ColorRole.Text, QColor(33,33,33))
+                        palette.setColor(palette.ColorRole.Button, QColor(245,245,245))
+                        palette.setColor(palette.ColorRole.ButtonText, QColor(33,33,33))
+                        palette.setColor(palette.ColorRole.Highlight, QColor(41,128,185))
+                        palette.setColor(palette.ColorRole.HighlightedText, QColor(255,255,255))
+                    except Exception as e:
+                        log(f"Exception in main_window: {e}", level="error", category="ui")
+                        raise
+                    qapp.setPalette(palette)
+
+                    # Load light theme styles from styles.qss
+                    theme_qss = self._load_theme_styles('light')
+                    qapp.setStyleSheet(base_qss + "\n" + theme_qss)
+                else:
+                    # Default to dark if unknown mode
+                    return self.apply_theme('dark')
+
+                self._current_theme_mode = mode
+                # Trigger a light refresh on key widgets
+                try:
+                    #import time
+                    #t1 = time.time()
+                    # Just apply font sizes instead of full refresh when changing theme
+                    if hasattr(self, 'gallery_table') and self.gallery_table:
+                        font_size = self._get_current_font_size()
+                        self.apply_font_size(font_size)
+                    #t2 = time.time()
+                    #log(f"apply_font_size took {(t2-t1)*1000:.1f}ms", level="debug", category="ui")
+
+                    # Refresh all button icons that use the icon manager for theme changes
+                    self._refresh_button_icons()
+                    #t3 = time.time()
+                    #log(f"_refresh_button_icons took {(t3-t2)*1000:.1f}ms", level="debug", category="ui")
+
+                    self.refresh_all_status_icons()
+                    #t4 = time.time()
+                    #log(f"refresh_all_status_icons took {(t4-t3)*1000:.1f}ms", level="debug", category="ui")
+                    #log(f"TOTAL widget refresh: {(t4-t1)*1000:.1f}ms", level="debug", category="ui")
+                except Exception as e:
+                    log(f"Exception in main_window: {e}", level="error", category="ui")
+                    raise
+            finally:
+                self.setUpdatesEnabled(True)
         except Exception as e:
             log(f"Exception in main_window: {e}", level="error", category="ui")
             raise
