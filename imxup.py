@@ -63,7 +63,7 @@ except ImportError:
     winreg = None  # Not available on Linux/Mac
 import mimetypes
 
-__version__ = "0.6.12"  # Application version number
+__version__ = "0.6.13"  # Application version number
 
 # Lazy User-Agent string builder to avoid platform.system() hang during module import
 # (platform.system() can hang on some Windows systems, breaking splash screen initialization)

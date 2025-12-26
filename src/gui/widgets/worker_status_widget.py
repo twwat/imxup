@@ -16,7 +16,7 @@ from PyQt6.QtWidgets import (
     QHeaderView, QLabel, QComboBox, QPushButton, QFrame, QSizePolicy,
     QMenu, QStyle, QStyleOptionHeader, QProgressBar, QAbstractItemView, QToolTip
 )
-from PyQt6.QtCore import Qt, pyqtSignal, pyqtSlot, QSettings, QTimer, pyqtProperty, QSize, QRect, QEvent, QMutex, QMutexLocker
+from PyQt6.QtCore import Qt, pyqtSignal, pyqtSlot, QSettings, QTimer, pyqtProperty, QSize, QRect, QEvent, QMutex, QMutexLocker, QObject
 from PyQt6.QtGui import QIcon, QPixmap, QFont, QPalette, QColor, QFontMetrics
 
 from src.utils.format_utils import format_binary_rate
@@ -1373,6 +1373,15 @@ class WorkerStatusWidget(QWidget):
                         if has_auto_upload:
                             tooltip += " (auto-upload enabled)"
                         container.setToolTip(tooltip)
+
+                        # Store worker data on container for double-click handling
+                        container.setProperty('worker_id', worker.worker_id)
+                        container.setProperty('worker_type', worker.worker_type)
+                        container.setProperty('hostname', worker.hostname)
+
+                        # Install event filter to handle double-clicks on cell widgets
+                        container.installEventFilter(self)
+
                         self.status_table.setCellWidget(row_idx, col_idx, container)
                     else:
                         # Regular text item for non-auto hosts when logos disabled
@@ -1768,6 +1777,7 @@ class WorkerStatusWidget(QWidget):
     def _on_filter_changed(self, index: int):
         """Handle filter combo box change."""
         self._refresh_display()
+        self._save_column_settings()
 
     def _on_selection_changed(self):
         """Handle table row selection change."""
@@ -1788,6 +1798,37 @@ class WorkerStatusWidget(QWidget):
                             self.worker_selected.emit(worker_id, worker.worker_type)
         else:
             self._selected_worker_id = None
+
+    def eventFilter(self, obj: QObject, event: QEvent) -> bool:
+        """Handle events from cell widgets, particularly double-clicks.
+
+        When the hostname column uses setCellWidget() with a container holding
+        the logo and auto icon, those widgets intercept mouse events before the
+        table receives them. This event filter catches double-clicks on those
+        containers and opens the appropriate config dialog.
+
+        Args:
+            obj: The object that received the event (cell widget container)
+            event: The event to filter
+
+        Returns:
+            True if the event was handled, False to pass it on
+        """
+        if event.type() == QEvent.Type.MouseButtonDblClick:
+            # Check if this is a cell widget container with worker data
+            worker_id = obj.property('worker_id')
+            if worker_id:
+                worker_type = obj.property('worker_type')
+                hostname = obj.property('hostname')
+
+                # Open the appropriate dialog
+                if worker_type == 'imx':
+                    self.open_settings_tab_requested.emit(1)  # Credentials tab
+                elif hostname:
+                    self.open_host_config_requested.emit(hostname.lower())
+                return True  # Event handled
+
+        return super().eventFilter(obj, event)
 
     def _on_row_double_clicked(self, item):  # 'item' passed by itemDoubleClicked signal
         """Handle double-click on table row to open host config.
@@ -2155,6 +2196,10 @@ class WorkerStatusWidget(QWidget):
             settings.setValue("worker_status/sort_column", self._active_columns[sort_column].id)
             settings.setValue("worker_status/sort_order", sort_order.value)
 
+        # Save filter selection
+        if self.filter_combo:
+            settings.setValue("worker_status/filter_index", self.filter_combo.currentIndex())
+
     def _load_column_settings(self):
         """Load column settings from QSettings."""
         settings = QSettings("ImxUploader", "ImxUploadGUI")
@@ -2246,6 +2291,13 @@ class WorkerStatusWidget(QWidget):
         if self._sort_column is not None:
             header = self.status_table.horizontalHeader()
             header.setSortIndicator(self._sort_column, self._sort_order)
+
+        # Restore filter selection
+        if self.filter_combo:
+            filter_index = settings.value("worker_status/filter_index", 0, type=int)
+            # Validate index is within range
+            if 0 <= filter_index < self.filter_combo.count():
+                self.filter_combo.setCurrentIndex(filter_index)
 
     def _apply_disabled_style(self, element: Any) -> None:
         """Apply disabled/grayed-out styling to widget or table item.

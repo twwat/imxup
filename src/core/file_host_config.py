@@ -460,10 +460,8 @@ class FileHostConfigManager:
 
                 self.hosts[host_id] = host_config
 
-                import traceback
-                caller = traceback.extract_stack()[-2]
                 source = "built-in" if is_builtin else "custom"
-                log(f"Loaded {source} host config for {host_config.name} ({json_file}) (called from {caller.filename}:{caller.lineno} in {caller.name})", level="debug")
+                log(f"Loaded {source} host config file for {host_config.name} ({json_file})", level="debug", category="file_hosts")
 
             except Exception as e:
                 log(f"Error loading host config {json_file}: {e}", level="error")

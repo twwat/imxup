@@ -25,9 +25,10 @@ class AdaptiveQuickSettingsPanel(QWidget):
     """
 
     # Vertical thresholds - determine NUMBER OF ROWS (2, 3, or 4)
-    HEIGHT_2_ROW = 120        # px - below this, use 2 row layout (increased to prevent overlap)
-    HEIGHT_3_ROW = 160        # px - below this, use 3 rows (increased to prevent overlap)
-    HEIGHT_4_ROW = 166        # px - above this, use 4 rows (keep same)
+    HEIGHT_2_ROW = 100        # px - below this, use 2 row layout
+    HEIGHT_3_ROW = 140        # px - below this, use 3 rows
+    HEIGHT_4_ROW = 180        # px - at or above this, use 4 rows
+    MIN_HEIGHT = 110          # px - minimum height (2-row layout with safety margin)
 
     # Per-button text threshold - each button checks its own width
     BUTTON_TEXT_WIDTH = 92    # px - above this width, button shows text; below = icon only
@@ -64,44 +65,24 @@ class AdaptiveQuickSettingsPanel(QWidget):
         # Set size policy to Expanding vertically so this widget grows when parent grows
         self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
 
+    def _calculate_num_rows(self, height: int) -> int:
+        """Calculate number of rows based on available height."""
+        if height < self.HEIGHT_2_ROW:
+            return 2
+        elif height < self.HEIGHT_3_ROW:
+            return 3
+        elif height < self.HEIGHT_4_ROW:
+            return 4
+        return 4
+
     def minimumSizeHint(self):
         """
-        Override to return minimum size needed for button container.
-        QSplitter queries this method to determine resize limits.
+        Return minimum size needed for smallest layout (2-row mode).
 
-        This prevents the splitter from shrinking the panel below
-        the minimum height needed to display buttons without overlap.
-
-        Returns minimum height based on current layout mode:
-        - 2-row mode: ~86px (2 button rows + spacing + margins)
-        - 3-row mode: ~126px (3 button rows + spacing + margins)
-        - 4-row mode: ~166px (4 button rows + spacing + margins)
-
-        The button_container has a Fixed vertical size policy, so its
-        minimumSizeHint() accurately reflects the space needed for all
-        button rows, spacing between rows, and layout margins.
+        Always returns 2-row minimum so the panel can shrink freely
+        between all layout modes without getting trapped.
         """
-        if self.button_container:
-            # Get button container's minimum size hint
-            # This includes:
-            # - All button row heights (26-34px each per styles.qss)
-            # - Spacing between rows (4px per layout configuration)
-            # - Layout margins (0px per layout configuration)
-            container_hint = self.button_container.minimumSizeHint()
-
-            # Add small safety margin to prevent edge-case compression
-            # This accounts for any rounding issues or unexpected constraints
-            safety_margin = 10
-
-            return QSize(
-                container_hint.width(),  # No horizontal constraint
-                container_hint.height() + safety_margin  # Prevent vertical compression
-            )
-
-        # Fallback if button_container not yet created
-        # Use 2-row minimum (86px) + safety margin as safe default
-        # This handles the brief moment between __init__ and set_buttons()
-        return QSize(0, 96)  # 86px + 10px safety margin
+        return QSize(0, self.MIN_HEIGHT)
 
     def set_buttons(self, settings_btn, credentials_btn, templates_btn, file_hosts_btn,
                     hooks_btn, log_viewer_btn, help_btn, theme_toggle_btn):
@@ -140,15 +121,7 @@ class AdaptiveQuickSettingsPanel(QWidget):
         }
 
         # Initialize state based on current height
-        current_height = self.height()
-        if current_height < self.HEIGHT_2_ROW:
-            self._num_rows = 2  # Minimum is 2 rows
-        elif current_height < self.HEIGHT_3_ROW:
-            self._num_rows = 3
-        elif current_height < self.HEIGHT_4_ROW:
-            self._num_rows = 3
-        else:
-            self._num_rows = 4
+        self._num_rows = self._calculate_num_rows(self.height())
 
         # Initial layout
         self._update_layout(force=True)
@@ -181,17 +154,7 @@ class AdaptiveQuickSettingsPanel(QWidget):
             return  # Buttons not set yet
 
         # Measure height to determine row count
-        height = self.height()
-
-        # Determine number of rows based on height (minimum 2 rows)
-        if height < self.HEIGHT_2_ROW:
-            self._num_rows = 2  # Minimum is 2 rows
-        elif height < self.HEIGHT_3_ROW:
-            self._num_rows = 3
-        elif height < self.HEIGHT_4_ROW:
-            self._num_rows = 3
-        else:
-            self._num_rows = 4
+        self._num_rows = self._calculate_num_rows(self.height())
 
         # Create mode identifier
         target_mode = f"{self._num_rows}row"
@@ -209,12 +172,6 @@ class AdaptiveQuickSettingsPanel(QWidget):
             self._build_3_row()
         else:  # 4 rows
             self._build_4_row()
-
-        # Set actual minimum height to match minimumSizeHint()
-        # QSplitter respects both minimumSize() and minimumSizeHint()
-        if self.button_container:
-            min_hint = self.button_container.minimumSizeHint()
-            self.setMinimumHeight(min_hint.height() + 10)
 
         # Notify Qt that our size constraints have changed
         # This forces QSplitter to re-query minimumSizeHint()

@@ -130,6 +130,8 @@ class AdaptiveGroupBox(QGroupBox):
     by nested widgets (like AdaptiveQuickSettingsPanel) and prevents button overlap.
     """
 
+    FRAME_MARGIN = 40  # Margin for GroupBox frame, title, and safety buffer
+
     def minimumSizeHint(self):
         """
         Override to return the layout's minimum size hint.
@@ -142,9 +144,7 @@ class AdaptiveGroupBox(QGroupBox):
         layout = self.layout()
         if layout:
             layout_hint = layout.minimumSize()
-            # Add small margin for GroupBox frame and title
-            frame_margin = 30  # ~10px top for title, ~10px for frame, ~10px safety
-            return QSize(layout_hint.width(), layout_hint.height() + frame_margin)
+            return QSize(layout_hint.width(), layout_hint.height() + self.FRAME_MARGIN)
 
         # Fallback to default behavior if no layout
         return super().minimumSizeHint()
@@ -2076,7 +2076,7 @@ class ImxUploadGUI(QMainWindow):
         size_policy = QSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum)
         size_policy.setVerticalStretch(0)
         self.settings_group.setSizePolicy(size_policy)
-        # Removed setMinimumSize - QSplitter respects minimumSizeHint() of child widget instead
+        self.settings_group.setMinimumHeight(400)
 
         settings_layout = QGridLayout(self.settings_group)
         try:
@@ -2250,7 +2250,7 @@ class ImxUploadGUI(QMainWindow):
                 log_viewer_icon = icon_mgr.get_icon('log_viewer')
                 if not log_viewer_icon.isNull():
                     self.log_viewer_btn.setIcon(log_viewer_icon)
-                    self.log_viewer_btn.setIconSize(QSize(20, 20))
+                    self.log_viewer_btn.setIconSize(QSize(32, 20))
         except Exception as e:
             log(f"Exception in main_window: {e}", level="error", category="ui")
             raise
@@ -2741,6 +2741,7 @@ class ImxUploadGUI(QMainWindow):
             # Help menu
             help_menu = menu_bar.addMenu("Help")
             action_help = help_menu.addAction("Help")
+            action_help.setShortcut("F1")
             action_help.triggered.connect(self.open_help_dialog)
             action_license = help_menu.addAction("License")
             action_license.triggered.connect(self.show_license_dialog)
@@ -3316,15 +3317,10 @@ class ImxUploadGUI(QMainWindow):
                     #t2 = time.time()
                     #log(f"apply_font_size took {(t2-t1)*1000:.1f}ms", level="debug", category="ui")
 
-                    # Refresh all button icons that use the icon manager for theme changes
-                    self._refresh_button_icons()
-                    #t3 = time.time()
-                    #log(f"_refresh_button_icons took {(t3-t2)*1000:.1f}ms", level="debug", category="ui")
-
-                    self.refresh_all_status_icons()
-                    #t4 = time.time()
-                    #log(f"refresh_all_status_icons took {(t4-t3)*1000:.1f}ms", level="debug", category="ui")
-                    #log(f"TOTAL widget refresh: {(t4-t1)*1000:.1f}ms", level="debug", category="ui")
+                    # Defer icon refresh to next event loop iteration
+                    # This allows the stylesheet to render first, making UI immediately responsive
+                    QTimer.singleShot(0, self._refresh_button_icons)
+                    QTimer.singleShot(0, self.refresh_all_status_icons)
                 except Exception as e:
                     log(f"Exception in main_window: {e}", level="error", category="ui")
                     raise

@@ -14,9 +14,75 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, QSize
 from PyQt6.QtGui import QIcon, QFont
 
+# Import markdown at module level to avoid 3-4 second delay on first use
+try:
+    from markdown import markdown as render_markdown
+    MARKDOWN_AVAILABLE = True
+except ImportError:
+    MARKDOWN_AVAILABLE = False
+    render_markdown = None
+
 
 class HelpDialog(QDialog):
     """Enhanced help dialog with navigation tree and search"""
+
+    # Emoji character to codepoint filename mapping (class constant to avoid recreation)
+    EMOJI_TO_FILE = {
+        # Original emojis
+        "\U0001F680": "1f680",  # rocket
+        "\U0001F4E4": "1f4e4",  # outbox
+        "\U0001F4E6": "1f4e6",  # package
+        "\U0001F3A8": "1f3a8",  # palette
+        "\u2328": "2328",       # keyboard
+        "\u2328\uFE0F": "2328", # keyboard with variation selector
+        "\U0001F50D": "1f50d",  # magnifying glass
+        "\U0001F527": "1f527",  # wrench
+        "\U0001F41B": "1f41b",  # bug
+        "\U0001F4CA": "1f4ca",  # bar chart
+        "\U0001F7E1": "1f7e1",  # yellow circle
+        "\U0001F535": "1f535",  # blue circle
+        "\U0001F7E2": "1f7e2",  # green circle
+        "\U0001F534": "1f534",  # red circle
+        "\u23F8": "23f8",       # pause
+        "\u23F8\uFE0F": "23f8", # pause with variation selector
+        "\U0001F4A1": "1f4a1",  # lightbulb
+        "\U0001F198": "1f198",  # SOS
+        # Additional emojis (high priority first)
+        "\u2705": "2705",       # check mark (22 uses)
+        "\u274C": "274c",       # cross mark (7 uses)
+        "\u2714": "2714",       # heavy check mark (4 uses)
+        "\u2714\uFE0F": "2714", # heavy check with variation selector
+        "\U0001F3AF": "1f3af",  # bullseye (4 uses)
+        "\u2699": "2699",       # gear
+        "\u2699\uFE0F": "2699", # gear with variation selector
+        "\u26A0": "26a0",       # warning sign
+        "\u26A0\uFE0F": "26a0", # warning with variation selector
+        "\U0001F389": "1f389",  # party popper
+        "\U0001F393": "1f393",  # graduation cap
+        "\U0001F39B": "1f39b",  # control knobs
+        "\U0001F39B\uFE0F": "1f39b",  # control knobs with variation selector
+        "\U0001F3D7": "1f3d7",  # building construction
+        "\U0001F3D7\uFE0F": "1f3d7",  # building construction with variation selector
+        "\U0001F4C1": "1f4c1",  # file folder
+        "\U0001F4C2": "1f4c2",  # open file folder
+        "\U0001F4C8": "1f4c8",  # chart increasing
+        "\U0001F4CB": "1f4cb",  # clipboard
+        "\U0001F4F1": "1f4f1",  # mobile phone
+        "\U0001F504": "1f504",  # counterclockwise arrows
+        "\U0001F517": "1f517",  # link
+        "\U0001F5C2": "1f5c2",  # card index dividers
+        "\U0001F5C2\uFE0F": "1f5c2",  # card index with variation selector
+        "\U0001F6E0": "1f6e0",  # hammer and wrench
+        "\U0001F6E0\uFE0F": "1f6e0",  # hammer and wrench with variation selector
+        "\U0001F7E0": "1f7e0",  # orange circle
+    }
+
+    # Pre-sorted emoji keys (longest first for correct replacement order)
+    _EMOJI_KEYS_SORTED = sorted(EMOJI_TO_FILE.keys(), key=len, reverse=True)
+
+    # Emoji directory path (computed once)
+    _EMOJI_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.dirname(os.path.abspath(__file__))))), "assets", "emoji")
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -153,75 +219,129 @@ class HelpDialog(QDialog):
             self.current_doc = filename
             self._display_content(title, content)
 
+    def _get_theme_css(self) -> str:
+        """Generate theme-appropriate CSS for HTML content."""
+        # Detect dark mode using palette luminance
+        palette = QApplication.palette()
+        is_dark = palette.window().color().lightness() < 128
+
+        # Common styles
+        common = """
+            body {
+                font-family: 'Segoe UI Emoji', 'Segoe UI', 'Noto Color Emoji', -apple-system, BlinkMacSystemFont, Arial, sans-serif;
+                line-height: 1.6;
+                padding: 20px;
+                max-width: 900px;
+            }
+            code {
+                padding: 2px 6px;
+                border-radius: 3px;
+                font-family: 'Courier New', monospace;
+            }
+            pre {
+                padding: 15px;
+                border-radius: 5px;
+                overflow-x: auto;
+            }
+            pre code {
+                background-color: transparent;
+                padding: 0;
+            }
+            ul, ol { margin-left: 20px; }
+            li { margin-bottom: 5px; }
+            table {
+                border-collapse: collapse;
+                width: 100%;
+                margin: 15px 0;
+            }
+            th, td {
+                padding: 8px;
+                text-align: left;
+            }
+            th { font-weight: bold; }
+            h1, h2, h3, h4, h5, h6 {
+                font-family: 'Segoe UI Emoji', 'Segoe UI', 'Noto Color Emoji', -apple-system, BlinkMacSystemFont, Arial, sans-serif;
+            }
+            blockquote {
+                margin: 15px 0;
+                padding-left: 15px;
+            }
+            a { text-decoration: none; }
+            a:hover { text-decoration: underline; }
+        """
+
+        if is_dark:
+            theme_colors = """
+                body { color: #e0e0e0; background-color: #1e1e1e; }
+                h1, h2, h3 { color: #7fbfff; }
+                h1 { border-bottom: 2px solid #3498db; padding-bottom: 10px; }
+                h2 { border-bottom: 1px solid #555; padding-bottom: 5px; margin-top: 30px; }
+                code { background-color: #2a2a2a; color: #e0e0e0; }
+                pre { background-color: #2a2a2a; }
+                th, td { border: 1px solid #555; }
+                th { background-color: #333; }
+                blockquote { border-left: 4px solid #3498db; color: #aaa; }
+                a { color: #5dade2; }
+            """
+        else:
+            theme_colors = """
+                body { color: #333; background-color: #ffffff; }
+                h1, h2, h3 { color: #2c3e50; }
+                h1 { border-bottom: 2px solid #3498db; padding-bottom: 10px; }
+                h2 { border-bottom: 1px solid #bdc3c7; padding-bottom: 5px; margin-top: 30px; }
+                code { background-color: #f4f4f4; color: #333; }
+                pre { background-color: #f4f4f4; }
+                th, td { border: 1px solid #ddd; }
+                th { background-color: #f2f2f2; }
+                blockquote { border-left: 4px solid #3498db; color: #555; }
+                a { color: #3498db; }
+            """
+
+        return common + theme_colors
+
+    def _wrap_emojis(self, html: str) -> str:
+        """Replace emoji characters with Twemoji PNG images.
+
+        Args:
+            html: HTML content that may contain emoji characters.
+
+        Returns:
+            HTML with emoji characters replaced by img tags pointing to local PNGs.
+        """
+        result = html
+        # Process longer sequences first (FE0F variants) to avoid partial matches
+        for emoji in self._EMOJI_KEYS_SORTED:
+            if emoji in result:
+                codepoint = self.EMOJI_TO_FILE[emoji]
+                img_path = os.path.join(self._EMOJI_DIR, f"{codepoint}.png")
+                # Use file:// URL for Qt - normalize path separators
+                file_url = "file:///" + img_path.replace("\\", "/")
+                img_tag = f'<img src="{file_url}" width="20" height="20" style="vertical-align: middle;" />'
+                result = result.replace(emoji, img_tag)
+
+        return result
+
     def _display_content(self, title: str, content: str):
         """Display markdown content in the viewer"""
-        try:
-            # Try to render as markdown
-            from markdown import markdown
-            html_content = markdown(content, extensions=['extra', 'codehilite', 'toc'])
+        if MARKDOWN_AVAILABLE:
+            html_content = render_markdown(content, extensions=['extra', 'codehilite', 'toc'])
+            # Wrap emoji characters in spans with emoji font-family for proper rendering
+            html_content = self._wrap_emojis(html_content)
             html = f"""
             <html>
             <head>
                 <style>
-                    body {{
-                        font-family: 'Segoe UI Emoji', 'Segoe UI', 'Noto Color Emoji', -apple-system, BlinkMacSystemFont, Arial, sans-serif;
-                        line-height: 1.6;
-                        padding: 20px;
-                        max-width: 900px;
-                    }}
-                    h1, h2, h3 {{ color: #2c3e50; }}
-                    h1 {{ border-bottom: 2px solid #3498db; padding-bottom: 10px; }}
-                    h2 {{ border-bottom: 1px solid #bdc3c7; padding-bottom: 5px; margin-top: 30px; }}
-                    code {{
-                        background-color: #f4f4f4;
-                        padding: 2px 6px;
-                        border-radius: 3px;
-                        font-family: 'Courier New', monospace;
-                    }}
-                    pre {{
-                        background-color: #f4f4f4;
-                        padding: 15px;
-                        border-radius: 5px;
-                        overflow-x: auto;
-                    }}
-                    pre code {{
-                        background-color: transparent;
-                        padding: 0;
-                    }}
-                    ul, ol {{ margin-left: 20px; }}
-                    li {{ margin-bottom: 5px; }}
-                    table {{
-                        border-collapse: collapse;
-                        width: 100%;
-                        margin: 15px 0;
-                    }}
-                    th, td {{
-                        border: 1px solid #ddd;
-                        padding: 8px;
-                        text-align: left;
-                    }}
-                    th {{
-                        background-color: #f2f2f2;
-                        font-weight: bold;
-                    }}
-                    blockquote {{
-                        border-left: 4px solid #3498db;
-                        margin: 15px 0;
-                        padding-left: 15px;
-                        color: #555;
-                    }}
-                    a {{ color: #3498db; text-decoration: none; }}
-                    a:hover {{ text-decoration: underline; }}
+                    {self._get_theme_css()}
                 </style>
             </head>
             <body>
-                <h1>{title}</h1>
+                <h1>{self._wrap_emojis(title)}</h1>
                 {html_content}
             </body>
             </html>
             """
             self.content_viewer.setHtml(html)
-        except ImportError:
+        else:
             # Fallback to plain text if markdown not available
             self.content_viewer.setPlainText(f"# {title}\n\n{content}")
 
@@ -271,12 +391,19 @@ class HelpDialog(QDialog):
 
     def _show_error(self, message: str):
         """Display error message in content viewer"""
+        palette = QApplication.palette()
+        is_dark = palette.window().color().lightness() < 128
+
+        bg_color = "#1e1e1e" if is_dark else "#ffffff"
+        text_color = "#e0e0e0" if is_dark else "#333333"
+        muted_color = "#aaaaaa" if is_dark else "#7f8c8d"
+
         self.content_viewer.setHtml(f"""
         <html>
-        <body style="padding: 20px; font-family: Arial, sans-serif;">
+        <body style="padding: 20px; font-family: Arial, sans-serif; background-color: {bg_color}; color: {text_color};">
             <h2 style="color: #e74c3c;">⚠️ Error</h2>
             <p>{message}</p>
-            <p style="color: #7f8c8d;">
+            <p style="color: {muted_color};">
                 Please ensure the documentation files are available in the <code>docs/user/</code> directory.
             </p>
         </body>
