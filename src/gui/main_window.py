@@ -118,6 +118,7 @@ from src.gui.progress_tracker import ProgressTracker
 from src.gui.worker_signal_handler import WorkerSignalHandler
 from src.gui.gallery_queue_controller import GalleryQueueController
 from src.gui.table_row_manager import TableRowManager
+from src.gui.settings_manager import SettingsManager
 
 
 class AdaptiveGroupBox(QGroupBox):
@@ -583,6 +584,7 @@ class ImxUploadGUI(QMainWindow):
 
         # Initialize table row manager for row population and status icons
         self.table_row_manager = TableRowManager(self)
+        self.settings_manager = SettingsManager(self)
 
         # Now connect queue status changes (after worker_signal_handler is ready)
         self.queue_manager.status_changed.connect(self.worker_signal_handler.on_queue_item_status_changed)
@@ -4483,132 +4485,32 @@ class ImxUploadGUI(QMainWindow):
 
     
     def restore_settings(self):
-        """Restore window settings"""
-        geometry = self.settings.value("geometry")
-        if geometry:
-            self.restoreGeometry(geometry)
-        
-        # Restore splitter states for resizable dividers
-        if hasattr(self, 'top_splitter'):
-            splitter_state = self.settings.value("splitter/state")
-            if splitter_state:
-                self.top_splitter.restoreState(splitter_state)
+        """Restore window settings from QSettings.
 
-        # Restore vertical splitter state (Settings/Log divider)
-        if hasattr(self, 'right_vertical_splitter'):
-            vertical_splitter_state = self.settings.value("splitter/vertical_state")
-            if vertical_splitter_state:
-                self.right_vertical_splitter.restoreState(vertical_splitter_state)
+        Delegates to SettingsManager.restore_settings().
+        """
+        self.settings_manager.restore_settings()
 
-        # Restore right panel collapsed state
-        is_collapsed = self.settings.value("right_panel/collapsed", False, type=bool)
-        if is_collapsed and hasattr(self, 'action_toggle_right_panel'):
-            # Collapse after a short delay to allow UI to initialize
-            QTimer.singleShot(100, lambda: self.toggle_right_panel())
-        elif hasattr(self, 'action_toggle_right_panel'):
-            self.action_toggle_right_panel.setChecked(True)
-        
-        # Load settings from .ini file
-        defaults = load_user_defaults()
-
-        # Restore table columns (widths and visibility)
-        self.restore_table_settings()
-        # Apply saved theme
-        try:
-            theme = str(self.settings.value('ui/theme', 'dark'))
-            self.apply_theme(theme)
-        except Exception as e:
-            log(f"Exception in main_window: {e}", level="error", category="ui")
-            raise
-        
-        # Apply saved font size
-        try:
-            font_size = int(self.settings.value('ui/font_size', 9))
-            self.apply_font_size(font_size)
-        except Exception as e:
-            log(f"Error loading font size: {e}", category="ui", level="debug")
-            pass
-    
     def save_settings(self):
-        """Save window settings"""
-        self.settings.setValue("geometry", self.saveGeometry())
+        """Save window settings to QSettings.
 
-        # Save splitter states for resizable dividers
-        if hasattr(self, 'top_splitter'):
-            self.settings.setValue("splitter/state", self.top_splitter.saveState())
-
-        # Save vertical splitter state (Settings/Log divider)
-        if hasattr(self, 'right_vertical_splitter'):
-            self.settings.setValue("splitter/vertical_state", self.right_vertical_splitter.saveState())
-
-        # Save right panel collapsed state
-        if hasattr(self, 'action_toggle_right_panel'):
-            is_collapsed = not self.action_toggle_right_panel.isChecked()
-            self.settings.setValue("right_panel/collapsed", is_collapsed)
-
-        self.save_table_settings()
+        Delegates to SettingsManager.save_settings().
+        """
+        self.settings_manager.save_settings()
 
     def save_table_settings(self):
-        """Persist table column widths, visibility, and order to settings"""
-        try:
-            column_count = self.gallery_table.columnCount()
-            widths = [self.gallery_table.columnWidth(i) for i in range(column_count)]
-            visibility = [not self.gallery_table.isColumnHidden(i) for i in range(column_count)]
-            # Persist header order (visual indices by logical section)
-            header = self.gallery_table.horizontalHeader()
-            order = [header.visualIndex(i) for i in range(column_count)]
-            self.settings.setValue("table/column_widths", json.dumps(widths))
-            self.settings.setValue("table/column_visible", json.dumps(visibility))
-            self.settings.setValue("table/column_order", json.dumps(order))
-        except Exception as e:
-            log(f"Exception in main_window: {e}", level="error", category="ui")
-            raise
+        """Persist table column widths, visibility, and order to settings.
+
+        Delegates to SettingsManager.save_table_settings().
+        """
+        self.settings_manager.save_table_settings()
 
     def restore_table_settings(self):
-        """Restore table column widths, visibility, and order from settings"""
-        try:
-            column_count = self.gallery_table.columnCount()
-            widths_raw = self.settings.value("table/column_widths")
-            visible_raw = self.settings.value("table/column_visible")
-            order_raw = self.settings.value("table/column_order")
-            if widths_raw:
-                try:
-                    widths = json.loads(widths_raw)
-                    for i in range(min(column_count, len(widths))):
-                        if isinstance(widths[i], int) and widths[i] > 0:
-                            self.gallery_table.setColumnWidth(i, widths[i])
-                except Exception as e:
-                    log(f"Exception in main_window: {e}", level="error", category="ui")
-                    raise
-            if visible_raw:
-                try:
-                    visible = json.loads(visible_raw)
-                    for i in range(min(column_count, len(visible))):
-                        self.gallery_table.setColumnHidden(i, not bool(visible[i]))
-                except Exception as e:
-                    log(f"Exception in main_window: {e}", level="error", category="ui")
-                    raise
-            if order_raw:
-                try:
-                    header = self.gallery_table.horizontalHeader()
-                    order = json.loads(order_raw)
-                    # order is list of visualIndex for each logical section; apply by moving sections
-                    # Build inverse mapping target_visual_index -> logical
-                    target_visual_to_logical = {v: i for i, v in enumerate(order) if isinstance(v, int)}
-                    # Move sections in order of target visual positions
-                    for target_visual in range(min(column_count, len(order))):
-                        logical = target_visual_to_logical.get(target_visual)
-                        if logical is None:
-                            continue
-                        current_visual = header.visualIndex(logical)
-                        if current_visual != target_visual:
-                            header.moveSection(current_visual, target_visual)
-                except Exception as e:
-                    log(f"Exception in main_window: {e}", level="error", category="ui")
-                    raise
-        except Exception as e:
-            log(f"Exception in main_window: {e}", level="error", category="ui")
-            raise
+        """Restore table column widths, visibility, and order from settings.
+
+        Delegates to SettingsManager.restore_table_settings().
+        """
+        self.settings_manager.restore_table_settings()
 
     def _on_header_section_resized(self, logicalIndex, oldSize, newSize):
         """Save widths on resize events"""
@@ -4784,62 +4686,18 @@ class ImxUploadGUI(QMainWindow):
                         actual_table.blockSignals(signals_blocked)
 
     def on_setting_changed(self):
-        """Handle when any quick setting is changed - auto-save immediately"""
-        self.save_upload_settings()
-    
+        """Handle when any quick setting is changed - auto-save immediately.
+
+        Delegates to SettingsManager.on_setting_changed().
+        """
+        self.settings_manager.on_setting_changed()
+
     def save_upload_settings(self):
-        """Save upload settings to .ini file"""
-        try:
-            import configparser
-            import os
-            
-            # Get current values
-            thumbnail_size = self.thumbnail_size_combo.currentIndex() + 1
-            thumbnail_format = self.thumbnail_format_combo.currentIndex() + 1
-            # Max retries and batch size are now only in comprehensive settings
-            from imxup import load_user_defaults
-            defaults = load_user_defaults()
-            max_retries = defaults.get('max_retries', 3)
-            parallel_batch_size = defaults.get('parallel_batch_size', 4)
-            template_name = self.template_combo.currentText()
-            auto_start_upload = self.auto_start_upload_check.isChecked()
-            store_in_uploaded = self.store_in_uploaded_check.isChecked()
-            store_in_central = self.store_in_central_check.isChecked()
-            central_store_path = (self.central_store_path_value or "").strip()
+        """Save upload settings to INI file.
 
-            # Load existing config
-            config = configparser.ConfigParser()
-            config_file = get_config_path()
-
-            if os.path.exists(config_file):
-                config.read(config_file)
-
-            # Ensure DEFAULTS section exists
-            if 'DEFAULTS' not in config:
-                config['DEFAULTS'] = {}
-
-            # Update settings
-            config['DEFAULTS']['thumbnail_size'] = str(thumbnail_size)
-            config['DEFAULTS']['thumbnail_format'] = str(thumbnail_format)
-            config['DEFAULTS']['max_retries'] = str(max_retries)
-            config['DEFAULTS']['parallel_batch_size'] = str(parallel_batch_size)
-            config['DEFAULTS']['template_name'] = template_name
-            config['DEFAULTS']['auto_start_upload'] = str(auto_start_upload)
-            config['DEFAULTS']['store_in_uploaded'] = str(store_in_uploaded)
-            config['DEFAULTS']['store_in_central'] = str(store_in_central)
-            # Persist central store path (empty string implies default)
-            config['DEFAULTS']['central_store_path'] = central_store_path
-            
-            # Save to file
-            with open(config_file, 'w') as f:
-                config.write(f)
-
-            # Quick settings auto-saved (no button to update)
-            log(f"Quick settings saved successfully",level="info", category="ui")
-            
-        except Exception as e:
-            log(f"Exception saving settings: {str(e)}")
-            QMessageBox.warning(self, "Error", f"Failed to save settings: {str(e)}")
+        Delegates to SettingsManager.save_upload_settings().
+        """
+        self.settings_manager.save_upload_settings()
     
     def dragEnterEvent(self, event):
         """Handle drag enter - WSL2 PERMISSIVE VERSION
