@@ -477,6 +477,12 @@ class TableRowManager(QObject):
         """
         mw = self._main_window
         try:
+            # Order number (column 0) - use db_id for consistent ordering
+            order_item = NumericTableWidgetItem(item.db_id if item.db_id else 0)
+            order_item.setFlags(order_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+            order_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            mw.gallery_table.setItem(row, _Col.ORDER, order_item)
+
             # Name column (always visible)
             name_item = QTableWidgetItem(item.name)
             name_item.setFlags(name_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
