@@ -43,6 +43,35 @@ class ProgressTracker(QObject):
         self._current_transfer_kbps = 0.0
         self._bandwidth_samples = []
 
+        # Cache QSettings instances to avoid disk/registry I/O on every call
+        self._stats_settings = QSettings("ImxUploader", "Stats")
+        self._gui_settings = QSettings("ImxUploader", "ImxUploadGUI")
+
+        # Cache stats values with periodic refresh
+        self._cached_stats: dict = {}
+        self._stats_cache_time: float = 0.0
+
+    def _get_cached_stats(self) -> dict:
+        """Get cached statistics with periodic refresh (every 5 seconds).
+
+        Returns:
+            dict: Cached statistics including total_galleries, total_images,
+                  total_size_bytes, fastest_kbps, and fastest_kbps_timestamp.
+        """
+        now = time.time()
+        if now - self._stats_cache_time > 5.0:  # Refresh every 5s
+            settings = self._stats_settings
+            self._cached_stats = {
+                'total_galleries': settings.value("total_galleries", 0, type=int),
+                'total_images': settings.value("total_images", 0, type=int),
+                'total_size_bytes_v2': settings.value("total_size_bytes_v2", "0"),
+                'total_size_bytes': settings.value("total_size_bytes", 0, type=int),
+                'fastest_kbps': settings.value("fastest_kbps", 0.0, type=float),
+                'fastest_kbps_timestamp': settings.value("fastest_kbps_timestamp", ""),
+            }
+            self._stats_cache_time = now
+        return self._cached_stats
+
     def _update_counts_and_progress(self):
         """Update both button counts and progress display together."""
         self._update_button_counts()
@@ -143,15 +172,16 @@ class ProgressTracker(QObject):
 
         QTimer.singleShot(100, self._update_unnamed_count_background)
 
-        settings = QSettings("ImxUploader", "Stats")
-        total_galleries = settings.value("total_galleries", 0, type=int)
-        total_images_acc = settings.value("total_images", 0, type=int)
-        total_size_bytes_v2 = settings.value("total_size_bytes_v2", "0")
+        # Use cached stats to avoid disk/registry I/O on every progress update
+        cached = self._get_cached_stats()
+        total_galleries = cached['total_galleries']
+        total_images_acc = cached['total_images']
+        total_size_bytes_v2 = cached['total_size_bytes_v2']
         try:
             total_size_acc = int(str(total_size_bytes_v2))
         except Exception:
-            total_size_acc = settings.value("total_size_bytes", 0, type=int)
-        fastest_kbps = settings.value("fastest_kbps", 0.0, type=float)
+            total_size_acc = cached['total_size_bytes']
+        fastest_kbps = cached['fastest_kbps']
 
         self._main_window.stats_total_galleries_value_label.setText(f"{total_galleries}")
         self._main_window.stats_total_images_value_label.setText(f"{total_images_acc}")
@@ -162,7 +192,7 @@ class ProgressTracker(QObject):
             fastest_mib = fastest_kbps / 1024.0
             fastest_str = f"{fastest_mib:.3f} MiB/s"
             self._main_window.speed_fastest_value_label.setText(fastest_str)
-            fastest_timestamp = settings.value("fastest_kbps_timestamp", "", type=str)
+            fastest_timestamp = cached['fastest_kbps_timestamp']
             if fastest_kbps > 0 and fastest_timestamp:
                 self._main_window.speed_fastest_value_label.setToolTip(f"Record set: {fastest_timestamp}")
             else:
@@ -208,12 +238,18 @@ class ProgressTracker(QObject):
 
             self._main_window.speed_current_value_label.setText(speed_str)
 
-            settings = QSettings("ImxUploader", "ImxUploadGUI")
-            fastest_kbps = settings.value("fastest_kbps", 0.0, type=float)
+            # Use cached QSettings instance to avoid disk/registry I/O on every bandwidth update
+            # Note: We read from _gui_settings but writes go to _stats_settings for consistency
+            # with how update_progress_display reads from Stats
+            cached = self._get_cached_stats()
+            fastest_kbps = cached['fastest_kbps']
             if self._current_transfer_kbps > fastest_kbps and self._current_transfer_kbps < 10000:
-                settings.setValue("fastest_kbps", self._current_transfer_kbps)
+                # Write new record to Stats settings (same location where update_progress_display reads)
+                self._stats_settings.setValue("fastest_kbps", self._current_transfer_kbps)
                 timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                settings.setValue("fastest_kbps_timestamp", timestamp)
+                self._stats_settings.setValue("fastest_kbps_timestamp", timestamp)
+                # Invalidate cache so next read picks up the new value
+                self._stats_cache_time = 0.0
                 fastest_mib = self._current_transfer_kbps / 1024.0
                 fastest_str = f"{fastest_mib:.3f} MiB/s"
                 self._main_window.speed_fastest_value_label.setText(fastest_str)

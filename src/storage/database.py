@@ -40,6 +40,12 @@ def _connect(db_path: Optional[str] = None) -> sqlite3.Connection:
     return conn
 
 
+# Module-level set to track which database paths have been initialized.
+# This prevents repeated schema introspection (~20 SQL statements) on every method call.
+# Thread-safe because set operations are atomic in CPython (GIL protected).
+_schema_initialized_dbs: set[str] = set()
+
+
 class _ConnectionContext:
     """Context manager that properly closes sqlite3 connections.
 
@@ -61,6 +67,18 @@ class _ConnectionContext:
 
 
 def _ensure_schema(conn: sqlite3.Connection) -> None:
+    """Ensure database schema is created and migrations are run.
+
+    Uses module-level tracking to avoid repeated schema introspection.
+    Only runs full schema creation once per database path per process.
+    """
+    # Get database path from connection to track initialization
+    db_path = conn.execute("PRAGMA database_list").fetchone()[2]
+
+    # Early return if already initialized for this database
+    if db_path in _schema_initialized_dbs:
+        return
+
     # Create core schema first (without tab_name initially)
     conn.executescript(
         """
@@ -162,6 +180,10 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
     )
     # Run migrations after core schema creation (this adds tab_name column and indexes)
     _run_migrations(conn)
+
+    # Mark this database as initialized to skip future calls
+    _schema_initialized_dbs.add(db_path)
+
 
 def _run_migrations(conn: sqlite3.Connection) -> None:
     """Run database migrations to add new columns/features."""

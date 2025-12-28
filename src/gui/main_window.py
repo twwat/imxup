@@ -3278,34 +3278,25 @@ class ImxUploadGUI(QMainWindow):
             log(f"Error checking file host triggers on gallery start: {e}", level="error", category="file_hosts")
 
         # Update only the specific row status instead of full table refresh
-        # Also ensure settings are disabled while uploads are active
-        #try:
-        #    self.settings_group.setEnabled(False)
-        #except Exception as e:
-        #    log(f"ERROR: Exception in main_window: {e}", level="error", category="ui")
-        #    raise
+        # Use O(1) path lookup instead of O(n) row iteration
+        row = self._get_row_for_path(path)
+        if row is not None:
+            # Update uploaded count
+            uploaded_text = f"0/{total_images}"
+            uploaded_item = QTableWidgetItem(uploaded_text)
+            uploaded_item.setFlags(uploaded_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+            uploaded_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            self.gallery_table.setItem(row, GalleryTableWidget.COL_UPLOADED, uploaded_item)
 
-        for row in range(self.gallery_table.rowCount()):
-            name_item = self.gallery_table.item(row, GalleryTableWidget.COL_NAME)
-            if name_item and name_item.data(Qt.ItemDataRole.UserRole) == path:
-                # Update uploaded count
-                uploaded_text = f"0/{total_images}"
-                uploaded_item = QTableWidgetItem(uploaded_text)
-                uploaded_item.setFlags(uploaded_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
-                uploaded_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-                self.gallery_table.setItem(row, GalleryTableWidget.COL_UPLOADED, uploaded_item)
-                
-                # Update status cell
-                current_status = item.status
-                self._set_status_cell_icon(row, current_status)
-                self._set_status_text_cell(row, current_status)
-                
-                
-                # Update action buttons
-                action_widget = self.gallery_table.cellWidget(row, GalleryTableWidget.COL_ACTION)
-                if isinstance(action_widget, ActionButtonWidget):
-                    action_widget.update_buttons(current_status)
-                break
+            # Update status cell
+            current_status = item.status
+            self._set_status_cell_icon(row, current_status)
+            self._set_status_text_cell(row, current_status)
+
+            # Update action buttons
+            action_widget = self.gallery_table.cellWidget(row, GalleryTableWidget.COL_ACTION)
+            if isinstance(action_widget, ActionButtonWidget):
+                action_widget.update_buttons(current_status)
         
         # Update button counts and progress after gallery starts
         QTimer.singleShot(0, self.progress_tracker._update_counts_and_progress)
@@ -3612,54 +3603,50 @@ class ImxUploadGUI(QMainWindow):
                     actual_table = getattr(self.gallery_table, 'table', self.gallery_table)
                     log(f"Using actual_table: {type(actual_table).__name__}", level="debug", category="hooks")
 
-                    # Find the table row for this gallery
-                    if actual_table:
-                        log(f"Table has {actual_table.rowCount()} rows", level="debug", category="hooks")
-                        for row in range(actual_table.rowCount()):
-                            name_item = actual_table.item(row, GalleryTableWidget.COL_NAME)
-                            if name_item and name_item.data(Qt.ItemDataRole.UserRole) == path:
-                                log(f"Found matching row {row} for path {path}", level="debug", category="hooks")
+                    # Use O(1) path lookup instead of O(n) row iteration
+                    row = self._get_row_for_path(path)
+                    if row is not None and actual_table:
+                        log(f"Found matching row {row} for path {path}", level="debug", category="hooks")
 
-                                # Block signals to prevent itemChanged events during update
-                                signals_blocked = actual_table.signalsBlocked()
-                                actual_table.blockSignals(True)
-                                try:
-                                    # Update ext columns
-                                    for ext_field, value in ext_fields.items():
-                                        log(f"Processing ext_field={ext_field}, value={value}", level="debug", category="hooks")
-                                        if ext_field == 'ext1':
-                                            ext_item = QTableWidgetItem(str(value))
-                                            ext_item.setFlags(ext_item.flags() | Qt.ItemFlag.ItemIsEditable)
-                                            ext_item.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
-                                            actual_table.setItem(row, GalleryTableWidget.COL_EXT1, ext_item)
-                                            log(f"Set COL_EXT1 (col {GalleryTableWidget.COL_EXT1}) to: {value}", level="trace", category="hooks")
-                                        elif ext_field == 'ext2':
-                                            ext_item = QTableWidgetItem(str(value))
-                                            ext_item.setFlags(ext_item.flags() | Qt.ItemFlag.ItemIsEditable)
-                                            ext_item.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
-                                            actual_table.setItem(row, GalleryTableWidget.COL_EXT2, ext_item)
-                                            log(f"Set COL_EXT2 (col {GalleryTableWidget.COL_EXT2}) to: {value}", level="trace", category="hooks")
-                                        elif ext_field == 'ext3':
-                                            ext_item = QTableWidgetItem(str(value))
-                                            ext_item.setFlags(ext_item.flags() | Qt.ItemFlag.ItemIsEditable)
-                                            ext_item.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
-                                            actual_table.setItem(row, GalleryTableWidget.COL_EXT3, ext_item)
-                                            log(f"Set COL_EXT3 (col {GalleryTableWidget.COL_EXT3}) to: {value}", level="trace", category="hooks")
-                                        elif ext_field == 'ext4':
-                                            ext_item = QTableWidgetItem(str(value))
-                                            ext_item.setFlags(ext_item.flags() | Qt.ItemFlag.ItemIsEditable)
-                                            ext_item.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
-                                            actual_table.setItem(row, GalleryTableWidget.COL_EXT4, ext_item)
-                                            log(f"Set COL_EXT4 (col {GalleryTableWidget.COL_EXT4}) to: {value}", level="trace", category="hooks")
-                                finally:
-                                    # Restore original signal state
-                                    actual_table.blockSignals(signals_blocked)
+                        # Block signals to prevent itemChanged events during update
+                        signals_blocked = actual_table.signalsBlocked()
+                        actual_table.blockSignals(True)
+                        try:
+                            # Update ext columns
+                            for ext_field, value in ext_fields.items():
+                                log(f"Processing ext_field={ext_field}, value={value}", level="debug", category="hooks")
+                                if ext_field == 'ext1':
+                                    ext_item = QTableWidgetItem(str(value))
+                                    ext_item.setFlags(ext_item.flags() | Qt.ItemFlag.ItemIsEditable)
+                                    ext_item.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+                                    actual_table.setItem(row, GalleryTableWidget.COL_EXT1, ext_item)
+                                    log(f"Set COL_EXT1 (col {GalleryTableWidget.COL_EXT1}) to: {value}", level="trace", category="hooks")
+                                elif ext_field == 'ext2':
+                                    ext_item = QTableWidgetItem(str(value))
+                                    ext_item.setFlags(ext_item.flags() | Qt.ItemFlag.ItemIsEditable)
+                                    ext_item.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+                                    actual_table.setItem(row, GalleryTableWidget.COL_EXT2, ext_item)
+                                    log(f"Set COL_EXT2 (col {GalleryTableWidget.COL_EXT2}) to: {value}", level="trace", category="hooks")
+                                elif ext_field == 'ext3':
+                                    ext_item = QTableWidgetItem(str(value))
+                                    ext_item.setFlags(ext_item.flags() | Qt.ItemFlag.ItemIsEditable)
+                                    ext_item.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+                                    actual_table.setItem(row, GalleryTableWidget.COL_EXT3, ext_item)
+                                    log(f"Set COL_EXT3 (col {GalleryTableWidget.COL_EXT3}) to: {value}", level="trace", category="hooks")
+                                elif ext_field == 'ext4':
+                                    ext_item = QTableWidgetItem(str(value))
+                                    ext_item.setFlags(ext_item.flags() | Qt.ItemFlag.ItemIsEditable)
+                                    ext_item.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+                                    actual_table.setItem(row, GalleryTableWidget.COL_EXT4, ext_item)
+                                    log(f"Set COL_EXT4 (col {GalleryTableWidget.COL_EXT4}) to: {value}", level="trace", category="hooks")
+                        finally:
+                            # Restore original signal state
+                            actual_table.blockSignals(signals_blocked)
 
-                                log(f"Updated ext fields in GUI for {item.name}: {ext_fields}", level="info", category="hooks")
-                                # Trigger artifact regeneration for ext field changes if enabled
-                                QTimer.singleShot(100, lambda p=path: self.artifact_handler.regenerate_bbcode_for_gallery(p, force=False) if self.artifact_handler.should_auto_regenerate_bbcode(p) else None)
-                                break
-                    else:
+                        log(f"Updated ext fields in GUI for {item.name}: {ext_fields}", level="info", category="hooks")
+                        # Trigger artifact regeneration for ext field changes if enabled
+                        QTimer.singleShot(100, lambda p=path: self.artifact_handler.regenerate_bbcode_for_gallery(p, force=False) if self.artifact_handler.should_auto_regenerate_bbcode(p) else None)
+                    elif not actual_table:
                         log(f"WARNING: Table is None!", level="debug", category="hooks")
                 else:
                     log(f"Path {path} not found in queue_manager.items", level="debug", category="hooks")
