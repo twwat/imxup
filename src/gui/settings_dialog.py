@@ -427,6 +427,12 @@ class ComprehensiveSettingsDialog(QDialog):
         self.auto_clear_completed_check.setToolTip("Automatically remove completed galleries from the queue")
         general_layout.addWidget(self.auto_clear_completed_check, 4, 0)
 
+        # Check for updates on startup
+        self.check_updates_checkbox = QCheckBox("Check for updates on startup")
+        self.check_updates_checkbox.setChecked(defaults.get('check_updates_on_startup', True))
+        self.check_updates_checkbox.setToolTip("Automatically check for new versions when the application starts")
+        general_layout.addWidget(self.check_updates_checkbox, 5, 0)
+
         # Storage options group
         storage_group = QGroupBox("Central Storage")
         storage_layout = QGridLayout(storage_group)
@@ -608,6 +614,7 @@ class ComprehensiveSettingsDialog(QDialog):
         self.auto_regenerate_bbcode_check.toggled.connect(lambda: self.mark_tab_dirty(0))
         self.auto_start_upload_check.toggled.connect(lambda: self.mark_tab_dirty(0))
         self.auto_clear_completed_check.toggled.connect(lambda: self.mark_tab_dirty(0))
+        self.check_updates_checkbox.toggled.connect(lambda: self.mark_tab_dirty(0))
         self.store_in_uploaded_check.toggled.connect(lambda: self.mark_tab_dirty(0))
         self.store_in_central_check.toggled.connect(lambda: self.mark_tab_dirty(0))
         self.home_radio.toggled.connect(lambda: self.mark_tab_dirty(0))
@@ -3301,7 +3308,8 @@ class ComprehensiveSettingsDialog(QDialog):
         # Reload general settings
         self.confirm_delete_check.setChecked(defaults.get('confirm_delete', True))
         self.auto_rename_check.setChecked(defaults.get('auto_rename', True))
-        
+        self.check_updates_checkbox.setChecked(defaults.get('check_updates_on_startup', True))
+
         # Reload storage settings
         self.store_in_uploaded_check.setChecked(defaults.get('store_in_uploaded', True))
         self.store_in_central_check.setChecked(defaults.get('store_in_central', True))
@@ -3374,6 +3382,7 @@ class ComprehensiveSettingsDialog(QDialog):
             config.set('DEFAULTS', 'auto_regenerate_bbcode', str(self.auto_regenerate_bbcode_check.isChecked()))
             config.set('DEFAULTS', 'auto_start_upload', str(self.auto_start_upload_check.isChecked()))
             config.set('DEFAULTS', 'auto_clear_completed', str(self.auto_clear_completed_check.isChecked()))
+            config.set('DEFAULTS', 'check_updates_on_startup', str(self.check_updates_checkbox.isChecked()))
             config.set('DEFAULTS', 'store_in_uploaded', str(self.store_in_uploaded_check.isChecked()))
             config.set('DEFAULTS', 'store_in_central', str(self.store_in_central_check.isChecked()))
             

@@ -63,7 +63,11 @@ except ImportError:
     winreg = None  # Not available on Linux/Mac
 import mimetypes
 
-__version__ = "0.6.13"  # Application version number
+__version__ = "0.6.14"  # Application version number
+
+# GitHub repository info for update checker
+GITHUB_OWNER = "twwat"
+GITHUB_REPO = "IMXuploader"
 
 # Lazy User-Agent string builder to avoid platform.system() hang during module import
 # (platform.system() can hang on some Windows systems, breaking splash screen initialization)
@@ -469,6 +473,7 @@ def load_user_defaults():
         'upload_read_timeout': 120,
         'use_median': True,
         'stats_exclude_outliers': False,
+        'check_updates_on_startup': True,
     }
 
     config = configparser.ConfigParser()
@@ -486,7 +491,7 @@ def load_user_defaults():
             # Load boolean settings
             for key in ['confirm_delete', 'auto_rename', 'auto_start_upload',
                        'auto_regenerate_bbcode', 'store_in_uploaded', 'store_in_central',
-                       'use_median', 'stats_exclude_outliers']:
+                       'use_median', 'stats_exclude_outliers', 'check_updates_on_startup']:
                 defaults[key] = config.getboolean('DEFAULTS', key, fallback=defaults[key])
 
             # Load string settings
