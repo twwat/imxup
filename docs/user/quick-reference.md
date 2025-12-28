@@ -1,193 +1,195 @@
-# Katfile Authentication Issues - Quick Reference
+# IMXuploader Quick Reference
 
-## The Problem in 30 Seconds
-
-Katfile spinup reports success but uploads fail because:
-1. Users never prompted for API key (no UI)
-2. API key not validated even if set
-3. Spinup doesn't test the key
-4. Configuration incomplete
-
-**Result:** False success → confusing upload failure
+A concise reference card for common operations and settings.
 
 ---
 
-## The Four Fixes
+## Starting the Application
 
-### Fix 1: Add Validation (30 min)
-File: `src/network/file_host_client.py` line 76-79
-```python
-# BEFORE: Accepts None
-self.auth_token = credentials
+```bash
+# GUI Mode (recommended)
+python imxup.py --gui
 
-# AFTER: Validates
-if not credentials or not isinstance(credentials, str):
-    raise ValueError("API key required")
-if not credentials.strip():
-    raise ValueError("API key cannot be empty")
-self.auth_token = credentials
-```
+# CLI Mode
+python imxup.py /path/to/folder --name "Gallery Name"
 
-### Fix 2: Test API Key (45 min)
-File: `src/network/file_host_client.py` after line 1647
-```python
-# Add this elif branch:
-elif self.config.auth_type == "api_key":
-    if not self.auth_token:
-        return {"success": False, "message": "No API key available"}
-    if self.config.user_info_url:
-        user_info = self.get_user_info()
-        return {"success": True, "message": "API key validated", "user_info": user_info}
-```
-
-### Fix 3: Add UI (1 hour)
-File: `src/gui/dialogs/credential_setup.py`
-- Add Katfile section to dialog
-- Add methods to set/remove API key
-- Update load_current_credentials()
-- See KATFILE_FIXES_CODE_EXAMPLES.md for complete code
-
-### Fix 4: Update Config (15 min)
-File: `assets/hosts/katfile.json`
-```json
-{
-  "auth": {
-    "token_ttl": 86400,
-    "stale_token_patterns": ["invalid", "expired", "401", "403"]
-  },
-  "delete": {
-    "url": "https://katfile.cloud/api/file/delete?file_id={file_id}&key={token}",
-    "method": "GET"
-  }
-}
+# Debug Mode (verbose logging)
+python imxup.py --gui --debug
 ```
 
 ---
 
-## What Changes?
+## Keyboard Shortcuts
 
-### Before Fix:
+| Shortcut | Action |
+|----------|--------|
+| Ctrl+O | Add folders to queue |
+| Ctrl+N | New tab |
+| Ctrl+W | Close tab |
+| Ctrl+T | New tab |
+| Ctrl+. | Show keyboard shortcuts |
+| F1 | Help |
+| Del | Remove selected galleries |
+| Ctrl+A | Select all |
+| Ctrl+Shift+A | Deselect all |
+| Ctrl+C | Copy BBCode output |
+| Ctrl+S | Save settings |
+| Escape | Cancel current operation |
+
+---
+
+## Gallery States
+
+| State | Icon | Description |
+|-------|------|-------------|
+| Validating | ... | Checking folder contents |
+| Scanning | ... | Counting images and calculating size |
+| Ready | Green | Scanned and ready to upload |
+| Queued | Blue | Waiting in upload queue |
+| Uploading | Arrow | Currently uploading |
+| Completed | Check | Upload finished successfully |
+| Failed | Red X | Upload failed (check logs) |
+| Paused | Pause | Upload paused by user |
+| Incomplete | Yellow | Partially uploaded |
+
+---
+
+## Configuration Files
+
+| File | Purpose |
+|------|---------|
+| `~/.imxup/imxup.ini` | User settings and preferences |
+| `~/.imxup/imxup.db` | Queue database (SQLite) |
+| `~/.imxup/templates/` | Custom BBCode templates |
+| `~/.imxup/logs/` | Application logs |
+
+**Note:** On Windows, `~` refers to `%USERPROFILE%` (e.g., `C:\Users\YourName`).
+
+---
+
+## Common CLI Options
+
+```bash
+--gui              # Launch GUI mode
+--name "Name"      # Set gallery name
+--thumb-size N     # Thumbnail size (1-6)
+--content-type N   # Content type (0=SFW, 1=NSFW)
+--debug            # Enable debug logging
+--help             # Show all options
+--version          # Show version number
 ```
-Enable Katfile → Spinup Success ✓ (wrong) → Upload Error ✗
-ERROR: Failed to extract sess_id (vague!)
-```
 
-### After Fix:
-```
-Enable Katfile → Prompt for API key → Spinup Tests Key → Success ✓ (correct) → Upload Works ✓
-OR
-Enable Katfile → No API key → Spinup Fails ✗ → User sees clear error
-```
+### CLI Examples
 
----
+```bash
+# Upload a folder with custom name
+python imxup.py "C:\Photos\Vacation" --name "Summer Vacation 2024"
 
-## Critical Code Locations
+# Upload with specific thumbnail size
+python imxup.py /path/to/folder --thumb-size 3
 
-| Issue | File | Lines | Fix |
-|-------|------|-------|-----|
-| No validation | file_host_client.py | 76-79 | Add if/else |
-| No testing | file_host_client.py | 1634-1676 | Add elif |
-| No UI | credential_setup.py | 52-365 | Add section |
-| Bad config | katfile.json | 1-50 | Add auth/delete |
-
----
-
-## Testing Checklist
-
-```
-[ ] Katfile section visible in credential dialog
-[ ] Can set API key in dialog
-[ ] Key stored encrypted
-[ ] Worker loads key on startup
-[ ] Spinup validates with /api/account/info API call
-[ ] Spinup fails with invalid key (clear error)
-[ ] Spinup succeeds with valid key
-[ ] Storage info displayed after success
-[ ] Upload works after successful spinup
-[ ] RapidGator still works (regression test)
+# Upload NSFW content
+python imxup.py /path/to/folder --content-type 1
 ```
 
 ---
 
-## Timeline
+## File Host Support
 
-- Fix 1: 30 min
-- Fix 2: 45 min
-- Fix 3: 60 min
-- Fix 4: 15 min
-- Testing: 90 min
-**Total: 3.5 hours**
+### Premium File Hosts
 
----
+| Host | Auth Type | Status |
+|------|-----------|--------|
+| Fileboom | API Key | Supported |
+| Filedot | Session | Supported |
+| Filespace | Session | Supported |
+| Katfile | API Key | Supported |
+| Keep2Share | API Key | Supported |
+| Rapidgator | Token Login | Supported |
+| Tezfiles | API Key | Supported |
 
-## Documents
+### Additional Hosts
 
-| Document | Length | Use For |
-|----------|--------|---------|
-| **KATFILE_SPINUP_ISSUE_SUMMARY.md** | 14 KB | Quick understanding (10 min) |
-| **KATFILE_FIXES_CODE_EXAMPLES.md** | 25 KB | Implementation (copy/paste code) |
-| **KATFILE_AUTHENTICATION_ANALYSIS.md** | 19 KB | Deep technical understanding |
-| **KATFILE_AUTH_FLOW_COMPARISON.md** | 18 KB | Visual flow diagrams |
-| **AUTHENTICATION_ANALYSIS_INDEX.md** | 13 KB | Navigation guide |
+44+ additional hosts available via the external hooks system.
 
 ---
 
-## Why RapidGator Works (Reference)
+## Supported Image Formats
 
-1. **UI:** credential_setup.py has section for username/password ✓
-2. **Validation:** _login_token_based() validates format ✓
-3. **Testing:** test_credentials() calls get_user_info() during spinup ✓
-4. **Config:** Complete auth section with token_ttl ✓
-
-**Katfile does none of these.**
+- **Standard:** JPG, JPEG, PNG, GIF
+- **Additional:** BMP, WEBP, TIFF (converted on upload)
 
 ---
 
-## Start Here
+## Supported Archive Formats
 
-1. **Quick Overview:** Read this file (5 min)
-2. **Understand Problem:** Read KATFILE_SPINUP_ISSUE_SUMMARY.md (10 min)
-3. **Implement Fixes:** Use KATFILE_FIXES_CODE_EXAMPLES.md (2-3 hours)
-4. **Test:** Follow testing checklist above (1.5 hours)
+| Format | Extension |
+|--------|-----------|
+| ZIP | .zip |
+| RAR | .rar |
+| 7-Zip | .7z |
+| TAR | .tar |
+| Gzipped TAR | .tar.gz, .tgz |
+| Bzipped TAR | .tar.bz2 |
 
----
-
-## Common Questions
-
-**Q: Will this break RapidGator?**
-A: No. All changes are Katfile-specific. RapidGator uses different auth_type.
-
-**Q: How long to implement?**
-A: 3.5 hours total (fixes + testing)
-
-**Q: Is it risky?**
-A: No. Low risk - all additive changes, no deletions or core changes.
-
-**Q: Why do I need Fix 3 (UI)?**
-A: Without UI, users can't set API key. Workers start with None credentials.
-
-**Q: What if I skip Fix 4 (config)?**
-A: Optional but recommended. Adds error recovery and delete support.
+Archives are automatically extracted before upload.
 
 ---
 
-## File Overview
+## BBCode Template Placeholders
 
-After fixes, these files changed:
-- `src/network/file_host_client.py` - Add validation + testing
-- `src/gui/dialogs/credential_setup.py` - Add Katfile UI
-- `assets/hosts/katfile.json` - Add auth + delete sections
+| Placeholder | Description |
+|-------------|-------------|
+| `{gallery_name}` | Gallery display name |
+| `{gallery_url}` | IMX.to gallery URL |
+| `{image_count}` | Number of images |
+| `{total_size}` | Total size (formatted) |
+| `{upload_date}` | Upload timestamp |
+| `{thumb_url}` | Thumbnail URL |
+| `{image_url}` | Full image URL |
+| `{download_url}` | File host download link |
 
-All in isolated, non-breaking changes.
+See the full template documentation for all 18 placeholders.
 
 ---
 
-## One-Liner Summary
+## Quick Tips
 
-"Katfile has no validation, testing, or UI - fix in 3 steps with clear code examples."
+1. **Drag and Drop:** Drag folders directly onto the queue table to add them.
+2. **Batch Selection:** Use Shift+Click to select a range of galleries.
+3. **Right-Click Menu:** Access gallery actions via context menu.
+4. **System Tray:** Minimize to tray for background uploads.
+5. **Tab Colors:** Assign colors to tabs for visual organization.
 
 ---
 
-**Last Updated:** 2025-11-19
-**Status:** READY TO IMPLEMENT
-**Confidence:** HIGH
+## Troubleshooting Quick Fixes
+
+| Problem | Solution |
+|---------|----------|
+| Upload stuck | Check internet connection, try pause/resume |
+| Login failed | Verify credentials in Settings |
+| Gallery not appearing | Ensure folder contains supported images |
+| Slow uploads | Reduce concurrent uploads in Settings |
+| Database locked | Close other IMXuploader instances |
+
+---
+
+## Getting Help
+
+- **F1 Key:** Opens built-in help
+- **Ctrl+.:** Shows all keyboard shortcuts
+- **Logs:** Check `~/.imxup/logs/` for detailed error messages
+- **Debug Mode:** Run with `--debug` for verbose output
+
+---
+
+## Version Information
+
+Check your version: `python imxup.py --version`
+
+Current version information and changelog available in the application Help menu.
+
+---
+
+*Last Updated: 2025-12-28*

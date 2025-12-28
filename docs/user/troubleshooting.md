@@ -3,14 +3,14 @@
 ## Quick Reference
 
 **Common Issues:**
-- GUI not responding → Check database locks, restart application
-- Upload failures → Verify credentials, check network, review logs
-- Slow performance → Enable lazy loading, reduce image sampling
-- Database errors → Run integrity check, restore from backup
-- BBCode issues → Validate template syntax, check placeholders
+- GUI not responding -> Check database locks, restart application
+- Upload failures -> Verify credentials, check network, review logs
+- Slow performance -> Enable lazy loading, reduce image sampling
+- Database errors -> Run integrity check, restore from backup
+- BBCode issues -> Validate template syntax, check placeholders
 
-**Log Location:** View → Logs (Ctrl+L)
-**Settings Location:** File → Settings (Ctrl+Comma)
+**Log Location:** View -> Logs (Ctrl+L)
+**Settings Location:** File -> Settings (Ctrl+Comma)
 **Database Location:** `.imxup/` (hidden folder)
 
 ---
@@ -90,16 +90,16 @@ kill -9 <PID>
 ```
 
 **3. Reduce Gallery Count:**
-- Close unused galleries: Gallery → Close Gallery
-- Enable pagination: Settings → General → Max Galleries per Page
+- Close unused galleries: Gallery -> Close Gallery
+- Enable pagination: Settings -> General -> Max Galleries per Page
 
 **4. Disable Expensive Features:**
-- Disable image sampling: Settings → Display → Sample Images: Off
-- Disable auto-refresh: Settings → General → Auto Refresh: Off
-- Enable lazy loading: Settings → Performance → Lazy Load Gallery Table
+- Disable image sampling: Settings -> Display -> Sample Images: Off
+- Disable auto-refresh: Settings -> General -> Auto Refresh: Off
+- Enable lazy loading: Settings -> Performance -> Lazy Load Gallery Table
 
 **5. Increase Timeout:**
-Settings → Network → Request Timeout: 60 seconds
+Settings -> Network -> Request Timeout: 60 seconds
 
 ---
 
@@ -116,15 +116,15 @@ Settings → Network → Request Timeout: 60 seconds
 **Solutions:**
 
 **1. Enable Lazy Loading (Recommended):**
-- Settings → Performance → **Lazy Load Gallery Table: On**
+- Settings -> Performance -> **Lazy Load Gallery Table: On**
 - Only loads visible rows (100x faster for large databases)
 
 **2. Disable Image Sampling:**
-- Settings → Display → **Sample Images: Off**
+- Settings -> Display -> **Sample Images: Off**
 - Speeds up initial load significantly
 
 **3. Reduce Sample Count:**
-- Settings → Display → **Sample Count: 5** (down from 10)
+- Settings -> Display -> **Sample Count: 5** (down from 10)
 - Or disable entirely for folders with 1000+ images
 
 **4. Use Viewport Rendering:**
@@ -133,7 +133,7 @@ Settings → Network → Request Timeout: 60 seconds
 - Automatic scrolling optimization
 
 **5. Hide Unused Columns:**
-- Right-click table header → Hide columns not needed
+- Right-click table header -> Hide columns not needed
 - Fewer columns = faster rendering
 
 ---
@@ -171,7 +171,7 @@ curl -I https://k2s.cc
 - Try different VPN server locations
 
 **5. Reduce Concurrent Connections:**
-- Settings → File Hosts → Select Host → Configure
+- Settings -> File Hosts -> Select Host -> Configure
 - Max Connections: 1 (instead of 2)
 - Prevents overwhelming connection pool
 
@@ -199,7 +199,7 @@ rm .imxup/token_cache.db
 ```
 
 **3. Re-configure Host:**
-- Settings → File Hosts → Select Host
+- Settings -> File Hosts -> Select Host
 - Click **Configure**
 - Re-enter credentials
 - Click **Test Connection**
@@ -233,11 +233,11 @@ rm .imxup/token_cache.db
 | Filespace | 2 GB | 10 GB |
 
 **2. Split Large Archives:**
-- Use ZIP split: Settings → Archive → Split Size: 2 GB
+- Use ZIP split: Settings -> Archive -> Split Size: 2 GB
 - Creates multi-part archives (gallery.zip.001, .002, etc.)
 
 **3. Reduce Image Quality:**
-- Settings → Processing → Compress Images: On
+- Settings -> Processing -> Compress Images: On
 - Quality: 85% (down from 100%)
 - Reduces file size by 30-50%
 
@@ -259,12 +259,12 @@ rm .imxup/token_cache.db
 
 **1. Check Network Activity:**
 - Look for upload speed in status bar
-- If 0 bytes/sec → connection lost
+- If 0 bytes/sec -> connection lost
 
 **2. Cancel and Retry:**
-- Right-click upload → **Cancel**
+- Right-click upload -> **Cancel**
 - Wait 30 seconds for cleanup
-- Right-click gallery → **Retry Upload**
+- Right-click gallery -> **Retry Upload**
 
 **3. Check Server Status:**
 - Visit host website
@@ -308,7 +308,7 @@ taskkill /PID <PID> /F
 - Wait 30-60 seconds for completion
 
 **3. Restart Application:**
-- File → Exit (don't force close!)
+- File -> Exit (don't force close!)
 - Wait 10 seconds
 - Restart imxup
 
@@ -371,7 +371,7 @@ sqlite3 .imxup/imxup.db < backup.sql
 
 **5. Contact Support:**
 - If above fails, attach database file
-- Include error logs from View → Logs
+- Include error logs from View -> Logs
 
 ---
 
@@ -388,12 +388,12 @@ sqlite3 .imxup/imxup.db < backup.sql
 **Solutions:**
 
 **1. Check Active Filters:**
-- Top toolbar → Clear all filters
-- Search box → Clear search text
-- View → Show All Galleries
+- Top toolbar -> Clear all filters
+- Search box -> Clear search text
+- View -> Show All Galleries
 
 **2. Verify Database Path:**
-- Settings → General → Database Location
+- Settings -> General -> Database Location
 - Should be: `.imxup/imxup.db`
 
 **3. Restore from Backup:**
@@ -422,20 +422,20 @@ sqlite3 .imxup/imxup.db < backup.sql
 **Solutions:**
 
 **1. Reduce Loaded Galleries:**
-- Close unused galleries: Gallery → Close Gallery
-- Enable pagination: Settings → General → Max Galleries: 100
+- Close unused galleries: Gallery -> Close Gallery
+- Enable pagination: Settings -> General -> Max Galleries: 100
 
 **2. Disable Image Sampling:**
-- Settings → Display → Sample Images: Off
+- Settings -> Display -> Sample Images: Off
 - Reduces memory by 70-80%
 
 **3. Restart Application:**
-- File → Exit
+- File -> Exit
 - Restart imxup
 - Clears memory leaks
 
 **4. Increase System RAM:**
-- Upgrade from 4 GB → 8 GB or higher
+- Upgrade from 4 GB -> 8 GB or higher
 - Close other memory-heavy apps
 
 **5. Use 64-bit Python:**
@@ -470,7 +470,7 @@ winsat disk -seq -read -drive c
 - Use filters to hide processed galleries
 
 **4. Disable Auto-Refresh:**
-- Settings → General → Auto Refresh: Off
+- Settings -> General -> Auto Refresh: Off
 - Manually refresh: Ctrl+R
 
 **5. Close Background Apps:**
@@ -498,7 +498,7 @@ python diagnose_startup.py
 ```
 
 **2. Reduce BBCode Templates:**
-- Settings → BBCode → Templates
+- Settings -> BBCode -> Templates
 - Delete unused templates
 - Keep only 5-10 active templates
 
@@ -508,7 +508,7 @@ python diagnose_startup.py
 - Import only when needed
 
 **4. Disable File Host Auto-Connect:**
-- Settings → File Hosts → Uncheck "Connect on Startup"
+- Settings -> File Hosts -> Uncheck "Connect on Startup"
 - Hosts will connect on first upload instead
 
 ---
@@ -538,14 +538,14 @@ chmod -R 755 /path/to/gallery
 
 **3. Fix Invalid Filenames:**
 - Avoid: `< > : " / \ | ? *`
-- Use Gallery → Rename Files → Auto-Fix Special Characters
+- Use Gallery -> Rename Files -> Auto-Fix Special Characters
 
 **4. Use Temporary Directory:**
-- Settings → Archive → Temp Directory: `/tmp` (Linux) or `C:\Temp` (Windows)
+- Settings -> Archive -> Temp Directory: `/tmp` (Linux) or `C:\Temp` (Windows)
 - Ensure temp dir has sufficient space
 
 **5. Change Compression:**
-- Settings → Archive → Compression: STORE
+- Settings -> Archive -> Compression: STORE
 - No compression = faster + fewer errors
 
 ---
@@ -562,11 +562,11 @@ chmod -R 755 /path/to/gallery
 - Images rarely compress (already compressed)
 
 **2. Include/Exclude Files:**
-- Settings → Archive → Include Hidden Files: Off
-- Settings → Archive → Exclude Patterns: `.DS_Store, Thumbs.db`
+- Settings -> Archive -> Include Hidden Files: Off
+- Settings -> Archive -> Exclude Patterns: `.DS_Store, Thumbs.db`
 
 **3. Verify File Count:**
-- Right-click gallery → Properties
+- Right-click gallery -> Properties
 - Check: Files in Folder vs Files in Archive
 
 **4. Check for Corruption:**
@@ -589,8 +589,8 @@ unzip -t gallery.zip
 **Solutions:**
 
 **1. Validate Template:**
-- Settings → BBCode → Templates
-- Select template → **Validate Syntax**
+- Settings -> BBCode -> Templates
+- Select template -> **Validate Syntax**
 - Fix errors shown in dialog
 
 **2. Check Conditional Pairing:**
@@ -599,7 +599,7 @@ Correct:
 [if folderName]Content[/if]
 
 Wrong:
-[if folderName]Content  ← Missing [/if]
+[if folderName]Content  <- Missing [/if]
 ```
 
 **3. Match Opening/Closing Tags:**
@@ -608,7 +608,7 @@ Correct:
 [b]Bold text[/b]
 
 Wrong:
-[b]Bold text  ← Missing [/b]
+[b]Bold text  <- Missing [/b]
 ```
 
 **4. Use Template Helper:**
@@ -648,11 +648,11 @@ Correct placeholders:
 ```
 
 **2. Check Gallery Data:**
-- Right-click gallery → **Properties**
+- Right-click gallery -> **Properties**
 - Ensure fields are populated (not blank)
 
 **3. Re-process Gallery:**
-- Right-click gallery → **Re-analyze**
+- Right-click gallery -> **Re-analyze**
 - Forces data refresh
 
 **4. Use Default Template:**
@@ -677,15 +677,15 @@ Shows nothing even though gallery has images.
 **1. Check Conditional Syntax:**
 ```
 Correct:
-[if pictureCount]Content[/if]      ← Tests if not empty
-[if pictureCount=50]Content[/if]   ← Tests if equals 50
+[if pictureCount]Content[/if]      <- Tests if not empty
+[if pictureCount=50]Content[/if]   <- Tests if equals 50
 
 Wrong:
-[if #pictureCount#]Content[/if]    ← Don't include # in condition
+[if #pictureCount#]Content[/if]    <- Don't include # in condition
 ```
 
 **2. Verify Field Has Value:**
-- Right-click gallery → Properties
+- Right-click gallery -> Properties
 - Check if "Picture Count" shows number (not blank)
 
 **3. Use Else Clause for Debugging:**
@@ -698,7 +698,7 @@ Wrong:
 ```
 
 **4. Check for Whitespace:**
-- `[if pictureCount ]` ← Extra space causes failure
+- `[if pictureCount ]` <- Extra space causes failure
 - Should be: `[if pictureCount]`
 
 ---
@@ -712,18 +712,18 @@ Wrong:
 - Check Shift, Alt combinations
 
 **2. Resolve Conflicts:**
-- Settings → Keyboard → **Show Conflicts**
+- Settings -> Keyboard -> **Show Conflicts**
 - Disable conflicting shortcuts
 
 **3. Reset to Defaults:**
-- Settings → Keyboard → **Reset All Shortcuts**
+- Settings -> Keyboard -> **Reset All Shortcuts**
 
 **4. Check Focus:**
 - Some shortcuts only work when table has focus
 - Click on gallery table first
 
 **5. See Full List:**
-- Help → Keyboard Shortcuts (or press F1)
+- Help -> Keyboard Shortcuts (or press F1)
 
 ---
 
@@ -732,7 +732,7 @@ Wrong:
 ### Before Reporting
 
 **1. Check if Known Issue:**
-- Search GitHub Issues: https://github.com/[repo]/issues
+- Search GitHub Issues on the project repository
 - Check latest release notes
 
 **2. Try Latest Version:**
@@ -751,11 +751,11 @@ pip install -r requirements.txt --upgrade
 ```
 OS: Windows 11 / Ubuntu 22.04 / macOS 14
 Python: 3.14.1
-imxup Version: v0.6.00
+imxup Version: v0.6.13
 ```
 
 **2. Error Logs:**
-- View → Logs
+- View -> Logs
 - Filter by "ERROR" or "WARNING"
 - Copy last 50-100 lines
 - Or attach: `logs/imxup.log`
@@ -779,7 +779,8 @@ imxup Version: v0.6.00
 ### Where to Report
 
 **GitHub Issues:**
-https://github.com/[your-repo]/issues
+- Open an issue on the project's GitHub repository
+- Include all relevant details
 
 **Template:**
 ```markdown
@@ -824,7 +825,7 @@ What actually happens
 `logs/crash_*.log` - Uncaught exceptions
 
 **Network Logs:**
-View → Logs → Filter: "FileHostClient"
+View -> Logs -> Filter: "FileHostClient"
 
 ### Log Viewer Features
 
@@ -834,11 +835,11 @@ View → Logs → Filter: "FileHostClient"
 - Text Search: Any keyword
 
 **Export Logs:**
-- View → Logs → **Export to File**
+- View -> Logs -> **Export to File**
 - Saves filtered view as text file
 
 **Auto-Refresh:**
-- Settings → Logs → **Auto Refresh: On**
+- Settings -> Logs -> **Auto Refresh: On**
 - Updates in real-time
 
 ### Understanding Log Levels
@@ -871,7 +872,7 @@ CRITICAL: Database corruption detected, exiting (src.storage.database)
 ### Increasing Log Verbosity
 
 **1. Enable Debug Mode:**
-Settings → Logs → **Log Level: DEBUG**
+Settings -> Logs -> **Log Level: DEBUG**
 
 **2. Command Line:**
 ```bash
@@ -979,19 +980,15 @@ python diagnose_startup.py
 ## Getting Additional Help
 
 **Documentation:**
-- `docs/QUICK_START_GUI.md` - Getting started
-- `docs/GUI_IMPROVEMENTS.md` - Latest features
-- `docs/KEYBOARD_SHORTCUTS.md` - Shortcuts reference
+- `docs/user/quick-start.md` - Getting started
+- `docs/user/gui-guide.md` - Complete GUI documentation
+- `docs/user/keyboard-shortcuts.md` - Shortcuts reference
 - `docs/user/multi-host-upload.md` - File host guide
 - `docs/user/bbcode-templates.md` - Template guide
 
 **Community:**
-- GitHub Discussions: https://github.com/[repo]/discussions
-- GitHub Issues: https://github.com/[repo]/issues
-
-**Contact:**
-- Email: [support-email]
-- Discord: [invite-link]
+- GitHub Discussions on the project repository
+- GitHub Issues for bug reports
 
 ---
 

@@ -4,20 +4,20 @@ A PyQt6-based graphical interface for the IMX.to gallery uploader that provides 
 
 ## Features
 
-### 🎯 Core Functionality
+### Core Functionality
 - **Drag & Drop**: Drag folders containing images directly into the GUI to add them to the upload queue
 - **Queue Management**: View and manage multiple galleries in an upload queue
 - **Progress Tracking**: Real-time progress bars for individual galleries and overall progress
 - **Single Instance**: Command-line invocations add galleries to existing GUI instance instead of creating new ones
 - **System Tray**: Minimize to system tray for background operation
 
-### 📊 Upload Management
+### Upload Management
 - **Individual Control**: Start/pause individual gallery uploads
 - **Batch Operations**: Start all queued galleries at once
 - **Retry Logic**: Automatic retry of failed uploads with configurable retry count
 - **Status Tracking**: Visual status indicators (Queued, Uploading, Completed, Failed)
 
-### ⚙️ Settings & Configuration
+### Settings & Configuration
 - **Thumbnail Settings**: Configure size and format options
 - **Visibility Control**: Set galleries as public or private
 - **Retry Configuration**: Adjust maximum retry attempts
@@ -30,40 +30,27 @@ A PyQt6-based graphical interface for the IMX.to gallery uploader that provides 
 # Install PyQt6 for GUI support
 pip install PyQt6
 
-# Or install from requirements file
-pip install -r requirements_gui.txt
+# Or install all dependencies
+pip install -r requirements.txt
 ```
 
 ### Core Dependencies
 The GUI uses the same core dependencies as the command-line version:
 - requests
-- aiohttp
-- python-dotenv
-- tqdm
-- configparser
+- pycurl
 - cryptography
 - Pillow (for image processing)
+- keyring
 
 ## Usage
 
-### 🚀 Launching the GUI
+### Launching the GUI
 
-#### Method 1: Via Main Script
 ```bash
 python imxup.py --gui
 ```
 
-#### Method 2: Direct Launch
-```bash
-python imxup_gui.py
-```
-
-#### Method 3: Alternative Launcher
-```bash
-python imxup.py --gui
-```
-
-### 📁 Adding Galleries
+### Adding Galleries
 
 #### Drag and Drop
 1. Launch the GUI
@@ -85,11 +72,11 @@ python imxup.py --gui "/path/to/my/photos"
 python imxup.py --install-context-menu
 
 # This creates two right-click options:
-# - "Upload to imx.to" (command line mode)  
+# - "Upload to imx.to" (command line mode)
 # - "Upload to imx.to (GUI)" (opens GUI with folder)
 ```
 
-### 🎛️ GUI Interface
+### GUI Interface
 
 #### Main Sections
 
@@ -104,20 +91,20 @@ python imxup.py --install-context-menu
 **Right Panel - Progress & Logs:**
 - **Overall Progress**: Shows progress across all galleries
 - **Individual Progress**: Detailed progress for each gallery
-- **Log Output**: Real-time upload logs with timestamps [[memory:4486747]]
+- **Log Output**: Real-time upload logs with timestamps
 
 #### Settings Configuration
 - **Thumbnail Size**: 100x100, 180x180, 250x250, 300x300, 150x150
-- **Thumbnail Format**: Fixed width, Proportional, Square, Fixed height  
+- **Thumbnail Format**: Fixed width, Proportional, Square, Fixed height
 - **Max Retries**: Number of retry attempts for failed uploads (1-10)
 - **Public Gallery**: Toggle between public/private gallery visibility
 
-### 🔄 Single Instance Behavior
+### Single Instance Behavior
 
 The GUI implements single-instance behavior:
 
 1. **First Launch**: Creates new GUI window
-2. **Subsequent Launches**: 
+2. **Subsequent Launches**:
    - Detects existing instance
    - Sends folder path to running GUI
    - Brings existing window to foreground
@@ -125,7 +112,7 @@ The GUI implements single-instance behavior:
 
 This ensures command-line calls integrate seamlessly with the GUI without creating multiple instances.
 
-### 📈 Progress Tracking
+### Progress Tracking
 
 #### Individual Gallery Progress
 - Gallery name and current status
@@ -133,18 +120,18 @@ This ensures command-line calls integrate seamlessly with the GUI without creati
 - Current image being uploaded
 - Upload speed and time estimates
 
-#### Overall Progress  
+#### Overall Progress
 - Combined progress across all galleries
 - Total images uploaded vs. remaining
 - Average upload speed
 
 #### Status Indicators
-- **Queued**: 🟡 Waiting to start
-- **Uploading**: 🔵 Currently uploading
-- **Completed**: 🟢 Successfully finished  
-- **Failed**: 🔴 Upload failed (with error message)
+- **Queued**: Waiting to start
+- **Uploading**: Currently uploading
+- **Completed**: Successfully finished
+- **Failed**: Upload failed (with error message)
 
-### 🗂️ Queue Management
+### Queue Management
 
 #### Adding Galleries
 - Drag folders into the queue area
@@ -168,7 +155,7 @@ GUI settings are stored using QSettings:
 
 ### Core Configuration
 The GUI uses the same configuration as the command-line version:
-- **Credentials**: `~/.imxup.ini` (encrypted passwords) [[memory:4205404]]
+- **Credentials**: `~/.imxup/imxup.ini` (encrypted passwords)
 - **User Defaults**: Thumbnail settings, retry counts, etc.
 - **Unnamed Galleries**: Tracking for galleries pending rename
 
@@ -224,7 +211,6 @@ export DISPLAY=:0
 #### Upload Issues
 - Same troubleshooting as command-line version
 - Check credentials setup: `python imxup.py --setup-secure`
-- Verify API key in `.env` file
 - Check log output in GUI for detailed errors
 
 ### Performance Tips
@@ -243,9 +229,9 @@ export DISPLAY=:0
 
 The GUI maintains **100% compatibility** with the original command-line functionality:
 
-✅ **All core features preserved**:
+**All core features preserved**:
 - IMX.to API integration
-- Authentication and secure password storage [[memory:4205404]]
+- Authentication and secure password storage
 - Gallery creation and naming
 - Image upload with progress tracking
 - Retry logic and error handling
@@ -253,14 +239,13 @@ The GUI maintains **100% compatibility** with the original command-line function
 - Thumbnail configuration
 - Public/private gallery settings
 
-✅ **Command-line interface unchanged**:
+**Command-line interface unchanged**:
 - All existing arguments work as before
 - GUI mode is additive (`--gui` flag)
 - Backward compatibility maintained
 
-✅ **Configuration compatibility**:
-- Uses same `.imxup.ini` configuration file
-- Same environment variables (`.env` file)
+**Configuration compatibility**:
+- Uses same `~/.imxup/imxup.ini` configuration file
 - Same default settings and user preferences
 
 ## Development Notes

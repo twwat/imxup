@@ -2,9 +2,9 @@
 
 ## Quick Reference
 
-**Version:** v0.6.00
-**Feature:** Upload galleries to 6 different file hosting services
-**Supported Hosts:** Fileboom, Filedot, Filespace, Keep2Share, Rapidgator, Tezfiles
+**Version:** v0.6.13
+**Feature:** Upload galleries to 7 different file hosting services
+**Supported Hosts:** Fileboom, Filedot, Filespace, Katfile, Keep2Share, Rapidgator, Tezfiles
 **Authentication:** Username/password, API keys, session cookies
 **Token Management:** Automatic caching with TTL (Time To Live)
 
@@ -40,21 +40,29 @@ Multi-host upload allows you to upload your image galleries to multiple file hos
 - **Session Cookie:** Uses `xfss` cookie for authentication
 - **Features:** Cookie-based sessions, automatic retry
 
-### 4. **Keep2Share** (k2s.cc)
+### 4. **Katfile** (katfile.com)
+- **Authentication:** API Key (permanent token, no expiration)
+- **Max File Size:** Unlimited (no file size restriction)
+- **Storage:** 2 TB (2048 GB)
+- **Connections:** Up to 2 simultaneous uploads
+- **Features:** Two-step upload with dynamic server assignment, automatic retry (up to 3 attempts)
+- **Upload Flow:** Get upload server with session ID, then POST file to assigned server
+
+### 5. **Keep2Share** (k2s.cc)
 - **Authentication:** API Key (permanent token)
 - **Max File Size:** 10 GB
 - **Storage:** 10 TB (premium accounts)
 - **Connections:** Up to 2 simultaneous uploads
 - **Features:** Same API structure as Fileboom
 
-### 5. **Rapidgator** (rapidgator.net)
-- **Authentication:** Token login (username/password → temporary token)
+### 6. **Rapidgator** (rapidgator.net)
+- **Authentication:** Token login (username/password -> temporary token)
 - **Token TTL:** 24 hours (86,400 seconds)
 - **Max File Size:** 5 GB
 - **Features:** Multi-step upload with MD5 hash verification, polling for completion
-- **Upload Flow:** Init → Upload → Poll status
+- **Upload Flow:** Init -> Upload -> Poll status
 
-### 6. **Tezfiles** (tezfiles.com)
+### 7. **Tezfiles** (tezfiles.com)
 - **Authentication:** Session-based (username/password)
 - **Features:** Session cookies, automatic token extraction
 
@@ -63,13 +71,13 @@ Multi-host upload allows you to upload your image galleries to multiple file hos
 ## Authentication Methods
 
 ### Method 1: API Key (Permanent Token)
-**Used by:** Fileboom, Keep2Share
+**Used by:** Fileboom, Katfile, Keep2Share
 
 **Setup Steps:**
 1. Log into your file host account
-2. Navigate to API settings (usually under Account → API)
+2. Navigate to API settings (usually under Account -> API)
 3. Generate or copy your API key
-4. In imxup, go to **Settings → File Hosts**
+4. In imxup, go to **Settings -> File Hosts**
 5. Select the host and click **Configure**
 6. Paste your API key in the credentials field
 7. Click **Test Connection** to verify
@@ -83,11 +91,11 @@ Multi-host upload allows you to upload your image galleries to multiple file hos
 
 ---
 
-### Method 2: Token Login (Username/Password → Temporary Token)
+### Method 2: Token Login (Username/Password -> Temporary Token)
 **Used by:** Rapidgator
 
 **Setup Steps:**
-1. In imxup, go to **Settings → File Hosts**
+1. In imxup, go to **Settings -> File Hosts**
 2. Select Rapidgator and click **Configure**
 3. Enter credentials in format: `username:password`
 4. Click **Test Connection**
@@ -106,11 +114,11 @@ Multi-host upload allows you to upload your image galleries to multiple file hos
 
 ---
 
-### Method 3: Session-Based (Username/Password → Cookies)
+### Method 3: Session-Based (Username/Password -> Cookies)
 **Used by:** Filedot, Filespace, Tezfiles
 
 **Setup Steps:**
-1. In imxup, go to **Settings → File Hosts**
+1. In imxup, go to **Settings -> File Hosts**
 2. Select the host and click **Configure**
 3. Enter credentials in format: `username:password`
 4. Click **Test Connection**
@@ -131,7 +139,7 @@ Multi-host upload allows you to upload your image galleries to multiple file hos
 **Example: Filedot CAPTCHA Solving**
 ```
 HTML: <span style="padding-left:26px">2</span><span style="padding-left:45px">8</span>
-Parsed: Position 26→'2', Position 45→'8'
+Parsed: Position 26->'2', Position 45->'8'
 Result: "28" (sorted by CSS padding-left position)
 ```
 
@@ -141,7 +149,7 @@ Result: "28" (sorted by CSS padding-left position)
 
 ### Step 1: Enable a File Host
 
-1. Open **Settings** (Ctrl+Comma or File → Settings)
+1. Open **Settings** (Ctrl+Comma or File -> Settings)
 2. Navigate to **File Hosts** tab
 3. Find your desired host in the list
 4. Check the **Enable** checkbox
@@ -149,7 +157,7 @@ Result: "28" (sorted by CSS padding-left position)
 
 ### Step 2: Configure Credentials
 
-**For API Key hosts (Fileboom, Keep2Share):**
+**For API Key hosts (Fileboom, Katfile, Keep2Share):**
 ```
 API Key: your-api-key-here
 ```
@@ -166,8 +174,8 @@ Format: username:password
 1. Click **Test Connection** button
 2. Wait for verification (5-10 seconds)
 3. Check results:
-   - ✅ **Success:** Credentials validated, user info retrieved
-   - ❌ **Failed:** Check credentials, network connection, or account status
+   - **Success:** Credentials validated, user info retrieved
+   - **Failed:** Check credentials, network connection, or account status
 
 **What Test Connection Does:**
 - Validates credentials
@@ -211,7 +219,7 @@ Format: username:password
 
 **Token Login (Rapidgator):**
 ```
-1. Login: username:password → token
+1. Login: username:password -> token
 2. Cache: Store token with 24h TTL
 3. Reuse: Use cached token for uploads
 4. Refresh: Auto-refresh when TTL < 5% remaining
@@ -220,15 +228,15 @@ Format: username:password
 
 **Session-based (Filedot, Filespace, Tezfiles):**
 ```
-1. Login: GET login page → extract CSRF tokens
-2. Submit: POST credentials → receive session cookies
-3. Extract: Visit upload page → extract session ID from HTML
+1. Login: GET login page -> extract CSRF tokens
+2. Submit: POST credentials -> receive session cookies
+3. Extract: Visit upload page -> extract session ID from HTML
 4. Cache: Store cookies + session ID + timestamp
 5. Reuse: Use same cookies for all uploads in session
-6. Refresh: If "Anti-CSRF check failed" → refresh session
+6. Refresh: If "Anti-CSRF check failed" -> refresh session
 ```
 
-**API Key (Fileboom, Keep2Share):**
+**API Key (Fileboom, Katfile, Keep2Share):**
 ```
 1. Set: Paste API key once
 2. Use: API key sent with every request
@@ -261,7 +269,7 @@ HTTP 403: Forbidden
 
 ### Step 1: Prepare Your Gallery
 
-1. Add images to a gallery (drag & drop or File → Add Gallery)
+1. Add images to a gallery (drag & drop or File -> Add Gallery)
 2. Optionally rename images (if needed for sorting)
 3. Select archive format: ZIP or None
 4. Choose BBCode template for output
@@ -276,24 +284,24 @@ HTTP 403: Forbidden
 ### Step 3: Start Upload
 
 **Option A: Upload Single Gallery**
-1. Right-click gallery → **Upload to File Hosts**
+1. Right-click gallery -> **Upload to File Hosts**
 2. Select hosts in dialog
 3. Click **Start Upload**
 
 **Option B: Upload Multiple Galleries**
 1. Select multiple galleries (Ctrl+Click or Shift+Click)
-2. Right-click → **Batch Upload to File Hosts**
+2. Right-click -> **Batch Upload to File Hosts**
 3. Choose hosts and settings
 4. Click **Start All**
 
 ### Step 4: Monitor Progress
 
 **Upload Status Column:**
-- 🔄 **Uploading:** Transfer in progress (shows %)
-- ✅ **Complete:** Upload successful
-- ❌ **Failed:** Upload error (click for details)
-- ⏸️ **Paused:** Upload paused (can resume)
-- 🔁 **Retrying:** Auto-retry in progress (X/3 attempts)
+- **Uploading:** Transfer in progress (shows %)
+- **Complete:** Upload successful
+- **Failed:** Upload error (click for details)
+- **Paused:** Upload paused (can resume)
+- **Retrying:** Auto-retry in progress (X/3 attempts)
 
 **Progress Details:**
 - Hover over status to see tooltip with details
@@ -304,7 +312,7 @@ HTTP 403: Forbidden
 
 ## Multi-Step Upload Process
 
-Some hosts (Rapidgator, Fileboom, Keep2Share) use multi-step uploads for better reliability:
+Some hosts (Katfile, Rapidgator, Fileboom, Keep2Share) use multi-step uploads for better reliability:
 
 ### Step 1: Initialize Upload
 ```
@@ -361,7 +369,7 @@ Response: {upload: {state: 2, file: {url: "final-url"}}}
 2. Check if account is active (not suspended/expired)
 3. Try logging in on the host's website manually
 4. Clear token cache: Delete `.imxup/token_cache.db`
-5. Re-configure credentials in Settings → File Hosts
+5. Re-configure credentials in Settings -> File Hosts
 
 ---
 
@@ -381,7 +389,7 @@ Response: {upload: {state: 2, file: {url: "final-url"}}}
 **Cause:** Insufficient permissions or storage quota exceeded
 
 **Solutions:**
-1. Check account storage: Settings → File Hosts → **View User Info**
+1. Check account storage: Settings -> File Hosts -> **View User Info**
 2. Upgrade to premium account if free tier exceeded
 3. Delete old files to free up space
 4. Verify API key has upload permissions
@@ -420,7 +428,7 @@ Response: {upload: {state: 2, file: {url: "final-url"}}}
 2. Disable firewall/antivirus temporarily
 3. Try different upload server (if host supports)
 4. Reduce max_connections to 1 in host settings
-5. Check logs: View → Logs → Filter by host name
+5. Check logs: View -> Logs -> Filter by host name
 
 ---
 
@@ -431,7 +439,7 @@ Response: {upload: {state: 2, file: {url: "final-url"}}}
 **Solutions:**
 1. Check your internet upload speed (speedtest.net)
 2. Close other upload-heavy applications
-3. Increase max_connections (2 → 3) for parallel uploads
+3. Increase max_connections (2 -> 3) for parallel uploads
 4. Try uploading during off-peak hours
 5. Use compression: ZIP with deflate (slower) vs STORE (faster but larger)
 
@@ -445,7 +453,7 @@ Response: {upload: {state: 2, file: {url: "final-url"}}}
 
 **Display:**
 ```
-Upload: 2.5 MB/s ↑  |  Downloaded: 1.2 GB
+Upload: 2.5 MB/s  |  Downloaded: 1.2 GB
 ```
 
 **Features:**
@@ -478,9 +486,9 @@ Each upload worker caches session state:
 
 **Session Reuse:**
 ```
-Upload 1: Login → Extract token → Upload file
-Upload 2: Reuse token → Upload file (no login!)
-Upload 3: Reuse token → Upload file
+Upload 1: Login -> Extract token -> Upload file
+Upload 2: Reuse token -> Upload file (no login!)
+Upload 3: Reuse token -> Upload file
 ... (continues until session expires)
 ```
 
@@ -496,8 +504,8 @@ Upload 3: Reuse token → Upload file
 **Retry Strategy:**
 ```
 Attempt 1: Immediate retry
-Attempt 2: Wait 5 seconds → retry
-Attempt 3: Wait 10 seconds → final retry
+Attempt 2: Wait 5 seconds -> retry
+Attempt 3: Wait 10 seconds -> final retry
 Failure: Mark upload as failed
 ```
 
@@ -571,7 +579,7 @@ Uploaded as: My_Gallery.zip
 - Verify download links work
 
 ### 2. Monitor Storage Quota
-- Check user info regularly: Settings → File Hosts → **View User Info**
+- Check user info regularly: Settings -> File Hosts -> **View User Info**
 - Set up multiple hosts to distribute storage
 - Delete old/unused files to free space
 
@@ -594,7 +602,7 @@ Uploaded as: My_Gallery.zip
 ## Getting More Help
 
 **Log Viewer:**
-- View → Logs
+- View -> Logs
 - Filter by host name to see upload details
 - Copy logs when reporting issues
 
@@ -604,12 +612,12 @@ Uploaded as: My_Gallery.zip
 - Mention host name and account type (free/premium)
 
 **GitHub Issues:**
-https://github.com/[your-repo]/issues
+- Report bugs and request features on the project's GitHub Issues page
 
 **Documentation:**
-- `docs/QUICK_START_GUI.md` - General GUI guide
-- `docs/GUI_IMPROVEMENTS.md` - Latest features
-- `docs/KEYBOARD_SHORTCUTS.md` - Keyboard shortcuts
+- `docs/user/quick-start.md` - General GUI guide
+- `docs/user/gui-guide.md` - Complete GUI documentation
+- `docs/user/keyboard-shortcuts.md` - Keyboard shortcuts
 
 ---
 
@@ -631,7 +639,7 @@ A: Depends on host: 24 hours (Rapidgator), session-based (until logout), permane
 A: Yes for session-based hosts. Export cookies from browser and configure in settings.
 
 **Q: What file formats are supported?**
-A: Any format, but typically ZIP archives of image galleries. Max size depends on host (5-10 GB).
+A: Any format, but typically ZIP archives of image galleries. Max size depends on host (5-10 GB typical, unlimited for Katfile).
 
 **Q: How do I delete files from hosts?**
 A: Some hosts support deletion via API (Fileboom, Keep2Share, Rapidgator). Use host's website for others.
@@ -653,15 +661,15 @@ A: Host server limits, encryption overhead, compression, or multiple simultaneou
 5. Include in all future requests: `?token=xxx`
 
 **Session-based (Filedot):**
-1. GET login page → extract CSRF tokens, hidden fields
+1. GET login page -> extract CSRF tokens, hidden fields
 2. Solve CAPTCHA: Parse `<span>` positions using regex
 3. POST login form with all hidden fields + credentials + CAPTCHA
 4. Extract cookies from `Set-Cookie` headers
-5. GET upload page with cookies → extract session ID from HTML
+5. GET upload page with cookies -> extract session ID from HTML
 6. Include cookies in all requests: `Cookie: PHPSESSID=xxx; xfss=yyy`
 
-**API Key (Fileboom):**
-1. Use key directly in POST body: `{access_token: "key"}`
+**API Key (Fileboom, Katfile):**
+1. Use key directly in POST body: `{access_token: "key"}` or URL param: `?key=xxx`
 2. No login step required
 3. No caching needed (key is permanent)
 
@@ -683,6 +691,21 @@ Content-Disposition: form-data; name="sess_id"
 
 session-token-here
 --boundary--
+```
+
+**Two-Step Upload (Katfile):**
+```
+Step 1 - Get Server:
+GET /api/upload/server?key=your-api-key
+Response: {result: "https://sXX.katfile.cloud/...", sess_id: "abc123"}
+
+Step 2 - Upload:
+POST https://sXX.katfile.cloud/...
+Content-Type: multipart/form-data
+Fields: file_0=[file], utype=reg, fld_path=
+
+Response: [{file_code: "xxx", file_status: "OK"}]
+Final URL: https://katfile.cloud/xxx
 ```
 
 **Multi-Step Upload (Rapidgator):**

@@ -1,7 +1,7 @@
 # ImXup Features Documentation
 
-**Version:** 0.6.00
-**Last Updated:** 2025-11-17
+**Version:** 0.6.13
+**Last Updated:** 2025-12-28
 **Platform:** Windows 10+ | Linux (Ubuntu 20.04+)
 
 ---
@@ -40,9 +40,6 @@
 - `.jpg`, `.jpeg` - JPEG images
 - `.png` - PNG images
 - `.gif` - GIF animations
-- `.webp` - WebP format
-- `.bmp` - Bitmap images
-- `.tiff`, `.tif` - TIFF images
 
 **Technical Details:**
 - Uses PyQt6 drag-and-drop events (`QDragEnterEvent`, `QDropEvent`)
@@ -57,16 +54,16 @@
 **Description:** Comprehensive queue system for managing multiple gallery uploads.
 
 **Queue States:**
-- 🟡 **Queued** - Waiting to start
-- 🔍 **Scanning** - Analyzing gallery
-- ✓ **Validating** - Verifying upload
-- 🔵 **Uploading** - Currently uploading
-- ⏸️ **Paused** - Upload paused
-- 🟢 **Completed** - Successfully finished
-- 🔴 **Failed** - Upload failed
-- 🔁 **Retrying** - Auto-retry in progress (X/3 attempts)
-- ⚠️ **Upload Failed** - Failed after retries
-- ❌ **Scan Failed** - Gallery scan failed
+- **Queued** - Waiting to start
+- **Scanning** - Analyzing gallery
+- **Validating** - Verifying upload
+- **Uploading** - Currently uploading
+- **Paused** - Upload paused
+- **Completed** - Successfully finished
+- **Failed** - Upload failed
+- **Retrying** - Auto-retry in progress (X/3 attempts)
+- **Upload Failed** - Failed after retries
+- **Scan Failed** - Gallery scan failed
 
 **Batch Operations:**
 - **Start All**: Begin uploading all queued galleries
@@ -162,7 +159,7 @@ CREATE TABLE galleries (
 - **Authentication:** API Key (permanent token)
 - **Max File Size:** 10 GB
 - **Storage:** 10 TB (premium accounts)
-- **Upload Method:** Multi-step (init → upload → verify)
+- **Upload Method:** Multi-step (init -> upload -> verify)
 - **Connections:** Up to 2 simultaneous uploads
 - **Features:**
   - File deduplication (skip if already exists)
@@ -235,7 +232,7 @@ CREATE TABLE galleries (
 - **Authentication:** Token login (temporary token with 24h TTL)
 - **Max File Size:** 5 GB
 - **Upload Method:** Multi-step with polling
-  - **Step 1**: Init upload session → Get upload URL
+  - **Step 1**: Init upload session -> Get upload URL
   - **Step 2**: Upload file to dedicated server
   - **Step 3**: Poll for completion (10 retries @ 1s intervals)
 - **Features:**
@@ -259,19 +256,18 @@ CREATE TABLE galleries (
 ---
 
 #### 6. **Tezfiles** (tezfiles.com)
-- **Authentication:** Session-based
+- **Authentication:** API Key
 - **Features:**
-  - Session ID extraction from HTML
-  - Cookie persistence
-  - Automatic token refresh on expiry
+  - API key extraction from account settings
   - Simple upload protocol
+  - Automatic token refresh on expiry
 
 ---
 
 ### Authentication Methods
 
 #### Method 1: API Key (Permanent Token)
-**Hosts:** Fileboom, Keep2Share
+**Hosts:** Fileboom, Keep2Share, Tezfiles
 
 **Advantages:**
 - No login required per session
@@ -281,9 +277,9 @@ CREATE TABLE galleries (
 
 **Setup:**
 1. Log into file host account
-2. Navigate to Account → API Settings
+2. Navigate to Account -> API Settings
 3. Generate or copy your API key
-4. Paste into imxup Settings → File Hosts → Configure
+4. Paste into imxup Settings -> File Hosts -> Configure
 5. Click **Test Connection** to verify
 
 **Security:**
@@ -294,7 +290,7 @@ CREATE TABLE galleries (
 
 ---
 
-#### Method 2: Token Login (Username/Password → Temporary Token)
+#### Method 2: Token Login (Username/Password -> Temporary Token)
 **Hosts:** Rapidgator
 
 **Workflow:**
@@ -325,8 +321,8 @@ CREATE TABLE tokens (
 
 ---
 
-#### Method 3: Session-Based (Username/Password → Cookies)
-**Hosts:** Filedot, Filespace, Tezfiles
+#### Method 3: Session-Based (Username/Password -> Cookies)
+**Hosts:** Filedot, Filespace
 
 **Features:**
 - **Cookie Persistence**: Cookies reused across uploads
@@ -392,7 +388,7 @@ host_semaphores = {
 
 **Display:**
 ```
-Status Bar: ⬆ 2.5 MB/s | Total: 127.3 MB / 245.8 MB | ETA: 3m 24s
+Status Bar: Upload 2.5 MB/s | Total: 127.3 MB / 245.8 MB | ETA: 3m 24s
 ```
 
 ---
@@ -470,17 +466,17 @@ python hooks/muh.py gofile "%z"
 
 **Archive Folder Selector Dialog:**
 ```
-┌─ Select Folders to Upload ─────────┐
-│ Archive: vacation_photos.zip       │
-│ Extracted to: /tmp/imxup_extract   │
-│                                     │
-│ Found 3 image folders:              │
-│ ☑ Day1_Beach (127 images)          │
-│ ☑ Day2_City (84 images)            │
-│ ☑ Day3_Mountain (95 images)        │
-│                                     │
-│      [Select All] [Upload] [Cancel]│
-└─────────────────────────────────────┘
++-- Select Folders to Upload ---------------+
+| Archive: vacation_photos.zip              |
+| Extracted to: /tmp/imxup_extract          |
+|                                           |
+| Found 3 image folders:                    |
+| [x] Day1_Beach (127 images)               |
+| [x] Day2_City (84 images)                 |
+| [x] Day3_Mountain (95 images)             |
+|                                           |
+|      [Select All] [Upload] [Cancel]       |
++-------------------------------------------+
 ```
 
 ---
@@ -498,10 +494,10 @@ python hooks/muh.py gofile "%z"
 
 **Worker Architecture:**
 ```
-ArchiveCoordinator
-├── ArchiveWorker #1 (compression thread)
-├── ArchiveWorker #2 (extraction thread)
-└── ArchiveWorker #3 (validation thread)
+ ArchiveCoordinator
+ +-- ArchiveWorker #1 (compression thread)
+ +-- ArchiveWorker #2 (extraction thread)
+ +-- ArchiveWorker #3 (validation thread)
 ```
 
 ---
@@ -545,9 +541,9 @@ ArchiveCoordinator
 [center][b]#folderName#[/b][/center]
 
 [b]Gallery Stats:[/b]
-• Images: #pictureCount# (#extension# format)
-• Resolution: #width#x#height# (longest: #longest#px)
-• Size: #folderSize#
+- Images: #pictureCount# (#extension# format)
+- Resolution: #width#x#height# (longest: #longest#px)
+- Size: #folderSize#
 
 [if galleryLink]
 [b]Gallery:[/b] [url=#galleryLink#]View on imx.to[/url]
@@ -628,7 +624,7 @@ ArchiveCoordinator
 ### Template Manager
 
 **Component:** `src/gui/dialogs/template_manager.py`
-**Access:** Settings → BBCode → **Manage Templates**
+**Access:** Settings -> BBCode -> **Manage Templates**
 
 **Features:**
 - **CRUD Operations**:
@@ -653,10 +649,10 @@ ArchiveCoordinator
 **Template Storage:**
 ```
 ~/.imxup/templates/
-├── Default Template.template.txt
-├── Detailed Example.template.txt
-├── Compact Template.template.txt
-└── My Custom Template.template.txt
++-- Default Template.template.txt
++-- Detailed Example.template.txt
++-- Compact Template.template.txt
++-- My Custom Template.template.txt
 ```
 
 **Built-in Templates:**
@@ -676,7 +672,7 @@ ArchiveCoordinator
 ### BBCode Viewer
 
 **Component:** `src/gui/dialogs/bbcode_viewer.py`
-**Access:** Right-click gallery → **View BBCode**
+**Access:** Right-click gallery -> **View BBCode**
 
 **Features:**
 - **Syntax Highlighting**: Color-coded BBCode display
@@ -747,7 +743,7 @@ encrypted = cipher.encrypt(b"username:password")
 - Custom API endpoints
 
 **Authentication Setup:**
-- API key input (Fileboom, Keep2Share)
+- API key input (Fileboom, Keep2Share, Tezfiles)
 - Username/password format: `username:password`
 - Token TTL configuration
 
@@ -760,28 +756,28 @@ encrypted = cipher.encrypt(b"username:password")
 
 **UI Example:**
 ```
-┌─ File Host Configuration ──────────┐
-│ Host: Rapidgator ▼                 │
-│ ☑ Enable this host                 │
-│                                     │
-│ Credentials:                        │
-│ ┌───────────────────────────────┐  │
-│ │ username:password             │  │
-│ └───────────────────────────────┘  │
-│ [Test Connection]                   │
-│                                     │
-│ Settings:                           │
-│ Max Connections: [2] ▾             │
-│ Retry Attempts:  [3] ▾             │
-│ Timeout:         [30] seconds       │
-│                                     │
-│ Account Info:                       │
-│ ✓ Premium until: 2025-12-31        │
-│ 📊 Storage: 245.8 GB / 1000 GB     │
-│ 📧 Email: user@example.com         │
-│                                     │
-│          [Save]  [Cancel]           │
-└─────────────────────────────────────┘
++-- File Host Configuration ----------------+
+| Host: Rapidgator [dropdown]               |
+| [x] Enable this host                      |
+|                                           |
+| Credentials:                              |
+| +---------------------------------------+ |
+| | username:password                     | |
+| +---------------------------------------+ |
+| [Test Connection]                         |
+|                                           |
+| Settings:                                 |
+| Max Connections: [2] [dropdown]           |
+| Retry Attempts:  [3] [dropdown]           |
+| Timeout:         [30] seconds             |
+|                                           |
+| Account Info:                             |
+| Premium until: 2025-12-31                 |
+| Storage: 245.8 GB / 1000 GB               |
+| Email: user@example.com                   |
+|                                           |
+|          [Save]  [Cancel]                 |
++-------------------------------------------+
 ```
 
 ---
@@ -818,7 +814,7 @@ TOKEN_TTL = {
   "keep2share": 0,       # Permanent (API key)
   "filedot": 3600,       # 1 hour (session)
   "filespace": 3600,     # 1 hour (session)
-  "tezfiles": 3600       # 1 hour (session)
+  "tezfiles": 0          # Permanent (API key)
 }
 ```
 
@@ -842,12 +838,12 @@ class TokenCache:
 **Architecture:**
 ```
 FileHostClient (abstract base class)
-├── FileboomClient
-├── FiledotClient
-├── FilespaceClient
-├── Keep2ShareClient
-├── RapidgatorClient
-└── TezfilesClient
++-- FileboomClient
++-- FiledotClient
++-- FilespaceClient
++-- Keep2ShareClient
++-- RapidgatorClient
++-- TezfilesClient
 ```
 
 **Common Interface:**
@@ -901,31 +897,31 @@ return download_link
 
 **Example Template:**
 ```bbcode
-[center][b]📸 Gallery: #folderName#[/b][/center]
+[center][b]Gallery: #folderName#[/b][/center]
 
-[b]📊 Statistics:[/b]
-• Images: #pictureCount# (#extension# format)
-• Resolution: #width#x#height# (longest side: #longest#px)
-• Total Size: #folderSize#
+[b]Statistics:[/b]
+- Images: #pictureCount# (#extension# format)
+- Resolution: #width#x#height# (longest side: #longest#px)
+- Total Size: #folderSize#
 
 [if galleryLink]
-[b]🔗 Gallery Link:[/b] [url=#galleryLink#]View on imx.to[/url]
+[b]Gallery Link:[/b] [url=#galleryLink#]View on imx.to[/url]
 [/if]
 
 [if hostLinks]
-[b]💾 Download:[/b]
+[b]Download:[/b]
 #hostLinks#
 [/if]
 
 [if custom1]
-[b]📷 Photographer:[/b] #custom1#
+[b]Photographer:[/b] #custom1#
 [/if]
 
 [if custom2]
-[b]📍 Location:[/b] #custom2#
+[b]Location:[/b] #custom2#
 [/if]
 
-[b]🖼️ Images:[/b]
+[b]Images:[/b]
 #allImages#
 ```
 
@@ -977,20 +973,20 @@ LIGHT_THEME = {
 
 **Error Messages:**
 ```
-❌ Line 5: Unknown placeholder: #invalidPlaceholder#
+Error Line 5: Unknown placeholder: #invalidPlaceholder#
    Valid placeholders: #folderName#, #pictureCount#, ...
 
-❌ Line 12: Unclosed conditional tag
+Error Line 12: Unclosed conditional tag
    Found: [if pictureCount]
    Missing: [/if]
 
-❌ Line 18: Orphaned [else] tag without matching [if]
+Error Line 18: Orphaned [else] tag without matching [if]
 
-❌ Line 23: Unmatched BBCode tag
+Error Line 23: Unmatched BBCode tag
    Found: [b]Bold text
    Missing: [/b]
 
-❌ Line 30: Invalid URL syntax
+Error Line 30: Invalid URL syntax
    Found: [url]Invalid[/url]
    Expected: [url=http://...]Text[/url]
 ```
@@ -1023,7 +1019,7 @@ LIGHT_THEME = {
 
 ### External Apps Configuration
 
-**Access:** Settings → External Apps
+**Access:** Settings -> External Apps
 
 **Configuration Fields:**
 - **Name**: Display name for the app
@@ -1036,7 +1032,7 @@ LIGHT_THEME = {
 - **Output Mapping**:
   - Map JSON output to ext1-4 fields
   - JSONPath syntax supported
-  - Example: `$.download_link` → ext1
+  - Example: `$.download_link` -> ext1
 
 **Example Configuration:**
 ```json
@@ -1186,7 +1182,7 @@ python muh.py gofile "%z"
 ### Settings Dialog
 
 **Component:** `src/gui/settings_dialog.py`
-**Access:** Ctrl+, or File → Settings
+**Access:** Ctrl+, or File -> Settings
 
 **Tabs:**
 1. **General**: Application-wide settings
@@ -1266,22 +1262,22 @@ else:
 ```
 Registry: HKEY_CURRENT_USER\Software\ImxUploader\ImxUploadGUI
 Files: %APPDATA%\ImxUploader\
-  ├── settings.ini
-  ├── queue.db
-  ├── token_cache.db
-  └── templates/
+  +-- settings.ini
+  +-- imxup.db
+  +-- token_cache.db
+  +-- templates/
 ```
 
 **Linux:**
 ```
 Config: ~/.config/ImxUploader/ImxUploadGUI.conf
 Files: ~/.imxup/
-  ├── .imxup.ini
-  ├── queue.db
-  ├── token_cache.db
-  ├── templates/
-  ├── artifacts/
-  └── bbcode/
+  +-- imxup.ini
+  +-- imxup.db
+  +-- token_cache.db
+  +-- templates/
+  +-- artifacts/
+  +-- bbcode/
 ```
 
 **Stored Settings:**
@@ -1343,31 +1339,31 @@ SETTINGS = {
 
 **Layout:**
 ```
-┌─ ImXup v0.6.00 ─────────────────────────────┐
-│ File  Edit  View  Tools  Help                │
-├──────────────────────────────────────────────┤
-│ ┌─ Tabs ──────────────────────────────────┐ │
-│ │ Main(3) | Archive(0) | File Hosts(1) | +│ │
-│ ├──────────────────────────────────────────┤ │
-│ │ Gallery Queue                            │ │
-│ │ ┌──────────────────────────────────────┐ │ │
-│ │ │ Name          | Status    | Progress │ │ │
-│ │ ├───────────────┼───────────┼──────────┤ │ │
-│ │ │ Vacation      | ✓ Done    | [█████]  │ │ │
-│ │ │ Birthday      | ⏸ Paused  | [███░░]  │ │ │
-│ │ │ Event Photos  | 🔵 Upload | [██░░░]  │ │ │
-│ │ └──────────────────────────────────────┘ │ │
-│ └──────────────────────────────────────────┘ │
-│ ┌─ Quick Settings ────────────────────────┐ │
-│ │ Template: [Detailed Example ▼]          │ │
-│ │ Public: ☑  Retries: [3▼]  Size: [250▼] │ │
-│ └──────────────────────────────────────────┘ │
-│ ┌─ Controls ──────────────────────────────┐ │
-│ │ [Start All] [Pause All] [Clear Done]    │ │
-│ │ [Settings]  [View BBCode] [Help]        │ │
-│ └──────────────────────────────────────────┘ │
-│ Status: ⬆ 2.5 MB/s | 127.3/245.8 MB | 3m24s│
-└──────────────────────────────────────────────┘
++-- ImXup v0.6.13 -----------------------------+
+| File  Edit  View  Tools  Help                |
++----------------------------------------------+
+| +-- Tabs ----------------------------------+ |
+| | Main(3) | Archive(0) | File Hosts(1) | + | |
+| +------------------------------------------+ |
+| | Gallery Queue                            | |
+| | +--------------------------------------+ | |
+| | | Name          | Status    | Progress | | |
+| | +---------------+-----------+----------+ | |
+| | | Vacation      | Done      | [#####]  | | |
+| | | Birthday      | Paused    | [###..]  | | |
+| | | Event Photos  | Upload    | [##...]  | | |
+| | +--------------------------------------+ | |
+| +------------------------------------------+ |
+| +-- Quick Settings ------------------------+ |
+| | Template: [Detailed Example v]           | |
+| | Public: [x]  Retries: [3v]  Size: [250v] | |
+| +------------------------------------------+ |
+| +-- Controls ------------------------------+ |
+| | [Start All] [Pause All] [Clear Done]     | |
+| | [Settings]  [View BBCode] [Help]         | |
+| +------------------------------------------+ |
+| Status: Upload 2.5 MB/s | 127.3/245.8 MB    |
++----------------------------------------------+
 ```
 
 **Features:**
@@ -1481,25 +1477,25 @@ QTextEdit {
 **Icon Locations:**
 ```
 assets/
-├── status_queued-dark.png
-├── status_queued-light.png
-├── status_uploading-001-dark.png
-├── status_uploading-001-light.png
-├── status_uploading-002-dark.png
-├── status_uploading-003-dark.png
-├── status_uploading-004-dark.png
-├── status_completed-dark.png
-├── status_failed-dark.png
-├── hosts/
-│   └── logo/
-│       ├── fileboom-icon.png
-│       ├── fileboom-icon-dim.png
-│       ├── rapidgator-icon.png
-│       ├── keep2share-icon.png
-│       ├── tezfiles-icon.png
-│       ├── filedot-icon.png
-│       └── filespace-icon.png
-└── styles.qss
++-- status_queued-dark.png
++-- status_queued-light.png
++-- status_uploading-001-dark.png
++-- status_uploading-001-light.png
++-- status_uploading-002-dark.png
++-- status_uploading-003-dark.png
++-- status_uploading-004-dark.png
++-- status_completed-dark.png
++-- status_failed-dark.png
++-- hosts/
+|   +-- logo/
+|       +-- fileboom-icon.png
+|       +-- fileboom-icon-dim.png
+|       +-- rapidgator-icon.png
+|       +-- keep2share-icon.png
+|       +-- tezfiles-icon.png
+|       +-- filedot-icon.png
+|       +-- filespace-icon.png
++-- styles.qss
 ```
 
 **API:**
@@ -1534,19 +1530,19 @@ exists = icon_manager.has_icon("custom_icon")
 
 **Progress Display:**
 ```
-┌─ Gallery: Summer Vacation ────────────────┐
-│ Status: Uploading                          │
-│ Progress: [████████░░░░░░░░] 42%          │
-│ Images: 54 / 127                           │
-│ Speed: 2.5 MB/s                            │
-│ ETA: 3m 24s                                │
-│ Uploaded: 127.3 MB / 245.8 MB             │
-└────────────────────────────────────────────┘
++-- Gallery: Summer Vacation ------------------+
+| Status: Uploading                            |
+| Progress: [########........] 42%             |
+| Images: 54 / 127                             |
+| Speed: 2.5 MB/s                              |
+| ETA: 3m 24s                                  |
+| Uploaded: 127.3 MB / 245.8 MB                |
++----------------------------------------------+
 ```
 
 **Status Bar:**
 ```
-⬆ 2.5 MB/s | Total: 127.3 MB / 245.8 MB | ETA: 3m 24s | Active: 2 | Queued: 3
+Upload 2.5 MB/s | Total: 127.3 MB / 245.8 MB | ETA: 3m 24s | Active: 2 | Queued: 3
 ```
 
 ---
@@ -1554,7 +1550,7 @@ exists = icon_manager.has_icon("custom_icon")
 ### Log Viewer
 
 **Component:** `src/gui/dialogs/log_viewer.py`
-**Access:** Ctrl+L or Help → View Logs
+**Access:** Ctrl+L or Help -> View Logs
 
 **Features:**
 - **Real-time Logging**: Live log updates
@@ -1633,24 +1629,24 @@ DUPLICATE_DETECTION = {
 
 **UI:**
 ```
-┌─ Gallery File Manager ─────────────────────┐
-│ Gallery: Summer Vacation                   │
-│ Path: /home/user/images/vacation           │
-│ Total: 127 images | Size: 245.8 MB        │
-│                                             │
-│ Filter: [Extension ▼] [Size ▼] [Dims ▼]   │
-│                                             │
-│ ┌─ Files ───────────────────────────────┐  │
-│ │ ☑ IMG_0001.jpg  3.2 MB  4000x3000    │  │
-│ │ ☑ IMG_0002.jpg  3.1 MB  4000x3000    │  │
-│ │ ☐ IMG_0003.jpg  3.3 MB  4000x3000    │  │
-│ │ ☑ IMG_0004.jpg  3.0 MB  4000x3000    │  │
-│ └───────────────────────────────────────┘  │
-│                                             │
-│ Selected: 3 / 127 (9.6 MB)                 │
-│ [Select All] [Deselect All] [Delete]       │
-│                      [Upload] [Cancel]      │
-└─────────────────────────────────────────────┘
++-- Gallery File Manager ----------------------+
+| Gallery: Summer Vacation                     |
+| Path: /home/user/images/vacation             |
+| Total: 127 images | Size: 245.8 MB           |
+|                                              |
+| Filter: [Extension v] [Size v] [Dims v]      |
+|                                              |
+| +-- Files --------------------------------+  |
+| | [x] IMG_0001.jpg  3.2 MB  4000x3000    |  |
+| | [x] IMG_0002.jpg  3.1 MB  4000x3000    |  |
+| | [ ] IMG_0003.jpg  3.3 MB  4000x3000    |  |
+| | [x] IMG_0004.jpg  3.0 MB  4000x3000    |  |
+| +----------------------------------------+  |
+|                                              |
+| Selected: 3 / 127 (9.6 MB)                   |
+| [Select All] [Deselect All] [Delete]         |
+|                      [Upload] [Cancel]       |
++----------------------------------------------+
 ```
 
 ---
@@ -1695,7 +1691,7 @@ font.setFamilies([
 
 ### Queue Database
 
-**Location:** `~/.imxup/queue.db`
+**Location:** `~/.imxup/imxup.db`
 **Engine:** SQLite 3
 **Component:** `src/storage/database.py`
 
@@ -1776,9 +1772,9 @@ class QueueManager:
 **Backup Location:**
 ```
 ~/.db-backups/
-├── queue-2025-11-17-001.db
-├── queue-2025-11-16-001.db
-└── queue-2025-11-15-001.db
++-- imxup-2025-11-17-001.db
++-- imxup-2025-11-16-001.db
++-- imxup-2025-11-15-001.db
 ```
 
 **Vacuum Schedule:**
@@ -1899,10 +1895,10 @@ nghttp2-*.dll
 **Architecture:**
 ```
 UploadCoordinator
-├── UploadWorker #1 (thread)
-├── UploadWorker #2 (thread)
-├── UploadWorker #3 (thread)
-└── UploadWorker #4 (thread)
++-- UploadWorker #1 (thread)
++-- UploadWorker #2 (thread)
++-- UploadWorker #3 (thread)
++-- UploadWorker #4 (thread)
 ```
 
 **Features:**
@@ -1945,7 +1941,7 @@ WORKER_CONFIG = {
 - Database pagination (load galleries in batches)
 - Icon cache limit (max 100 cached icons)
 
-**Benchmark Results (v0.6.00):**
+**Benchmark Results (v0.6.13):**
 ```
 Startup Time: 1.2s (down from 3.5s in v0.5.12)
 Gallery Load: 0.8s for 100 galleries (down from 2.1s)
@@ -1959,16 +1955,28 @@ CPU Usage: 15-25% (during active upload)
 
 ## Version History
 
-### v0.6.00 (Latest - 2025-11-17)
+### v0.6.13 (Latest - 2025-12-28)
+**Latest Release**
+
+**Updates:**
+- Fix help dialog performance, add emoji PNG support, improve quick settings
+- Optimize theme switching speed
+- Refactor worker table, extract ArtifactHandler, add worker logo setting
+- Fix thread-safety in ImageStatusChecker, improve worker lifecycle
+- Extract WorkerSignalHandler from main_window.py
+
+---
+
+### v0.6.00 (2025-11-17)
 **Major Release: Multi-Host Upload System**
 
 **New Features:**
-- ✨ Multi-host file upload with 6 provider integrations
-- 🔐 Enhanced authentication (API keys, token login, sessions)
-- 🎨 Adaptive settings panels
-- 🔧 External hooks system with parameter substitution
-- 📦 ZIP auto-creation for external apps (`%z` parameter)
-- 🔗 `#hostLinks#` placeholder for BBCode templates
+- Multi-host file upload with 6 provider integrations
+- Enhanced authentication (API keys, token login, sessions)
+- Adaptive settings panels
+- External hooks system with parameter substitution
+- ZIP auto-creation for external apps (`%z` parameter)
+- `#hostLinks#` placeholder for BBCode templates
 
 **Improvements:**
 - 2x faster startup (1.2s vs 3.5s)
@@ -2060,10 +2068,10 @@ CPU Usage: 15-25% (during active upload)
 **Support:**
 - GitHub Issues: Bug reports and feature requests
 - GitHub Discussions: Questions and community
-- Logs: Help → View Logs for debugging
+- Logs: Help -> View Logs for debugging
 
 ---
 
-**Made with ❤️ by the ImXup team**
+**Made by the ImXup team**
 
-*Last updated: 2025-11-17 | Version: 0.6.00*
+*Last updated: 2025-12-28 | Version: 0.6.13*
