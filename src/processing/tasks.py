@@ -333,7 +333,7 @@ class TableUpdateQueue:
             if kibps >= 1024:
                 return f"{kibps/1024:.1f} MiB/s"
             return f"{kibps:.1f} KiB/s"
-        except:
+        except (TypeError, ValueError):
             return ""
 
 

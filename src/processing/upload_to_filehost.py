@@ -71,7 +71,7 @@ def create_temp_zip(folder_path):
     if os.path.exists(temp_zip_path):
         try:
             os.remove(temp_zip_path)
-        except:
+        except (OSError, PermissionError):
             # If we can't remove it, create a new unique name with timestamp
             temp_zip_path = os.path.join(temp_dir, f"{folder_name}_{int(time.time())}.zip")
 

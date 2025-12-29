@@ -250,7 +250,7 @@ class GalleryFileManagerDialog(QDialog):
                     self.load_from_artifact()
                     return
                 except Exception as e:
-                    print(f"Failed to load artifact: {e}")
+                    log(f"Failed to load artifact: {e}", level="error", category="ui")
                     # Fall through to folder scan
 
         # Fallback: scan folder for non-completed or if artifact not found
@@ -445,7 +445,7 @@ class GalleryFileManagerDialog(QDialog):
                         with Image.open(filepath) as img:
                             details += f"<b>Dimensions:</b> {img.width} x {img.height}<br>"
                             details += f"<b>Format:</b> {img.format}<br>"
-                    except:
+                    except (OSError, IOError):
                         pass
                 else:
                     details += f"<b>Status:</b> ❌ {error_msg}<br>"
@@ -636,7 +636,7 @@ class GalleryFileManagerDialog(QDialog):
                 self.scan_files([filename])
                 
             except Exception as e:
-                print(f"Failed to add {filename}: {e}")
+                log(f"Failed to add {filename}: {e}", level="error", category="ui")
         
         if added_count > 0:
             self.update_info_label()

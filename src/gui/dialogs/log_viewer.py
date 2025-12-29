@@ -15,6 +15,7 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, QSettings
 from PyQt6.QtGui import QFont
 from src.gui.widgets.custom_widgets import CopyableLogTableWidget
+from src.utils.logger import log
 
 
 class LogViewerDialog(QDialog):
@@ -440,10 +441,7 @@ class LogViewerDialog(QDialog):
                 # Open settings to Log tab (index 5) - keep this dialog open
                 main_window.open_comprehensive_settings(tab_index=3)
         except Exception as e:
-            # Debug: print error if settings don't open
-            print(f"Error opening log settings: {e}")
-            import traceback
-            traceback.print_exc()
+            log(f"Error opening log settings: {e}", level="error", category="ui")
 
     def append_message(self, message: str, level: str = "info", category: str = "general"):
         """

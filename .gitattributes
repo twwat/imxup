@@ -1,0 +1,41 @@
+# Auto detect text files and perform LF normalization
+* text=auto
+
+# Python files - always LF
+*.py text eol=lf
+
+# Documentation - always LF
+*.md text eol=lf
+*.txt text eol=lf
+*.rst text eol=lf
+
+# Config files - always LF
+*.json text eol=lf
+*.yaml text eol=lf
+*.yml text eol=lf
+*.toml text eol=lf
+*.ini text eol=lf
+*.cfg text eol=lf
+
+# Shell scripts - always LF
+*.sh text eol=lf
+
+# Windows batch files - always CRLF
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+
+# Binary files - no conversion
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.exe binary
+*.dll binary
+*.so binary
+*.dylib binary
+*.zip binary
+*.gz binary
+*.7z binary
+*.rar binary

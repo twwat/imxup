@@ -21,6 +21,7 @@ ENV/
 # PyInstaller
 build/
 dist/
+imxup/
 
 # IDE
 .vscode/
@@ -53,12 +54,12 @@ nul
 *.py.bak
 *.backup
 
-# Test files
-test/
-test_*.py
-test_*.*
-debug_*.*
-debug/
+# Test files (root level only - not tests/ directory)
+/test/
+/test_*.py
+/test_*.*
+/debug_*.*
+/debug/
 *.zip
 *.html
 bak/

@@ -203,7 +203,7 @@ class IconManager:
 
         # Get the configuration from our map
         if icon_key not in self.ICON_MAP:
-            print(f"Warning: Unknown icon key '{icon_key}'")
+            log(f"Unknown icon key '{icon_key}'", level="warning", category="ui")
             # Try Qt standard fallback
             if icon_key in self.QT_FALLBACKS:
                 from PyQt6.QtWidgets import QApplication
@@ -280,7 +280,7 @@ class IconManager:
             # - Selection state does not change icon choice
             return config[0] if theme_mode == 'light' else config[1]
         else:
-            print(f"Warning: Invalid icon configuration: {config}")
+            log(f"Invalid icon configuration: {config}", level="warning", category="ui")
             return None
     
     def get_status_icon(self, status: str, theme_mode: Optional[str] = None, is_selected: bool = False, requested_size: int = 32, animation_frame: int = 0) -> QIcon:

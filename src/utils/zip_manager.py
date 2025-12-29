@@ -99,7 +99,7 @@ class ZIPManager:
                 if zip_path.exists():
                     try:
                         zip_path.unlink()
-                    except:
+                    except (OSError, PermissionError):
                         pass
                 raise
 

@@ -376,11 +376,11 @@ class SingleInstanceServer(QThread):
                     continue
                 except Exception as e:
                     if self.running:  # Only log if we're supposed to be running
-                        print(f"ERROR: Server error: {e}")
+                        log(f"Server error: {e}", level="error", category="ipc")
                         
             server_socket.close()
         except Exception as e:
-            print(f"ERROR: Failed to start server: {e}")
+            log(f"Failed to start server: {e}", level="error", category="ipc")
     
     def stop(self):
         self.running = False
@@ -509,7 +509,7 @@ class ImxUploadGUI(QMainWindow):
             # Validate icons and report any issues
             validation_result = icon_mgr.validate_icons(report=True)
         except Exception as e:
-            print(f"ERROR: Failed to initialize IconManager: {e}")
+            log(f"Failed to initialize IconManager: {e}", level="error", category="ui")
             
             
         # Set main window icon
@@ -712,7 +712,7 @@ class ImxUploadGUI(QMainWindow):
                         self.context_menu_helper.show_context_menu_for_table(actual_table, position)
                     actual_table.show_context_menu = new_show_context_menu
         except Exception as e:
-            print(f"ERROR: Could not connect context menu helper: {e}")
+            log(f"Could not connect context menu helper: {e}", level="error", category="ui")
         
         if self.splash:
             self.splash.set_status("menu bar (setup_menu_bar())")
@@ -845,7 +845,7 @@ class ImxUploadGUI(QMainWindow):
                     raise
                 
             except Exception as e:
-                print(f"Timer error: {e}")
+                log(f"Timer error: {e}", level="error", category="ui")
 
         self.update_timer.timeout.connect(_tick)
         self.update_timer.start(500)  # Start the timer
@@ -1157,7 +1157,7 @@ class ImxUploadGUI(QMainWindow):
                         self._set_status_text_cell(row, item.status)
 
         except Exception as e:
-            print(f"Warning: Error in selection change handler: {e}")
+            log(f"Error in selection change handler: {e}", level="warning", category="ui")
 
     def _confirm_removal(self, paths: list, names: list | None = None, operation_type: str = "delete") -> bool:
         """
@@ -2618,6 +2618,13 @@ class ImxUploadGUI(QMainWindow):
             # Update widget (already confirmed it exists and is correct type)
             status_widget.update_hosts(host_uploads)
             status_widget.update()  # Force visual refresh
+
+            # BUGFIX: Update cache to prevent stale data on future row refreshes
+            # Cache is used during row population (table_row_manager.py:370-371)
+            # Without this update, rows show incorrect status when re-populated
+            # (scrolling, filtering, theme changes would revert to stale cache)
+            if hasattr(self, '_file_host_uploads_cache') and gallery_path:
+                self._file_host_uploads_cache[gallery_path] = uploads_list
 
             # 6. Confirm update_hosts was called
             log(f"Called update_hosts() on widget at row {row} with {len(host_uploads)} hosts",
@@ -4102,10 +4109,12 @@ class ImxUploadGUI(QMainWindow):
         """
         self.settings_manager.restore_settings()
 
+    @pyqtSlot()
     def save_settings(self):
         """Save window settings to QSettings.
 
         Delegates to SettingsManager.save_settings().
+        Can be called from worker threads via QMetaObject.invokeMethod.
         """
         self.settings_manager.save_settings()
 
@@ -4399,36 +4408,75 @@ class ImxUploadGUI(QMainWindow):
             log(f"dropEvent: Processing text-based drop: {mime_data.text()[:100]}...", level="trace", category="drag_drop")
             event.ignore()
 
-    def closeEvent(self, event):
-        """Handle window close"""
-        # Check if there are active uploads
+    # -------------------------------------------------------------------------
+    # Shutdown Helper Methods
+    # -------------------------------------------------------------------------
+
+    def _gather_active_transfers(self) -> dict:
+        """Gather information about all active transfers.
+
+        Returns:
+            Dictionary containing:
+            - uploading_galleries: List of currently uploading galleries
+            - queued_galleries: List of galleries queued for upload
+            - file_host_uploads: Dict mapping host_id to pending count
+            - has_active: Boolean indicating if any active transfers exist
+        """
         try:
             all_items = self.queue_manager.get_all_items()
-            uploading_items = [item for item in all_items if item.status == "uploading"]
 
-            if uploading_items:
-                from PyQt6.QtWidgets import QMessageBox
-                reply = QMessageBox.question(
-                    self,
-                    "Exit Confirmation",
-                    f"{len(uploading_items)} gallery(s) currently uploading. Exit anyway?",
-                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                    QMessageBox.StandardButton.No
-                )
+            uploading = [
+                item for item in all_items
+                if item.status == "uploading"
+            ]
+            queued = [
+                item for item in all_items
+                if item.status == "queued"
+            ]
 
-                if reply == QMessageBox.StandardButton.No:
-                    event.ignore()
-                    return
+            # Get file host uploads
+            file_host_counts = {}
+            if hasattr(self, 'file_host_manager') and self.file_host_manager:
+                try:
+                    for host_id in self.file_host_manager.get_enabled_hosts():
+                        pending = self.queue_manager.store.get_pending_file_host_uploads(host_id)
+                        if pending:
+                            file_host_counts[host_id] = len(pending)
+                except Exception as e:
+                    log(f"Error getting file host uploads: {e}", level="warning", category="shutdown")
+
+            return {
+                'uploading_galleries': uploading,
+                'queued_galleries': queued,
+                'file_host_uploads': file_host_counts,
+                'has_active': bool(uploading or queued or file_host_counts)
+            }
         except Exception as e:
-            log(f"ERROR: Exception in main_window: {e}", level="error", category="ui")
-            raise
+            log(f"Error gathering active transfers: {e}", level="error", category="shutdown")
+            return {
+                'uploading_galleries': [],
+                'queued_galleries': [],
+                'file_host_uploads': {},
+                'has_active': False
+            }
 
-        self.save_settings()
+    def _minimize_to_tray(self):
+        """Minimize application to system tray."""
+        if hasattr(self, 'tray_icon') and self.tray_icon:
+            self.hide()
+            self.tray_icon.showMessage(
+                "IMXuploader",
+                "Minimized to tray. Uploads will continue in background.",
+                QSystemTrayIcon.MessageIcon.Information,
+                2000
+            )
+        else:
+            # Fallback if tray not available
+            self.showMinimized()
 
-        # shutdown() handles saving the queue state
-        self.queue_manager.shutdown()
-
-        # Stop batchers and cleanup timers
+    @pyqtSlot()
+    def _stop_all_timers(self):
+        """Stop all timers and batchers (must run on main thread)."""
         if hasattr(self, '_progress_batcher'):
             self._progress_batcher.cleanup()
         if hasattr(self, '_table_update_queue'):
@@ -4442,31 +4490,75 @@ class ImxUploadGUI(QMainWindow):
         if hasattr(self, '_upload_animation_timer') and self._upload_animation_timer.isActive():
             self._upload_animation_timer.stop()
 
-        # Stop worker monitoring
-        if hasattr(self, 'worker_status_widget'):
-            self.worker_status_widget.stop_monitoring()
+    def closeEvent(self, event):
+        """Handle window close with graceful shutdown.
 
-        # Always stop workers and server on close
-        if self.worker:
-            self.worker.stop()
+        Shows confirmation dialog if active transfers exist,
+        then displays shutdown progress with force quit option.
+        """
+        from src.gui.dialogs.shutdown_dialogs import (
+            ExitConfirmationDialog, ShutdownDialog, ShutdownWorker
+        )
 
-        # Stop completion worker
-        if hasattr(self, 'completion_worker'):
-            self.completion_worker.stop()
-            self.completion_worker.wait(3000)  # Wait up to 3 seconds for shutdown
+        # Step 1: Gather active transfer info
+        transfers = self._gather_active_transfers()
 
-        # Stop update checker thread if running
-        if self._update_checker is not None and self._update_checker.isRunning():
-            self._update_checker.quit()
-            self._update_checker.wait(1000)
+        # Step 2: Show confirmation if active transfers exist
+        if transfers['has_active']:
+            dialog = ExitConfirmationDialog(
+                parent=self,
+                uploading_galleries=transfers['uploading_galleries'],
+                queued_galleries=transfers['queued_galleries'],
+                file_host_uploads=transfers['file_host_uploads']
+            )
+            dialog.exec()
+            result = dialog.get_result()
 
-        # Stop file host worker manager
-        if hasattr(self, 'file_host_manager') and self.file_host_manager:
-            self.file_host_manager.shutdown_all()
+            if result == ExitConfirmationDialog.RESULT_CANCEL:
+                event.ignore()
+                return
+            elif result == ExitConfirmationDialog.RESULT_MINIMIZE:
+                event.ignore()
+                self._minimize_to_tray()
+                return
+            # else: RESULT_EXIT - continue to shutdown
 
-        self.server.stop()
+        # Step 3: Show shutdown progress dialog
+        shutdown_dialog = ShutdownDialog(self)
+        shutdown_worker = ShutdownWorker(self)
 
-        # Accept the close event to ensure app exits
+        # Connect signals with QueuedConnection for thread safety
+        shutdown_worker.step_started.connect(
+            shutdown_dialog.set_step,
+            Qt.ConnectionType.QueuedConnection
+        )
+        shutdown_worker.step_completed.connect(
+            shutdown_dialog.mark_step_complete,
+            Qt.ConnectionType.QueuedConnection
+        )
+        shutdown_worker.shutdown_complete.connect(
+            shutdown_dialog.accept,
+            Qt.ConnectionType.QueuedConnection
+        )
+        shutdown_dialog.force_quit_requested.connect(
+            shutdown_worker.force_stop
+        )
+
+        # Start shutdown worker
+        shutdown_worker.start()
+
+        # Show dialog (blocks until complete or force quit)
+        shutdown_dialog.exec()
+
+        # Cleanup dialog resources
+        shutdown_dialog.cleanup()
+
+        # Wait for worker to finish (with short timeout)
+        if not shutdown_worker.wait(1000):
+            log("ShutdownWorker did not finish in time, forcing exit",
+                level="warning", category="shutdown")
+
+        # Step 4: Accept close event
         event.accept()
 
     def on_gallery_cell_clicked(self, row, column):
@@ -4610,7 +4702,7 @@ class ImxUploadGUI(QMainWindow):
             try:
                 table = self.gallery_table.table
                 table.removeCellWidget(row, GalleryTableWidget.COL_TEMPLATE)
-            except:
+            except (AttributeError, RuntimeError):
                 pass
 
     def _on_table_item_changed(self, item):

@@ -1,6 +1,6 @@
 # ImXup - Multi-Host Gallery Uploader
 
-![Version](https://img.shields.io/badge/version-0.6.00-blue.svg)
+![Version](https://img.shields.io/badge/version-0.6.15-blue.svg)
 ![Python](https://img.shields.io/badge/python-3.14+-green.svg)
 ![License](https://img.shields.io/badge/license-MIT-orange.svg)
 ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux-lightgrey.svg)
@@ -89,7 +89,7 @@ Upload galleries to 6 premium file hosting services:
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/imxup.git
+git clone https://github.com/twwat/imxup.git
 cd imxup
 
 # Install dependencies
@@ -423,8 +423,8 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 ### Getting Help
 
 - **Documentation**: Check the `docs/` directory
-- **Issues**: [GitHub Issues](https://github.com/yourusername/imxup/issues)
-- **Discussions**: [GitHub Discussions](https://github.com/yourusername/imxup/discussions)
+- **Issues**: [GitHub Issues](https://github.com/twwat/imxup/issues)
+- **Discussions**: [GitHub Discussions](https://github.com/twwat/imxup/discussions)
 
 ### Bug Reports
 
@@ -476,7 +476,7 @@ See **[CHANGELOG.md](CHANGELOG.md)** for complete version history.
 
 ## Project Status
 
-**Active Development** - ImXup is actively maintained and receives regular updates. The latest stable version is v0.6.00.
+**Active Development** - ImXup is actively maintained and receives regular updates. The latest stable version is v0.6.15.
 
 ### Roadmap
 

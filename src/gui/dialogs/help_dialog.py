@@ -2,17 +2,19 @@
 """
 Enhanced Help Dialog for imx.to gallery uploader
 Features markdown rendering, navigation tree, and search functionality
+
+Uses QThread for non-blocking document loading to keep UI responsive.
 """
 
 import os
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Optional
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QTextEdit, QLineEdit,
     QDialogButtonBox, QApplication, QTreeWidget, QTreeWidgetItem,
     QSplitter, QLabel, QPushButton
 )
-from PyQt6.QtCore import Qt, QSize
-from PyQt6.QtGui import QIcon, QFont
+from PyQt6.QtCore import Qt, QThread, pyqtSignal
+from PyQt6.QtGui import QFont, QColor
 
 # Import markdown at module level to avoid 3-4 second delay on first use
 try:
@@ -23,8 +25,186 @@ except ImportError:
     render_markdown = None
 
 
+class DocumentLoaderThread(QThread):
+    """Background thread for loading and parsing documentation files.
+
+    This thread handles all heavy operations:
+    - File I/O (reading markdown files)
+    - Markdown parsing with extensions
+    - Emoji wrapping for PNG replacement
+
+    Signals are emitted as documents become ready, allowing progressive
+    loading without blocking the UI.
+    """
+
+    # Emitted when a document is ready: (filename, title, rendered_html)
+    document_ready = pyqtSignal(str, str, str)
+    # Emitted when all documents have been loaded
+    all_loaded = pyqtSignal()
+    # Emitted on error: (error_message)
+    error = pyqtSignal(str)
+
+    def __init__(
+        self,
+        docs_dir: str,
+        doc_structure: Dict[str, List[Tuple[str, str]]],
+        theme_css: str,
+        parent: Optional[QThread] = None
+    ):
+        """Initialize the document loader thread.
+
+        Args:
+            docs_dir: Path to the documentation directory
+            doc_structure: Dictionary mapping category names to list of (title, filename) tuples
+            theme_css: Pre-computed CSS for the current theme
+            parent: Optional parent QObject
+        """
+        super().__init__(parent)
+        self.docs_dir = docs_dir
+        self.doc_structure = doc_structure
+        self.theme_css = theme_css
+        self._stop_requested = False
+
+        # Store references needed for rendering (class constants from HelpDialog)
+        self._emoji_keys_sorted = HelpDialog._EMOJI_KEYS_SORTED
+        self._emoji_to_file = HelpDialog.EMOJI_TO_FILE
+        self._emoji_dir = HelpDialog._EMOJI_DIR
+
+    def stop(self):
+        """Request the thread to stop processing."""
+        self._stop_requested = True
+
+    def run(self):
+        """Load and parse all documentation files in background.
+
+        Emits document_ready signal for each file as it's processed,
+        allowing the UI to progressively display content.
+        """
+        try:
+            for category, files in self.doc_structure.items():
+                if self._stop_requested:
+                    return
+
+                for title, filename in files:
+                    if self._stop_requested:
+                        return
+
+                    file_path = os.path.join(self.docs_dir, filename)
+                    try:
+                        with open(file_path, 'r', encoding='utf-8') as f:
+                            content = f.read()
+
+                        # Parse markdown in background thread (the expensive operation)
+                        if MARKDOWN_AVAILABLE:
+                            html_content = render_markdown(
+                                content,
+                                extensions=['extra', 'codehilite', 'toc']
+                            )
+                            html_content = self._wrap_emojis(html_content)
+                            html = self._build_html(title, html_content)
+                        else:
+                            html = f"<pre>{title}\n\n{content}</pre>"
+
+                        # Emit signal with rendered content
+                        self.document_ready.emit(filename, title, html)
+
+                    except FileNotFoundError:
+                        error_html = self._build_error_html(
+                            title,
+                            f"Documentation file not found: {filename}"
+                        )
+                        self.document_ready.emit(filename, title, error_html)
+                    except Exception as e:
+                        error_html = self._build_error_html(
+                            title,
+                            f"Error loading documentation: {str(e)}"
+                        )
+                        self.document_ready.emit(filename, title, error_html)
+
+            if not self._stop_requested:
+                self.all_loaded.emit()
+
+        except Exception as e:
+            self.error.emit(str(e))
+
+    def _wrap_emojis(self, html: str) -> str:
+        """Replace emoji characters with Twemoji PNG images.
+
+        Args:
+            html: HTML content that may contain emoji characters.
+
+        Returns:
+            HTML with emoji characters replaced by img tags pointing to local PNGs.
+        """
+        result = html
+        # Process longer sequences first (FE0F variants) to avoid partial matches
+        for emoji in self._emoji_keys_sorted:
+            if emoji in result:
+                codepoint = self._emoji_to_file[emoji]
+                img_path = os.path.join(self._emoji_dir, f"{codepoint}.png")
+                # Use file:// URL for Qt - normalize path separators
+                file_url = "file:///" + img_path.replace("\\", "/")
+                img_tag = f'<img src="{file_url}" width="20" height="20" style="vertical-align: middle;" />'
+                result = result.replace(emoji, img_tag)
+
+        return result
+
+    def _build_html(self, title: str, html_content: str) -> str:
+        """Build complete HTML document with CSS styling.
+
+        Args:
+            title: Document title
+            html_content: Pre-rendered HTML content
+
+        Returns:
+            Complete HTML document string
+        """
+        wrapped_title = self._wrap_emojis(title)
+        return f"""
+        <html>
+        <head>
+            <style>
+                {self.theme_css}
+            </style>
+        </head>
+        <body>
+            <h1>{wrapped_title}</h1>
+            {html_content}
+        </body>
+        </html>
+        """
+
+    def _build_error_html(self, title: str, error_message: str) -> str:
+        """Build HTML for error display.
+
+        Args:
+            title: Document title that failed to load
+            error_message: Error description
+
+        Returns:
+            HTML string showing the error
+        """
+        return f"""
+        <html>
+        <head>
+            <style>
+                {self.theme_css}
+            </style>
+        </head>
+        <body>
+            <h1>{title}</h1>
+            <p style="color: #e74c3c;">{error_message}</p>
+        </body>
+        </html>
+        """
+
+
 class HelpDialog(QDialog):
-    """Enhanced help dialog with navigation tree and search"""
+    """Enhanced help dialog with navigation tree and search.
+
+    Uses a background QThread for loading and parsing documentation,
+    keeping the UI fully responsive during the loading process.
+    """
 
     # Emoji character to codepoint filename mapping (class constant to avoid recreation)
     EMOJI_TO_FILE = {
@@ -84,6 +264,28 @@ class HelpDialog(QDialog):
     _EMOJI_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
         os.path.dirname(os.path.abspath(__file__))))), "assets", "emoji")
 
+    # Documentation structure: category -> [(title, filename), ...]
+    DOC_STRUCTURE = {
+        "Getting Started": [
+            ("Overview", "HELP_CONTENT.md"),
+            ("Quick Start", "quick-start.md"),
+        ],
+        "Features": [
+            ("Multi-Host Upload", "multi-host-upload.md"),
+            ("BBCode Templates", "bbcode-templates.md"),
+            ("GUI Guide", "gui-guide.md"),
+            ("GUI Improvements", "gui-improvements.md"),
+        ],
+        "Reference": [
+            ("Keyboard Shortcuts", "keyboard-shortcuts.md"),
+            ("Troubleshooting", "troubleshooting.md"),
+        ],
+        "Testing": [
+            ("Quick Start", "TESTING_QUICKSTART.md"),
+            ("Status", "TESTING_STATUS.md"),
+        ],
+    }
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Help & Documentation")
@@ -91,9 +293,16 @@ class HelpDialog(QDialog):
         self.resize(1000, 700)
         self._center_on_parent()
 
-        # Store documentation content
-        self.docs: Dict[str, Tuple[str, str]] = {}  # key: (title, content)
+        # Store documentation content and state
+        self.docs: Dict[str, Tuple[str, str]] = {}  # filename: (title, raw_content)
+        self._html_cache: Dict[str, str] = {}  # filename: rendered_html
+        self._loaded_docs: set = set()  # Track which docs are loaded
         self.current_doc: str = ""
+        self._loader_thread: Optional[DocumentLoaderThread] = None
+        self._first_doc_displayed = False
+
+        # Map filename to tree item for quick access
+        self._filename_to_item: Dict[str, QTreeWidgetItem] = {}
 
         # Main layout
         layout = QVBoxLayout(self)
@@ -140,87 +349,168 @@ class HelpDialog(QDialog):
         splitter.setSizes([300, 700])
         layout.addWidget(splitter)
 
-        # Load documentation
-        self._load_documentation()
+        # Build tree structure immediately (fast operation)
+        self._build_tree_structure()
+
+        # Show loading message
+        self._show_loading_message()
+
+        # Start background loading
+        self._start_document_loading()
 
         # Close button
         button_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
         button_box.rejected.connect(self.reject)
         layout.addWidget(button_box)
 
-    def _load_documentation(self):
-        """Load all documentation files from docs/user/ directory"""
+    def _build_tree_structure(self):
+        """Build the navigation tree structure.
+
+        Creates all tree items immediately (fast operation) with loading
+        indicators. Items are updated as documents become available.
+        """
+        for category, files in self.DOC_STRUCTURE.items():
+            category_item = QTreeWidgetItem(self.tree)
+            category_item.setText(0, category)
+            category_item.setExpanded(True)
+
+            for title, filename in files:
+                item = QTreeWidgetItem(category_item)
+                # Show loading indicator in title
+                item.setText(0, f"{title} (loading...)")
+                item.setData(0, Qt.ItemDataRole.UserRole, filename)
+                # Gray out until loaded
+                item.setForeground(0, QColor(128, 128, 128))
+                # Store reference for quick updates
+                self._filename_to_item[filename] = item
+
+    def _start_document_loading(self):
+        """Start the background document loading thread."""
         docs_dir = os.path.join(os.getcwd(), "docs", "user")
 
         if not os.path.exists(docs_dir):
             self._show_error("Documentation directory not found")
             return
 
-        # Documentation structure: category -> files
-        doc_structure = {
-            "Getting Started": [
-                ("Overview", "HELP_CONTENT.md"),
-                ("Quick Start", "quick-start.md"),
-            ],
-            "Features": [
-                ("Multi-Host Upload", "multi-host-upload.md"),
-                ("BBCode Templates", "bbcode-templates.md"),
-                ("GUI Guide", "gui-guide.md"),
-                ("GUI Improvements", "gui-improvements.md"),
-            ],
-            "Reference": [
-                ("Keyboard Shortcuts", "keyboard-shortcuts.md"),
-                ("Troubleshooting", "troubleshooting.md"),
-            ],
-            "Testing": [
-                ("Quick Start", "TESTING_QUICKSTART.md"),
-                ("Status", "TESTING_STATUS.md"),
-            ],
-        }
+        # Get current theme CSS before starting thread
+        theme_css = self._get_theme_css()
 
-        # Build tree structure
-        for category, files in doc_structure.items():
-            category_item = QTreeWidgetItem(self.tree)
-            category_item.setText(0, category)
-            category_item.setExpanded(True)
+        # Create and start loader thread
+        self._loader_thread = DocumentLoaderThread(
+            docs_dir=docs_dir,
+            doc_structure=self.DOC_STRUCTURE,
+            theme_css=theme_css,
+            parent=self
+        )
 
-            for title, filename in files:
-                file_path = os.path.join(docs_dir, filename)
-                item = QTreeWidgetItem(category_item)
-                item.setText(0, title)
-                item.setData(0, Qt.ItemDataRole.UserRole, filename)
+        # Connect signals
+        self._loader_thread.document_ready.connect(self._on_document_ready)
+        self._loader_thread.all_loaded.connect(self._on_all_loaded)
+        self._loader_thread.error.connect(self._on_loader_error)
 
-                # Load file content
-                try:
-                    with open(file_path, 'r', encoding='utf-8') as f:
-                        content = f.read()
-                        self.docs[filename] = (title, content)
-                except FileNotFoundError:
-                    self.docs[filename] = (title, f"Documentation file not found: {filename}")
-                except Exception as e:
-                    self.docs[filename] = (title, f"Error loading documentation: {str(e)}")
+        # Start loading
+        self._loader_thread.start()
 
-        # Select and display first item
-        if self.tree.topLevelItemCount() > 0:
-            first_category = self.tree.topLevelItem(0)
-            if first_category.childCount() > 0:
-                first_item = first_category.child(0)
-                self.tree.setCurrentItem(first_item)
-                self._on_tree_item_clicked(first_item, 0)
+    def _on_document_ready(self, filename: str, title: str, html: str):
+        """Handle a document being ready from the loader thread.
+
+        Args:
+            filename: Document filename
+            title: Document title
+            html: Pre-rendered HTML content
+        """
+        # Store in cache
+        self._html_cache[filename] = html
+        self._loaded_docs.add(filename)
+
+        # Update tree item appearance
+        if filename in self._filename_to_item:
+            item = self._filename_to_item[filename]
+            item.setText(0, title)  # Remove "(loading...)"
+            # Restore normal color
+            palette = QApplication.palette()
+            item.setForeground(0, palette.text().color())
+
+        # Display first document automatically
+        if not self._first_doc_displayed:
+            self._first_doc_displayed = True
+            if self.tree.topLevelItemCount() > 0:
+                first_category = self.tree.topLevelItem(0)
+                if first_category.childCount() > 0:
+                    first_item = first_category.child(0)
+                    first_filename = first_item.data(0, Qt.ItemDataRole.UserRole)
+                    if first_filename == filename:
+                        self.tree.setCurrentItem(first_item)
+                        self.content_viewer.setHtml(html)
+                        self.current_doc = filename
+
+    def _on_all_loaded(self):
+        """Handle all documents being loaded."""
+        # If no document displayed yet, select first one
+        if not self.current_doc and self._html_cache:
+            if self.tree.topLevelItemCount() > 0:
+                first_category = self.tree.topLevelItem(0)
+                if first_category.childCount() > 0:
+                    first_item = first_category.child(0)
+                    self.tree.setCurrentItem(first_item)
+                    self._on_tree_item_clicked(first_item, 0)
+
+    def _on_loader_error(self, error_message: str):
+        """Handle loader thread error.
+
+        Args:
+            error_message: Error description
+        """
+        self._show_error(f"Error loading documentation: {error_message}")
 
     def _on_tree_item_clicked(self, item: QTreeWidgetItem, column: int):
-        """Handle tree item click"""
+        """Handle tree item click.
+
+        Args:
+            item: Clicked tree item
+            column: Column index (unused)
+        """
         filename = item.data(0, Qt.ItemDataRole.UserRole)
         if not filename:
             return  # Category item, not a document
 
-        if filename in self.docs:
-            title, content = self.docs[filename]
-            self.current_doc = filename
-            self._display_content(title, content)
+        self.current_doc = filename
+
+        if filename in self._html_cache:
+            # Document is ready - display immediately
+            self.content_viewer.setHtml(self._html_cache[filename])
+        else:
+            # Document still loading - show loading indicator
+            self._show_document_loading(item.text(0))
+
+    def _show_document_loading(self, title: str):
+        """Show loading indicator for a specific document.
+
+        Args:
+            title: Document title being loaded
+        """
+        palette = QApplication.palette()
+        is_dark = palette.window().color().lightness() < 128
+
+        bg_color = "#1e1e1e" if is_dark else "#ffffff"
+        text_color = "#e0e0e0" if is_dark else "#333333"
+        muted_color = "#aaaaaa" if is_dark else "#7f8c8d"
+
+        self.content_viewer.setHtml(f"""
+        <html>
+        <body style="padding: 40px; font-family: 'Segoe UI', Arial, sans-serif; background-color: {bg_color}; color: {text_color}; text-align: center;">
+            <h2 style="color: #3498db;">Loading: {title}</h2>
+            <p style="color: {muted_color};">Please wait while the document is being processed...</p>
+        </body>
+        </html>
+        """)
 
     def _get_theme_css(self) -> str:
-        """Generate theme-appropriate CSS for HTML content."""
+        """Generate theme-appropriate CSS for HTML content.
+
+        Returns:
+            CSS string for the current theme (dark or light)
+        """
         # Detect dark mode using palette luminance
         palette = QApplication.palette()
         is_dark = palette.window().color().lightness() < 128
@@ -299,54 +589,12 @@ class HelpDialog(QDialog):
 
         return common + theme_colors
 
-    def _wrap_emojis(self, html: str) -> str:
-        """Replace emoji characters with Twemoji PNG images.
+    def _on_search(self, text: str):
+        """Filter tree items based on search text.
 
         Args:
-            html: HTML content that may contain emoji characters.
-
-        Returns:
-            HTML with emoji characters replaced by img tags pointing to local PNGs.
+            text: Search query
         """
-        result = html
-        # Process longer sequences first (FE0F variants) to avoid partial matches
-        for emoji in self._EMOJI_KEYS_SORTED:
-            if emoji in result:
-                codepoint = self.EMOJI_TO_FILE[emoji]
-                img_path = os.path.join(self._EMOJI_DIR, f"{codepoint}.png")
-                # Use file:// URL for Qt - normalize path separators
-                file_url = "file:///" + img_path.replace("\\", "/")
-                img_tag = f'<img src="{file_url}" width="20" height="20" style="vertical-align: middle;" />'
-                result = result.replace(emoji, img_tag)
-
-        return result
-
-    def _display_content(self, title: str, content: str):
-        """Display markdown content in the viewer"""
-        if MARKDOWN_AVAILABLE:
-            html_content = render_markdown(content, extensions=['extra', 'codehilite', 'toc'])
-            # Wrap emoji characters in spans with emoji font-family for proper rendering
-            html_content = self._wrap_emojis(html_content)
-            html = f"""
-            <html>
-            <head>
-                <style>
-                    {self._get_theme_css()}
-                </style>
-            </head>
-            <body>
-                <h1>{self._wrap_emojis(title)}</h1>
-                {html_content}
-            </body>
-            </html>
-            """
-            self.content_viewer.setHtml(html)
-        else:
-            # Fallback to plain text if markdown not available
-            self.content_viewer.setPlainText(f"# {title}\n\n{content}")
-
-    def _on_search(self, text: str):
-        """Filter tree items based on search text"""
         if not text:
             # Show all items
             for i in range(self.tree.topLevelItemCount()):
@@ -366,12 +614,13 @@ class HelpDialog(QDialog):
                 item = category.child(j)
                 filename = item.data(0, Qt.ItemDataRole.UserRole)
 
-                # Check if title or content matches
+                # Check if title matches
                 title_match = text in item.text(0).lower()
+
+                # Check if cached HTML content matches
                 content_match = False
-                if filename in self.docs:
-                    _, content = self.docs[filename]
-                    content_match = text in content.lower()
+                if filename in self._html_cache:
+                    content_match = text in self._html_cache[filename].lower()
 
                 matches = title_match or content_match
                 item.setHidden(not matches)
@@ -381,7 +630,7 @@ class HelpDialog(QDialog):
             category.setHidden(not category_has_match)
 
     def _find_in_content(self):
-        """Find and highlight search term in current document"""
+        """Find and highlight search term in current document."""
         search_text = self.search_input.text()
         if not search_text:
             return
@@ -389,8 +638,31 @@ class HelpDialog(QDialog):
         # Use QTextEdit's built-in find
         self.content_viewer.find(search_text)
 
+    def _show_loading_message(self):
+        """Display loading message while documentation loads asynchronously."""
+        palette = QApplication.palette()
+        is_dark = palette.window().color().lightness() < 128
+
+        bg_color = "#1e1e1e" if is_dark else "#ffffff"
+        text_color = "#e0e0e0" if is_dark else "#333333"
+        muted_color = "#aaaaaa" if is_dark else "#7f8c8d"
+
+        self.content_viewer.setHtml(f"""
+        <html>
+        <body style="padding: 40px; font-family: 'Segoe UI', Arial, sans-serif; background-color: {bg_color}; color: {text_color}; text-align: center;">
+            <h2 style="color: #3498db;">Loading Documentation...</h2>
+            <p style="color: {muted_color};">Please wait while documentation is being loaded.</p>
+            <p style="color: {muted_color}; font-size: 0.9em;">Documents will appear as they are ready.</p>
+        </body>
+        </html>
+        """)
+
     def _show_error(self, message: str):
-        """Display error message in content viewer"""
+        """Display error message in content viewer.
+
+        Args:
+            message: Error message to display
+        """
         palette = QApplication.palette()
         is_dark = palette.window().color().lightness() < 128
 
@@ -401,7 +673,7 @@ class HelpDialog(QDialog):
         self.content_viewer.setHtml(f"""
         <html>
         <body style="padding: 20px; font-family: Arial, sans-serif; background-color: {bg_color}; color: {text_color};">
-            <h2 style="color: #e74c3c;">⚠️ Error</h2>
+            <h2 style="color: #e74c3c;">Error</h2>
             <p>{message}</p>
             <p style="color: {muted_color};">
                 Please ensure the documentation files are available in the <code>docs/user/</code> directory.
@@ -411,7 +683,7 @@ class HelpDialog(QDialog):
         """)
 
     def _center_on_parent(self):
-        """Center dialog on parent window or screen"""
+        """Center dialog on parent window or screen."""
         if self.parent():
             parent_geo = self.parent().geometry()
             self.move(
@@ -426,15 +698,38 @@ class HelpDialog(QDialog):
             )
 
     def show_shortcuts_tab(self):
-        """Open help dialog and navigate to keyboard shortcuts"""
+        """Open help dialog and navigate to keyboard shortcuts."""
         # Find and select keyboard shortcuts item
         for i in range(self.tree.topLevelItemCount()):
             category = self.tree.topLevelItem(i)
             for j in range(category.childCount()):
                 item = category.child(j)
-                if item.text(0) == "Keyboard Shortcuts":
+                filename = item.data(0, Qt.ItemDataRole.UserRole)
+                if filename == "keyboard-shortcuts.md":
                     self.tree.setCurrentItem(item)
                     self._on_tree_item_clicked(item, 0)
                     self.show()
                     return
         self.show()
+
+    def closeEvent(self, event):
+        """Handle dialog close - cleanup the loader thread.
+
+        Args:
+            event: Close event
+        """
+        if self._loader_thread is not None and self._loader_thread.isRunning():
+            self._loader_thread.stop()
+            self._loader_thread.wait(1000)  # Wait up to 1 second
+            if self._loader_thread.isRunning():
+                self._loader_thread.terminate()
+        super().closeEvent(event)
+
+    def reject(self):
+        """Handle dialog rejection (Escape key or Close button)."""
+        if self._loader_thread is not None and self._loader_thread.isRunning():
+            self._loader_thread.stop()
+            self._loader_thread.wait(1000)
+            if self._loader_thread.isRunning():
+                self._loader_thread.terminate()
+        super().reject()

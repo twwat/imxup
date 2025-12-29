@@ -361,30 +361,21 @@ class TabManager(QObject):
         Returns:
             True if assignment was successful, False otherwise
         """
-        print(f"DEBUG: TabManager.assign_gallery_to_tab called with path={gallery_path}, tab_name={tab_name}")
-        
         # Get tab info to validate tab exists
         tab_info = self.get_tab_by_name(tab_name)
         if not tab_info:
-            print(f"Warning: Tab '{tab_name}' not found for gallery assignment")
             return False
-        
-        print(f"DEBUG: Tab '{tab_name}' found with id={tab_info.id}")
-        
+
         # Move the single gallery to the tab
-        print(f"DEBUG: Calling _store.move_galleries_to_tab with [{gallery_path}] to '{tab_name}'")
         moved_count = self._store.move_galleries_to_tab([gallery_path], tab_name)
         success = moved_count > 0
-        
-        print(f"DEBUG: move_galleries_to_tab returned moved_count={moved_count}, success={success}")
-        
+
         if success:
             # Invalidate cache for the target tab to ensure fresh data
             self.invalidate_tab_cache(tab_name)
             # Also invalidate cache for all tabs to ensure counts are updated
             self.invalidate_tab_cache()
-            print(f"DEBUG: Cache invalidated for tab assignment")
-        
+
         return success
     
     def move_galleries_to_tab(self, gallery_paths: List[str], new_tab_name: str) -> int:
@@ -553,6 +544,6 @@ class TabManager(QObject):
                 elif valid_tab_names:
                     self.last_active_tab = sorted(valid_tab_names)[0]
                     
-        except Exception as e:
-            # Graceful degradation - log error but don't crash
-            print(f"Warning: Failed to cleanup orphaned preferences: {e}")
+        except Exception:
+            # Graceful degradation - continue without crashing
+            pass

@@ -181,7 +181,7 @@ class QueueManager(QObject):
                 log(f"Scan Worker: Error scanning {path}: {e}", level="error", category="scan")
                 try:
                     self._scan_queue.task_done()
-                except:
+                except ValueError:
                     pass
     
     def _comprehensive_scan_item(self, path: str):
@@ -429,7 +429,7 @@ class QueueManager(QObject):
                 try:
                     with Image.open(fp) as img:
                         dims.append(img.size)
-                except:
+                except (OSError, IOError):
                     continue
 
             log(f"Scan Worker: Successfully read dimensions from {len(dims)}/{len(samples)} sampled files for '{gallery_name}'", level="debug", category="scan")
@@ -702,7 +702,7 @@ class QueueManager(QObject):
                 'fast_scan': settings.value('scanning/fast_scan', True, type=bool),
                 'pil_sampling': settings.value('scanning/pil_sampling', 2, type=int)
             }
-        except:
+        except Exception:
             return {'fast_scan': True, 'pil_sampling': 2}
     
     def _inc_version(self):
@@ -874,7 +874,7 @@ class QueueManager(QObject):
         """Load queue from database"""
         try:
             queue_data = self.store.load_all_items()
-        except:
+        except Exception:
             queue_data = []
         
         for data in queue_data:
@@ -1140,7 +1140,7 @@ class QueueManager(QObject):
         
         try:
             self.store._executor.submit(self.store.delete_by_paths, [path])
-        except:
+        except (RuntimeError, AttributeError):
             pass
         
         return True
@@ -1209,7 +1209,7 @@ class QueueManager(QObject):
         self._scan_worker_running = False
         try:
             self._scan_queue.put(None, timeout=1.0)
-        except:
+        except (queue.Full, AttributeError):
             pass
         if self._scan_worker and self._scan_worker.is_alive():
             self._scan_worker.join(timeout=2.0)

@@ -5,6 +5,7 @@ Helps organize context menu functionality to avoid bloating main_window.py.
 
 from PyQt6.QtWidgets import QMenu
 from PyQt6.QtCore import QObject, pyqtSignal, Qt, QMutexLocker
+from src.utils.logger import log
 
 
 class GalleryContextMenuHelper(QObject):
@@ -284,7 +285,7 @@ class GalleryContextMenuHelper(QObject):
         elif hasattr(self.main_window, method_name):
             method = getattr(self.main_window, method_name)
         else:
-            print(f"Warning: Method {method_name} not found on table or main window")
+            log(f"Method {method_name} not found on table or main window", level="warning", category="ui")
             return
             
         if args:
@@ -312,7 +313,7 @@ class GalleryContextMenuHelper(QObject):
                             self._handle_template_selection(selected_paths, target_template)
                         )
         except Exception as e:
-            print(f"Error loading templates for context menu: {e}")
+            log(f"Error loading templates for context menu: {e}", level="error", category="ui")
     
     def _handle_template_selection(self, gallery_paths: list, template_name: str):
         """Handle template selection for multiple galleries"""
@@ -356,10 +357,10 @@ class GalleryContextMenuHelper(QObject):
                                 self.main_window.regenerate_gallery_bbcode(gallery_path, template_name)
                                 bbcode_regenerated += 1
                             except Exception as e:
-                                print(f"Failed to regenerate BBCode for {gallery_path}: {e}")
+                                log(f"Failed to regenerate BBCode for {gallery_path}: {e}", level="error", category="ui")
                                 
                 except Exception as e:
-                    print(f"Error updating template for {gallery_path}: {e}")
+                    log(f"Error updating template for {gallery_path}: {e}", level="error", category="ui")
             
             # Update table display for visible items
             self._update_table_display(gallery_paths, template_name)
@@ -376,7 +377,7 @@ class GalleryContextMenuHelper(QObject):
                 self.main_window.add_log_message(message)
                 
         except Exception as e:
-            print(f"Error in batch template update: {e}")
+            log(f"Error in batch template update: {e}", level="error", category="ui")
     
     def _update_table_display(self, gallery_paths: list, template_name: str):
         """Update table display for galleries with new template"""
@@ -405,4 +406,4 @@ class GalleryContextMenuHelper(QObject):
                             template_item.setText(template_name)
                             
         except Exception as e:
-            print(f"Error updating table display: {e}")
+            log(f"Error updating table display: {e}", level="error", category="ui")

@@ -36,7 +36,7 @@ class SplashScreen(QSplashScreen):
             from imxup import get_version
             APP_VERSION = get_version()
             self.version = f"{APP_VERSION} "
-        except:
+        except (ImportError, ModuleNotFoundError):
             self.version = "unknown"
         self.random_statuses = ['Establishing alibi...', 'Flicking bean...', 'Wiping front to back...']
         #self.status_text = random.choice(self.init_action_words).title()
@@ -112,13 +112,13 @@ class SplashScreen(QSplashScreen):
         painter.drawText(copyright_x, y_offset + 20, copyright_text)
         y_offset += 40
         
-        apache_text = "Licensed under the Apache License, Version 2.0"
-        apache_font = QFont("Courier", 12)
-        painter.setFont(apache_font)
+        mit_text = "Licensed under the MIT License"
+        mit_font = QFont("Courier", 12)
+        painter.setFont(mit_font)
         painter.setPen(QColor(195, 195, 195))
-        apache_rect = painter.fontMetrics().boundingRect(apache_text)
-        apache_x = (self.width() - apache_rect.width()) // 2
-        painter.drawText(apache_x, y_offset + 20, apache_text)
+        mit_rect = painter.fontMetrics().boundingRect(mit_text)
+        mit_x = (self.width() - mit_rect.width()) // 2
+        painter.drawText(mit_x, y_offset + 20, mit_text)
         y_offset += 50
         
         # Draw copyright and license info

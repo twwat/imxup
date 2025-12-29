@@ -336,7 +336,7 @@ class CredentialSetupDialog(QDialog):
                     except Exception:
                         self.api_key_change_btn.setText(" Change")
                     self.api_key_remove_btn.setEnabled(True)
-            except:
+            except (AttributeError, RuntimeError):
                 self.api_key_status_label.setText("SET")
                 self.api_key_status_label.setProperty("class", "status-success")
                 self.api_key_status_label.setStyleSheet(f"color: {self.success_color}; font-weight: bold;")

@@ -588,8 +588,7 @@ class GalleryTableWidget(QTableWidget):
                     log(f"RIGHT-CLICK PATH - Moved {moved_count} galler{'y' if moved_count == 1 else 'ies'} to '{target_tab}' tab", level="debug", category="ui")
 
             except Exception as e:
-                print(e)
-                log(f"Error moving galleries to tab '{target_tab}': {e}", level="error")
+                log(f"Error moving galleries to tab '{target_tab}': {e}", level="error", category="ui")
 
 
     def manage_gallery_files(self, path: str):

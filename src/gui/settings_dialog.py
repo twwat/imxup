@@ -61,6 +61,7 @@ from PyQt6.QtGui import QSyntaxHighlighter
 # Import local modules
 from imxup import load_user_defaults, get_config_path, encrypt_password, decrypt_password
 from src.utils.format_utils import timestamp, format_binary_size
+from src.utils.logger import log
 from src.gui.dialogs.message_factory import MessageBoxFactory, show_info, show_error, show_warning
 from src.gui.dialogs.template_manager import TemplateManagerDialog, PlaceholderHighlighter
 from src.gui.dialogs.credential_setup import CredentialSetupDialog
@@ -820,7 +821,7 @@ class ComprehensiveSettingsDialog(QDialog):
             
             
         except Exception as e:
-            print(f"{timestamp()} Error loading tabs settings: {e}")
+            log(f"Error loading tabs settings: {e}", level="error", category="settings")
             self._disable_tab_controls()
     
     def _disable_tab_controls(self):
@@ -2595,7 +2596,7 @@ class ComprehensiveSettingsDialog(QDialog):
                 control.blockSignals(False)
 
         except Exception as e:
-            print(f"{timestamp()} WARNING: Failed to load scanning settings: {e}")
+            log(f"Failed to load scanning settings: {e}", level="warning", category="settings")
     
     def _load_tabs_settings(self):
         """Load tabs settings if available"""
@@ -2617,12 +2618,12 @@ class ComprehensiveSettingsDialog(QDialog):
             if os.path.exists(config_file):
                 config.read(config_file)
             else:
-                print(f"{timestamp()} WARNING: Config file does not exist: {config_file}")
+                log(f"Config file does not exist: {config_file}", level="warning", category="settings")
                 return
 
             # Check if EXTERNAL_APPS section exists
             if 'EXTERNAL_APPS' not in config:
-                print(f"{timestamp()} INFO: No EXTERNAL_APPS section in config, using defaults")
+                log(f"No EXTERNAL_APPS section in config, using defaults", level="info", category="settings")
                 return
 
             # Block signals during loading
@@ -2673,7 +2674,7 @@ class ComprehensiveSettingsDialog(QDialog):
 
         except Exception as e:
             import traceback
-            print(f"{timestamp()} ERROR: Failed to load external apps settings: {e}")
+            log(f"Failed to load external apps settings: {e}", level="error", category="settings")
             traceback.print_exc()
 
     def _load_file_hosts_settings(self):
@@ -2730,7 +2731,7 @@ class ComprehensiveSettingsDialog(QDialog):
 
         except Exception as e:
             import traceback
-            print(f"{timestamp()} ERROR: Failed to load file hosts settings: {e}")
+            log(f"Failed to load file hosts settings: {e}", level="error", category="settings")
             traceback.print_exc()
 
     def _save_file_hosts_settings(self):
@@ -2779,7 +2780,7 @@ class ComprehensiveSettingsDialog(QDialog):
                 config.write(f)
 
         except Exception as e:
-            print(f"{timestamp()} WARNING: Failed to save file hosts settings: {e}")
+            log(f"Failed to save file hosts settings: {e}", level="warning", category="settings")
 
     def save_settings(self):
         """Save all settings"""
@@ -2883,7 +2884,7 @@ class ComprehensiveSettingsDialog(QDialog):
                 config.write(f)
 
         except Exception as e:
-            print(f"{timestamp()} WARNING: Failed to save scanning settings: {e}")
+            log(f"Failed to save scanning settings: {e}", level="warning", category="settings")
     
     def _save_tabs_settings(self):
         """Save tabs settings - handled by TabManager automatically"""
@@ -2932,7 +2933,7 @@ class ComprehensiveSettingsDialog(QDialog):
                 config.write(f)
 
         except Exception as e:
-            print(f"{timestamp()} WARNING: Failed to save external apps settings: {e}")
+            log(f"Failed to save external apps settings: {e}", level="warning", category="settings")
 
     def _reset_tabs_settings(self):
         """Reset tabs settings to defaults"""
@@ -2947,7 +2948,7 @@ class ComprehensiveSettingsDialog(QDialog):
                 # Refresh display
                 self.load_tabs_settings()
         except Exception as e:
-            print(f"{timestamp()} WARNING: Failed to reset tabs settings: {e}")
+            log(f"Failed to reset tabs settings: {e}", level="warning", category="settings")
             
     def reset_to_defaults(self):
         """Reset all settings to defaults"""
@@ -3134,7 +3135,7 @@ class ComprehensiveSettingsDialog(QDialog):
             else:
                 return True
         except Exception as e:
-            print(f"{timestamp()} WARNING: Error saving tab {current_index}: {e}")
+            log(f"Error saving tab {current_index}: {e}", level="warning", category="settings")
             return False
     
     def on_cancel_clicked(self):
@@ -3369,7 +3370,7 @@ class ComprehensiveSettingsDialog(QDialog):
                 try:
                     self.parent_window.uploader.refresh_session_pool()
                 except Exception as e:
-                    print(f"{timestamp()} WARNING: Failed to refresh connection pool: {e}")
+                    log(f"Failed to refresh connection pool: {e}", level="warning", category="settings")
 
             # Save timeout settings
             config.set('DEFAULTS', 'upload_connect_timeout', str(self.connect_timeout_slider.value()))
@@ -3566,7 +3567,7 @@ class ComprehensiveSettingsDialog(QDialog):
             
             return True
         except Exception as e:
-            print(f"{timestamp()} WARNING: Error saving general settings: {e}")
+            log(f"Error saving general settings: {e}", level="warning", category="settings")
             return False
     
     def _perform_migration_and_restart(self, old_path, new_path):
@@ -3590,7 +3591,7 @@ class ComprehensiveSettingsDialog(QDialog):
                 progress.setLabelText("Closing database connection...")
                 try:
                     self.parent_window.queue_manager.shutdown()
-                except:
+                except (AttributeError, RuntimeError):
                     pass
             
             progress.setValue(1)
@@ -3666,7 +3667,7 @@ class ComprehensiveSettingsDialog(QDialog):
             # This tab doesn't have bulk settings to save
             return True
         except Exception as e:
-            print(f"{timestamp()} WARNING: Error saving upload settings: {e}")
+            log(f"Error saving upload settings: {e}", level="warning", category="settings")
             return False
     
     def _save_templates_tab(self):
@@ -3676,7 +3677,7 @@ class ComprehensiveSettingsDialog(QDialog):
                 return self.template_dialog.save_template()
             return True
         except Exception as e:
-            print(f"{timestamp()} WARNING: Error saving template settings: {e}")
+            log(f"Error saving template settings: {e}", level="warning", category="settings")
             return False
     
     def _save_tabs_tab(self):
@@ -3695,7 +3696,7 @@ class ComprehensiveSettingsDialog(QDialog):
             # This tab is mostly for viewing/managing tabs, not configuration
             return True
         except Exception as e:
-            print(f"{timestamp()} WARNING: Error saving tab settings: {e}")
+            log(f"Error saving tab settings: {e}", level="warning", category="settings")
             return False
     
     def _save_icons_tab(self):
@@ -3719,11 +3720,11 @@ class ComprehensiveSettingsDialog(QDialog):
                 #print("Icon changes applied successfully")
                 return True
             else:
-                print("{timestamp()} WARNING: IconManager not available")
+                log("IconManager not available", level="warning", category="ui")
                 return True
                 
         except Exception as e:
-            print(f"Error saving icons tab: {e}")
+            log(f"Error saving icons tab: {e}", level="error", category="settings")
             from PyQt6.QtWidgets import QMessageBox
             show_error(self, "Error", f"Failed to apply icon changes: {str(e)}")
             return False
@@ -3736,7 +3737,7 @@ class ComprehensiveSettingsDialog(QDialog):
                 # Cache refresh and re-rendering handled by main_window._handle_settings_dialog_result()
             return True
         except Exception as e:
-            print(f"{timestamp()} WARNING: Error saving logs tab: {e}")
+            log(f"Error saving logs tab: {e}", level="warning", category="settings")
             return False
 
     def populate_icon_list(self):
@@ -3904,7 +3905,7 @@ class ComprehensiveSettingsDialog(QDialog):
                 self.default_status_label.setText("Using: Qt fallback")
                 
         except Exception as e:
-            print(f"{timestamp()} WARNING: Error updating icon preview: {e}")
+            log(f"Error updating icon preview: {e}", level="warning", category="ui")
             self.current_icon_label.setText("Error")
     
     def update_icon_previews(self):
@@ -3982,7 +3983,7 @@ class ComprehensiveSettingsDialog(QDialog):
             self._update_reset_button_states(icon_key, icon_config)
                 
         except Exception as e:
-            print(f"{timestamp()} WARNING: Error updating dual icon previews: {e}")
+            log(f"Error updating dual icon previews: {e}", level="warning", category="ui")
             self.light_status_label.setText("Error")
             self.dark_status_label.setText("Error")
             self.config_type_label.setText("Configuration: Error")
@@ -4024,7 +4025,7 @@ class ComprehensiveSettingsDialog(QDialog):
                 self.dark_reset_btn.setEnabled(False)
                 
         except Exception as e:
-            print(f"{timestamp()} WARNING: Error updating reset button states: {e}")
+            log(f"Error updating reset button states: {e}", level="warning", category="ui")
             # Enable by default if we can't determine state
             self.light_reset_btn.setEnabled(True)
             self.dark_reset_btn.setEnabled(True)
@@ -4414,7 +4415,7 @@ class ComprehensiveSettingsDialog(QDialog):
                         self.restore_default_icon(icon_key)
                         reset_count += 1
                     except Exception as e:
-                        print(f"Failed to reset {icon_key}: {e}")
+                        log(f"Failed to reset {icon_key}: {e}", level="warning", category="ui")
                 
                 # Update current preview if any
                 current_item = self.icon_tree.currentItem()

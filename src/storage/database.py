@@ -19,6 +19,8 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 import json
 
+from src.utils.logger import log
+
 
 # Access central data dir path from shared helper
 from imxup import get_central_store_base_path
@@ -193,67 +195,67 @@ def _run_migrations(conn: sqlite3.Connection) -> None:
         columns = [column[1] for column in cursor.fetchall()]
         
         if 'failed_files' not in columns:
-            print("Adding failed_files column to galleries table...")
+            log("Adding failed_files column to galleries table...", level="info", category="database")
             conn.execute("ALTER TABLE galleries ADD COLUMN failed_files TEXT")
-            print("+ Added failed_files column")
+            log("+ Added failed_files column", level="info", category="database")
             
         # Migration 2: Add tab_name column if it doesn't exist
         cursor = conn.execute("PRAGMA table_info(galleries)")
         columns = [column[1] for column in cursor.fetchall()]
         
         if 'tab_name' not in columns:
-            print("Adding tab_name column to galleries table...")
+            log("Adding tab_name column to galleries table...", level="info", category="database")
             conn.execute("ALTER TABLE galleries ADD COLUMN tab_name TEXT DEFAULT 'Main'")
-            print("+ Added tab_name column")
-            
+            log("+ Added tab_name column", level="info", category="database")
+
             # Add indexes for tab_name after column creation
-            print("Adding tab_name indexes...")
+            log("Adding tab_name indexes...", level="info", category="database")
             conn.execute("CREATE INDEX IF NOT EXISTS galleries_tab_idx ON galleries(tab_name)")
             conn.execute("CREATE INDEX IF NOT EXISTS galleries_tab_status_idx ON galleries(tab_name, status)")
-            print("+ Added tab_name indexes")
-            
+            log("+ Added tab_name indexes", level="info", category="database")
+
         # Migration 3: Move unnamed galleries from config file to database
         _migrate_unnamed_galleries_to_db(conn)
-        
+
         # Migration 4: Replace tab_name with tab_id for referential integrity
         cursor = conn.execute("PRAGMA table_info(galleries)")
         columns = [column[1] for column in cursor.fetchall()]
-        
+
         if 'tab_name' in columns and 'tab_id' not in columns:
-            print("Migrating from tab_name to tab_id for referential integrity...")
-            
+            log("Migrating from tab_name to tab_id for referential integrity...", level="info", category="database")
+
             # Add tab_id column
             conn.execute("ALTER TABLE galleries ADD COLUMN tab_id INTEGER")
-            
+
             # Get all tab names and their IDs
             cursor = conn.execute("SELECT id, name FROM tabs")
             tab_name_to_id = {name: id for id, name in cursor.fetchall()}
-            
+
             # Update tab_id based on existing tab_name
             for tab_name, tab_id in tab_name_to_id.items():
                 conn.execute(
                     "UPDATE galleries SET tab_id = ? WHERE tab_name = ?",
                     (tab_id, tab_name)
                 )
-            
+
             # Set default tab_id for any galleries without a valid tab assignment
             main_tab_id = tab_name_to_id.get('Main', 1)  # Fallback to ID 1 if Main not found
             conn.execute(
                 "UPDATE galleries SET tab_id = ? WHERE tab_id IS NULL",
                 (main_tab_id,)
             )
-            
+
             # Add indexes for tab_id
             conn.execute("CREATE INDEX IF NOT EXISTS galleries_tab_id_idx ON galleries(tab_id)")
             conn.execute("CREATE INDEX IF NOT EXISTS galleries_tab_id_status_idx ON galleries(tab_id, status)")
-            
+
             # Note: We keep tab_name column for now for backwards compatibility
             # but tab_id becomes the primary reference
-            print("+ Migrated to tab_id-based references")
-        
+            log("+ Migrated to tab_id-based references", level="info", category="database")
+
         # Migration 4: Initialize default tabs
         _initialize_default_tabs(conn)
-        
+
         # Migration 5: Add custom fields columns
         cursor = conn.execute("PRAGMA table_info(galleries)")
         columns = [column[1] for column in cursor.fetchall()]
@@ -269,39 +271,39 @@ def _run_migrations(conn: sqlite3.Connection) -> None:
         ]
         for col_name, col_def in dimension_columns:
             if col_name not in columns:
-                print(f"Adding {col_name} column to galleries table...")
+                log(f"Adding {col_name} column to galleries table...", level="info", category="database")
                 conn.execute(f"ALTER TABLE galleries ADD COLUMN {col_name} {col_def}")
-                print(f"+ Added {col_name} column")
+                log(f"+ Added {col_name} column", level="info", category="database")
 
         for custom_field in ['custom1', 'custom2', 'custom3', 'custom4']:
             if custom_field not in columns:
-                print(f"Adding {custom_field} column to galleries table...")
+                log(f"Adding {custom_field} column to galleries table...", level="info", category="database")
                 conn.execute(f"ALTER TABLE galleries ADD COLUMN {custom_field} TEXT")
-                print(f"+ Added {custom_field} column")
+                log(f"+ Added {custom_field} column", level="info", category="database")
 
         # Add external program result fields (ext1-4)
         for ext_field in ['ext1', 'ext2', 'ext3', 'ext4']:
             if ext_field not in columns:
-                print(f"Adding {ext_field} column to galleries table...")
+                log(f"Adding {ext_field} column to galleries table...", level="info", category="database")
                 conn.execute(f"ALTER TABLE galleries ADD COLUMN {ext_field} TEXT")
-                print(f"+ Added {ext_field} column")
+                log(f"+ Added {ext_field} column", level="info", category="database")
 
         # Migration 6: Add IMX status tracking columns
         cursor = conn.execute("PRAGMA table_info(galleries)")
         columns = [column[1] for column in cursor.fetchall()]
 
         if 'imx_status' not in columns:
-            print("Adding imx_status column to galleries table...")
+            log("Adding imx_status column to galleries table...", level="info", category="database")
             conn.execute("ALTER TABLE galleries ADD COLUMN imx_status TEXT")
-            print("+ Added imx_status column")
+            log("+ Added imx_status column", level="info", category="database")
 
         if 'imx_status_checked' not in columns:
-            print("Adding imx_status_checked column to galleries table...")
+            log("Adding imx_status_checked column to galleries table...", level="info", category="database")
             conn.execute("ALTER TABLE galleries ADD COLUMN imx_status_checked INTEGER")
-            print("+ Added imx_status_checked column")
+            log("+ Added imx_status_checked column", level="info", category="database")
 
     except Exception as e:
-        print(f"Warning: Migration failed: {e}")
+        log(f"Warning: Migration failed: {e}", level="warning", category="database")
         # Continue anyway - the app should still work
 
 
@@ -316,24 +318,24 @@ def _initialize_default_tabs(conn: sqlite3.Connection) -> None:
             # Already initialized
             return
             
-        print("Initializing default system tabs...")
-        
+        log("Initializing default system tabs...", level="info", category="database")
+
         # Default system tabs with proper ordering
         default_tabs = [
             ('Main', 'system', 0, None),
         ]
-        
+
         # Insert default tabs
         for name, tab_type, display_order, color_hint in default_tabs:
             conn.execute(
                 "INSERT OR IGNORE INTO tabs (name, tab_type, display_order, color_hint) VALUES (?, ?, ?, ?)",
                 (name, tab_type, display_order, color_hint)
             )
-        
-        print(f"+ Initialized {len(default_tabs)} default system tabs")
-        
+
+        log(f"+ Initialized {len(default_tabs)} default system tabs", level="info", category="database")
+
     except Exception as e:
-        print(f"DEBUG: WARNING: Could not initialize default tabs: {e}")
+        log(f"Could not initialize default tabs: {e}", level="warning", category="database")
         # Continue anyway - not critical for app function
 
 
@@ -369,26 +371,26 @@ def _migrate_unnamed_galleries_to_db(conn: sqlite3.Connection) -> None:
         if not unnamed_galleries:
             return  # Empty section
             
-        print(f"Migrating {len(unnamed_galleries)} unnamed galleries from config file to database...")
-        
+        log(f"Migrating {len(unnamed_galleries)} unnamed galleries from config file to database...", level="info", category="database")
+
         # Insert all unnamed galleries into database
         for gallery_id, intended_name in unnamed_galleries.items():
             conn.execute(
                 "INSERT OR REPLACE INTO unnamed_galleries (gallery_id, intended_name) VALUES (?, ?)",
                 (gallery_id, intended_name)
             )
-        
-        print(f"+ Migrated {len(unnamed_galleries)} unnamed galleries to database")
-        
+
+        log(f"+ Migrated {len(unnamed_galleries)} unnamed galleries to database", level="info", category="database")
+
         # Optional: Remove from config file after successful migration
         # (Commented out for safety - users can manually clean up)
         # if 'UNNAMED_GALLERIES' in config:
         #     config.remove_section('UNNAMED_GALLERIES')
         #     with open(config_file, 'w') as f:
         #         config.write(f)
-        
+
     except Exception as e:
-        print(f"Warning: Could not migrate unnamed galleries: {e}")
+        log(f"Could not migrate unnamed galleries: {e}", level="warning", category="database")
         # Continue anyway - not critical for app function
 
 
@@ -519,14 +521,9 @@ class QueueStore:
         
         # If tab doesn't exist, default to Main tab
         if tab_id is None:
-            print(f"DEBUG: Tab lookup failed for '{tab_name}', checking available tabs...")
-            cursor = conn.execute("SELECT id, name, is_active FROM tabs ORDER BY name")
-            all_tabs = cursor.fetchall()
-            print(f"DEBUG: Available tabs in database: {all_tabs}")
             cursor = conn.execute("SELECT id FROM tabs WHERE name = 'Main' AND is_active = 1")
             row = cursor.fetchone()
             tab_id = row[0] if row else 1  # Fallback to ID 1
-            print(f"DEBUG: FALLBACK - Changing tab from '{tab_name}' to 'Main' (id={tab_id}) for {path}")
             tab_name = 'Main'
 
 
@@ -639,17 +636,14 @@ class QueueStore:
                                         ),
                                     )
                         except Exception as item_error:
-                            print(f"DEBUG: WARNING: Failed to upsert item {it.get('path', 'unknown')}: {item_error}")
+                            log(f"Failed to upsert item {it.get('path', 'unknown')}: {item_error}", level="warning", category="database")
                             # Continue with other items instead of failing completely
                             continue
                 except Exception as tx_error:
-                    print(f"ERROR: Transaction failed: {tx_error}")
+                    log(f"Transaction failed: {tx_error}", level="error", category="database")
                     raise
         except Exception as e:
-            # Log via print to avoid importing logging from GUI thread
-            print(f"ERROR: bulk_upsert failed: {e}", flush=True)
-            import traceback
-            traceback.print_exc()
+            log(f"bulk_upsert failed: {e}", level="error", category="database")
 
     def bulk_upsert_async(self, items: Iterable[Dict[str, Any]]) -> None:
         # Snapshot to avoid mutation while persisting
@@ -1143,25 +1137,22 @@ class QueueStore:
         # Allow both custom1-4 and ext1-4 fields (ext fields added in migration)
         valid_fields = ['custom1', 'custom2', 'custom3', 'custom4', 'ext1', 'ext2', 'ext3', 'ext4']
         if field_name not in valid_fields:
-            print(f"WARNING: Invalid custom field name: {field_name}, must be one of: {valid_fields}")
+            log(f"Invalid custom field name: {field_name}, must be one of: {valid_fields}", level="warning", category="database")
             return False
-            
+
         with _ConnectionContext(self.db_path) as conn:
             _ensure_schema(conn)
             try:
-                #print(f"DEBUG DB: Executing UPDATE galleries SET {field_name} = '{value}' WHERE path = '{path}'")
                 cursor = conn.execute(f"UPDATE galleries SET {field_name} = ? WHERE path = ?", (value, path))
                 rows_affected = cursor.rowcount
-                total_changes = conn.total_changes
-                #print(f"DEBUG DB: rows_affected={rows_affected}, total_changes={total_changes}")
-                
+
                 # Verify the update by reading back the value
                 verification_cursor = conn.execute(f"SELECT {field_name} FROM galleries WHERE path = ?", (path,))
-                result = verification_cursor.fetchone()
-                
+                verification_cursor.fetchone()
+
                 return rows_affected > 0
             except Exception as e:
-                print(f"DEBUG: Error updating {field_name} for {path}: {e}")
+                log(f"Error updating {field_name} for {path}: {e}", level="error", category="database")
                 return False
 
     def update_item_template(self, path: str, template_name: str) -> bool:
@@ -1254,7 +1245,7 @@ class QueueStore:
             except Exception as e:
                 if isinstance(e, ValueError):
                     raise  # Re-raise ValueError with original message
-                print(f"Error deleting tab {tab_id}: {e}")
+                log(f"Error deleting tab {tab_id}: {e}", level="error", category="database")
                 return False, 0
 
     def move_galleries_to_tab(self, gallery_paths: List[str], new_tab_name: str) -> int:
@@ -1302,15 +1293,9 @@ class QueueStore:
                 return moved_count
                 
             except Exception as e:
-                print(f"DEBUG: Exception type: {type(e)}")
-                print(f"DEBUG: Exception message: {e}")
-                print(f"DEBUG: Gallery paths: {gallery_paths}")
-                print(f"DEBUG: New tab name: '{new_tab_name}' -> clean: '{clean_tab_name}'")
-                import traceback
-                traceback.print_exc()
                 if isinstance(e, ValueError):
                     raise  # Re-raise ValueError with original message
-                print(f"Error moving galleries to tab '{new_tab_name}': {e}")
+                log(f"Error moving galleries to tab '{new_tab_name}': {e}", level="error", category="database")
                 return 0
 
     def reorder_tabs(self, tab_orders: List[Tuple[int, int]]) -> None:
@@ -1343,13 +1328,13 @@ class QueueStore:
                         (new_order, tab_id)
                     )
                     if cursor.rowcount == 0:
-                        print(f"Warning: Tab ID {tab_id} not found during reordering")
+                        log(f"Tab ID {tab_id} not found during reordering", level="warning", category="database")
                     else:
                         updated_count += 1
-                        
-                
+
+
             except Exception as e:
-                print(f"Error reordering tabs: {e}")
+                log(f"Error reordering tabs: {e}", level="error", category="database")
                 raise
 
     def initialize_default_tabs(self) -> None:
@@ -1422,11 +1407,9 @@ class QueueStore:
             row = cursor.fetchone()
             if not row:
                 # This should NEVER happen after INSERT
-                print(f"CRITICAL ERROR: Gallery SELECT failed after INSERT for path: {gallery_path}")
-                import traceback
-                traceback.print_exc()
+                log(f"Gallery SELECT failed after INSERT for path: {gallery_path}", level="critical", category="database")
                 return None
-            
+
             gallery_id = row[0]
 
             try:
@@ -1440,9 +1423,7 @@ class QueueStore:
                 )
                 return cursor.lastrowid
             except Exception as e:
-                print(f"Error adding file host upload: {e}")
-                import traceback
-                traceback.print_exc()
+                log(f"Error adding file host upload: {e}", level="error", category="database")
                 return None
 
     def get_file_host_uploads(self, gallery_path: str) -> List[Dict[str, Any]]:
@@ -1603,7 +1584,7 @@ class QueueStore:
                 )
                 return cursor.rowcount > 0
             except Exception as e:
-                print(f"Error updating file host upload: {e}")
+                log(f"Error updating file host upload: {e}", level="error", category="database")
                 return False
 
     def delete_file_host_upload(self, upload_id: int) -> bool:
@@ -1625,7 +1606,7 @@ class QueueStore:
                 )
                 return cursor.rowcount > 0
             except Exception as e:
-                print(f"Error deleting file host upload: {e}")
+                log(f"Error deleting file host upload: {e}", level="error", category="database")
                 return False
 
     def get_pending_file_host_uploads(self, host_name: Optional[str] = None) -> List[Dict[str, Any]]:
@@ -1797,6 +1778,6 @@ class QueueStore:
                 )
                 return cursor.rowcount > 0
             except Exception as e:
-                print(f"Error updating IMX status for {gallery_path}: {e}")
+                log(f"Error updating IMX status for {gallery_path}: {e}", level="error", category="database")
                 return False
 

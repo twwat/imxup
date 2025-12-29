@@ -61,7 +61,7 @@ def get_sample_indices(files: List[str], config: Dict[str, Any], folder_path: st
                     size = img.size[0] * img.size[1]  # area
                     sizes.append(size)
                     max_size = max(max_size, size)
-            except:
+            except (OSError, IOError):
                 sizes.append(0)
 
         # Exclude images smaller than threshold

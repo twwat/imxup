@@ -13,6 +13,7 @@ from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QDragEnterEvent, QDropEvent
 
 from src.utils.format_utils import timestamp
+from src.utils.logger import log
 from src.gui.dialogs.message_factory import MessageBoxFactory, show_info, show_error, show_warning
 
 
@@ -424,7 +425,7 @@ class IconManagerDialog(QDialog):
             self._update_reset_button_states(icon_key, icon_config)
 
         except Exception as e:
-            print(f"{timestamp()} WARNING: Error updating dual icon previews: {e}")
+            log(f"Error updating dual icon previews: {e}", level="warning", category="ui")
             self.light_status_label.setText("Error")
             self.dark_status_label.setText("Error")
             self.config_type_label.setText("Configuration: Error")
@@ -460,7 +461,7 @@ class IconManagerDialog(QDialog):
                 self.dark_reset_btn.setEnabled(False)
 
         except Exception as e:
-            print(f"{timestamp()} WARNING: Error updating reset button states: {e}")
+            log(f"Error updating reset button states: {e}", level="warning", category="ui")
             self.light_reset_btn.setEnabled(True)
             self.dark_reset_btn.setEnabled(True)
 
@@ -668,7 +669,7 @@ class IconManagerDialog(QDialog):
                         self.restore_default_icon_variant(icon_key, 'dark')
                         reset_count += 1
                     except Exception as e:
-                        print(f"Failed to reset {icon_key}: {e}")
+                        log(f"Failed to reset {icon_key}: {e}", level="warning", category="ui")
 
                 # Update current preview
                 current_item = self.icon_tree.currentItem()

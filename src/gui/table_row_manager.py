@@ -147,6 +147,36 @@ class TableRowManager(QObject):
         self._main_window = main_window
 
     # =========================================================================
+    # Helper Methods
+    # =========================================================================
+
+    def _update_imx_status_cell(self, row: int, item: GalleryQueueItem) -> bool:
+        """Update IMX status column from item data.
+
+        Parses the imx_status string (e.g., "Online (87/87)") and updates
+        the table cell with online/total counts and check timestamp.
+
+        Args:
+            row: Table row index to update
+            item: Gallery queue item containing imx_status data
+
+        Returns:
+            True if status was updated, False if no status data or parse failed
+        """
+        if not item.imx_status or not item.imx_status_checked:
+            return False
+
+        match = re.match(r'\w+\s*\((\d+)/(\d+)\)', item.imx_status)
+        if not match:
+            return False
+
+        online = int(match.group(1))
+        total = int(match.group(2))
+        check_datetime = datetime.fromtimestamp(item.imx_status_checked).strftime('%Y-%m-%d %H:%M')
+        self._main_window.gallery_table.set_online_imx_status(row, online, total, check_datetime)
+        return True
+
+    # =========================================================================
     # Table Row Population Methods
     # =========================================================================
 
@@ -332,13 +362,7 @@ class TableRowManager(QObject):
                     actual_table.setItem(row, col_idx, ext_item)
 
             # IMX Status column - restore from database
-            if item.imx_status and item.imx_status_checked:
-                match = re.match(r'\w+\s*\((\d+)/(\d+)\)', item.imx_status)
-                if match:
-                    online = int(match.group(1))
-                    total = int(match.group(2))
-                    check_datetime = datetime.fromtimestamp(item.imx_status_checked).strftime('%Y-%m-%d %H:%M')
-                    mw.gallery_table.set_online_imx_status(row, online, total, check_datetime)
+            self._update_imx_status_cell(row, item)
         finally:
             actual_table.blockSignals(signals_blocked)
 
@@ -601,6 +625,9 @@ class TableRowManager(QObject):
                 action_widget = ActionButtonWidget()
                 table.setCellWidget(row, _Col.ACTION, action_widget)
                 action_widget.update_buttons(item.status)
+
+            # Populate IMX status column if data exists (was missing from phased loading)
+            self._update_imx_status_cell(row, item)
 
         except Exception as e:
             log(f"Error creating widgets for row {row}: {e}", level="error", category="performance")

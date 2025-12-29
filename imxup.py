@@ -63,11 +63,11 @@ except ImportError:
     winreg = None  # Not available on Linux/Mac
 import mimetypes
 
-__version__ = "0.6.14"  # Application version number
+__version__ = "0.6.15"  # Application version number
 
 # GitHub repository info for update checker
 GITHUB_OWNER = "twwat"
-GITHUB_REPO = "IMXuploader"
+GITHUB_REPO = "imxup"
 
 # Lazy User-Agent string builder to avoid platform.system() hang during module import
 # (platform.system() can hang on some Windows systems, breaking splash screen initialization)
@@ -2423,7 +2423,7 @@ def main():
             # If num_processes > 2, launched from terminal (cmd.exe/powershell also attached)
             if num_processes <= 2:
                 sys.argv.append('--gui')
-        except:
+        except (AttributeError, OSError, TypeError):
             pass  # Not Windows or check failed, don't auto-launch GUI
 
     # Load user defaults
@@ -2655,7 +2655,7 @@ def main():
                         user32.ShowWindow(console_window, 0)  # SW_HIDE
                         # Also try moving it off-screen
                         user32.SetWindowPos(console_window, 0, -32000, -32000, 0, 0, 0x0001)  # SWP_NOSIZE
-                except:
+                except (AttributeError, OSError):
                     pass
 
             sys.exit(app.exec())
@@ -2949,11 +2949,11 @@ if __name__ == "__main__":
             with open('imxup_crash.log', 'w') as f:
                 f.write(f"ImxUp crashed:\n")
                 f.write(f"{traceback.format_exc()}\n")
-        except:
+        except (OSError, IOError):
             pass
         # Also try to log it normally
         try:
             log(f"CRITICAL: Fatal Error: {e}", level="critical", category="ui")
-        except:
+        except Exception:
             pass
         sys.exit(1)

@@ -292,7 +292,7 @@ class MenuManager(QObject):
         info_html = """
         <div align="center">
         <p><strong>Copyright (C) 2025, twat</strong></p>
-        <p><strong>License:</strong> Apache 2.0</p>
+        <p><strong>License:</strong> MIT</p>
         <br>
         <p style="color: #666; font-size: 9px;">
         We are not affiliated with IMX.to in any way, but use of the software
@@ -340,7 +340,7 @@ class MenuManager(QObject):
                     license_content = f.read()
                 license_text.setPlainText(license_content)
             else:
-                license_text.setPlainText("LICENSE file not found. See https://spdx.org/licenses/Apache-2.0.html")
+                license_text.setPlainText("LICENSE file not found. See https://spdx.org/licenses/MIT.html")
         except Exception as e:
             license_text.setPlainText(f"Error loading LICENSE file: {e}")
 
