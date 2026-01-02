@@ -26,10 +26,7 @@ jobs:
           - os: ubuntu-22.04
             artifact_name: imxup-linux
             asset_ext: .tar.gz
-          - os: macos-13  # Intel Mac
-            artifact_name: imxup-macos-intel
-            asset_ext: .tar.gz
-          - os: macos-14  # Apple Silicon
+          - os: macos-15  # Apple Silicon (arm64)
             artifact_name: imxup-macos-arm64
             asset_ext: .tar.gz
 
@@ -64,20 +61,46 @@ jobs:
             libxcb-render-util0 \
             libxcb-shape0
 
-      # macOS: Install curl with openssl
+      # macOS: Install curl with openssl for pycurl
       - name: Install macOS dependencies
         if: runner.os == 'macOS'
         run: |
-          brew install curl openssl
+          brew install curl openssl@3
           echo "PYCURL_SSL_LIBRARY=openssl" >> $GITHUB_ENV
-          echo "LDFLAGS=-L$(brew --prefix openssl)/lib" >> $GITHUB_ENV
-          echo "CPPFLAGS=-I$(brew --prefix openssl)/include" >> $GITHUB_ENV
+          echo "LDFLAGS=-L$(brew --prefix openssl@3)/lib -L$(brew --prefix curl)/lib" >> $GITHUB_ENV
+          echo "CPPFLAGS=-I$(brew --prefix openssl@3)/include -I$(brew --prefix curl)/include" >> $GITHUB_ENV
+          echo "PATH=$(brew --prefix curl)/bin:$PATH" >> $GITHUB_ENV
 
-      - name: Install Python dependencies
+      # Install Python dependencies (platform-aware)
+      - name: Install Python dependencies (Windows)
+        if: runner.os == 'Windows'
         run: |
           python -m pip install --upgrade pip
           pip install pyinstaller
           pip install -r requirements.txt
+
+      - name: Install Python dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyinstaller
+          # Install pycurl with openssl
+          pip install pycurl --global-option="--with-openssl"
+          # Install other deps, skipping Windows-only packages
+          pip install requests PyQt6 PyQt6-Qt6 PyQt6_sip pillow tqdm cryptography standard-imghdr certifi keyring markdown colorama
+
+      - name: Install Python dependencies (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyinstaller
+          # Install pycurl with openssl from Homebrew
+          PYCURL_SSL_LIBRARY=openssl \
+          LDFLAGS="-L$(brew --prefix openssl@3)/lib -L$(brew --prefix curl)/lib" \
+          CPPFLAGS="-I$(brew --prefix openssl@3)/include -I$(brew --prefix curl)/include" \
+          pip install --no-cache-dir pycurl
+          # Install other deps, skipping Windows-only packages
+          pip install requests PyQt6 PyQt6-Qt6 PyQt6_sip pillow tqdm cryptography standard-imghdr certifi keyring markdown colorama
 
       # Windows build
       - name: Build (Windows)
@@ -172,7 +195,6 @@ jobs:
           files: |
             artifacts/imxup-windows/*.zip
             artifacts/imxup-linux/*.tar.gz
-            artifacts/imxup-macos-intel/*.tar.gz
             artifacts/imxup-macos-arm64/*.tar.gz
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
