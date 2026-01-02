@@ -14,6 +14,9 @@ on:
 env:
   PYTHON_VERSION: '3.14'
 
+permissions:
+  contents: write  # Required to create releases
+
 jobs:
   build:
     strategy:
@@ -21,13 +24,13 @@ jobs:
       matrix:
         include:
           - os: windows-latest
-            artifact_name: imxup-windows
+            platform: windows
             asset_ext: .zip
           - os: ubuntu-22.04
-            artifact_name: imxup-linux
+            platform: linux
             asset_ext: .tar.gz
           - os: macos-15  # Apple Silicon (arm64)
-            artifact_name: imxup-macos-arm64
+            platform: macos-arm64
             asset_ext: .tar.gz
 
     runs-on: ${{ matrix.os }}
@@ -35,6 +38,20 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+
+      - name: Set version
+        id: version
+        shell: bash
+        run: |
+          if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
+            VERSION="${{ github.ref_name }}"
+          elif [[ -n "${{ github.event.inputs.version }}" ]]; then
+            VERSION="${{ github.event.inputs.version }}"
+          else
+            VERSION="dev"
+          fi
+          echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
+          echo "Using version: $VERSION"
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -158,22 +175,24 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
+          $version = "${{ steps.version.outputs.VERSION }}"
           cd dist
-          Compress-Archive -Path * -DestinationPath "../${{ matrix.artifact_name }}.zip" -Force
+          Compress-Archive -Path * -DestinationPath "../imxup-$version-${{ matrix.platform }}.zip" -Force
 
       # Package Unix
       - name: Package (Unix)
         if: runner.os != 'Windows'
         run: |
+          VERSION="${{ steps.version.outputs.VERSION }}"
           cd dist
-          tar -czvf "../${{ matrix.artifact_name }}.tar.gz" *
+          tar -czvf "../imxup-$VERSION-${{ matrix.platform }}.tar.gz" *
 
       # Upload artifact
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.artifact_name }}
-          path: ${{ matrix.artifact_name }}${{ matrix.asset_ext }}
+          name: imxup-${{ steps.version.outputs.VERSION }}-${{ matrix.platform }}
+          path: imxup-${{ steps.version.outputs.VERSION }}-${{ matrix.platform }}${{ matrix.asset_ext }}
           retention-days: 30
 
   # Create source distribution
@@ -187,15 +206,15 @@ jobs:
         run: |
           VERSION="${{ github.ref_name }}"
           [[ "$VERSION" != v* ]] && VERSION="dev"
-          git archive --format=tar.gz --prefix=imxup-${VERSION}-source/ HEAD -o imxup-${VERSION}-source.tar.gz
+          git archive --format=tar.gz --prefix=imxup-${VERSION}-source-code/ HEAD -o imxup-${VERSION}-source-code.tar.gz
           echo "Created source archive:"
-          ls -lh imxup-*-source.tar.gz
+          ls -lh imxup-*-source-code.tar.gz
 
       - name: Upload source artifact
         uses: actions/upload-artifact@v4
         with:
-          name: imxup-source
-          path: imxup-*-source.tar.gz
+          name: imxup-${{ github.ref_name }}-source-code
+          path: imxup-*-source-code.tar.gz
           retention-days: 30
 
   # Create release when triggered by tag
@@ -219,9 +238,9 @@ jobs:
           draft: true
           generate_release_notes: true
           files: |
-            artifacts/imxup-windows/*.zip
-            artifacts/imxup-linux/*.tar.gz
-            artifacts/imxup-macos-arm64/*.tar.gz
-            artifacts/imxup-source/*.tar.gz
+            artifacts/imxup-*-windows/*.zip
+            artifacts/imxup-*-linux/*.tar.gz
+            artifacts/imxup-*-macos-arm64/*.tar.gz
+            artifacts/imxup-*-source-code/*.tar.gz
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
