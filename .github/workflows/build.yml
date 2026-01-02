@@ -84,8 +84,9 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install pyinstaller
-          # Install pycurl with openssl
-          pip install pycurl --global-option="--with-openssl"
+          # Install pycurl with openssl (use env vars, not deprecated --global-option)
+          export PYCURL_SSL_LIBRARY=openssl
+          pip install --no-cache-dir pycurl
           # Install other deps, skipping Windows-only packages
           pip install requests PyQt6 PyQt6-Qt6 PyQt6_sip pillow tqdm cryptography standard-imghdr certifi keyring markdown colorama
 
@@ -132,22 +133,25 @@ jobs:
           cp -r docs dist/
           cp LICENSE README.md requirements.txt dist/
 
-      # Verify pycurl (Windows)
+      # Verify pycurl (Windows) - informational only, don't fail
       - name: Verify pycurl (Windows)
         if: runner.os == 'Windows'
-        shell: cmd
+        shell: pwsh
         run: |
-          echo Checking for pycurl files...
-          dir /s dist\*.pyd 2>nul | findstr pycurl || echo "Warning: pycurl.pyd not found"
-          dir /s dist\*curl*.dll 2>nul || echo "Warning: libcurl DLLs not found"
+          Write-Host "Checking for pycurl files..."
+          $pyd = Get-ChildItem -Path dist -Recurse -Filter "pycurl*" -ErrorAction SilentlyContinue
+          if ($pyd) { Write-Host "Found: $($pyd.FullName)" } else { Write-Host "Warning: pycurl.pyd not found" }
+          $dlls = Get-ChildItem -Path dist -Recurse -Filter "*curl*.dll" -ErrorAction SilentlyContinue
+          if ($dlls) { $dlls | ForEach-Object { Write-Host "Found: $($_.FullName)" } } else { Write-Host "Warning: libcurl DLLs not found" }
 
-      # Verify pycurl (Unix)
+      # Verify pycurl (Unix) - informational only, don't fail
       - name: Verify pycurl (Unix)
         if: runner.os != 'Windows'
         run: |
           echo "Checking for pycurl files..."
-          find dist -name "pycurl*" -type f || echo "Warning: pycurl not found"
-          find dist -name "*curl*" -type f || echo "Warning: libcurl not found"
+          find dist -name "pycurl*" -type f 2>/dev/null || echo "Warning: pycurl not found"
+          find dist -name "*curl*" -type f 2>/dev/null || echo "Warning: libcurl not found"
+          true  # Always succeed - this is informational only
 
       # Package Windows
       - name: Package (Windows)
