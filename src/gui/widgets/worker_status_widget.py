@@ -557,6 +557,11 @@ class WorkerStatusWidget(QWidget):
         self._icon_cache['starting'] = icon_mgr.get_icon('status_idle')
         self._icon_cache['authenticating'] = icon_mgr.get_icon('status_idle')
 
+        # Retry/error status icons - map to existing icons
+        self._icon_cache['retry_pending'] = icon_mgr.get_icon('status_idle')
+        self._icon_cache['failed'] = icon_mgr.get_icon('status_error')
+        self._icon_cache['network_error'] = icon_mgr.get_icon('status_error')
+
         # Host type icons (will load dynamically based on host)
 
     def _get_column_index(self, col_id: str) -> int:
@@ -1114,42 +1119,89 @@ class WorkerStatusWidget(QWidget):
 
         Args:
             worker_id: Worker identifier
-            status: New status string
+            status: New status string (may be compound format like "retry_pending:45")
         """
         row = self._worker_row_map.get(worker_id)
         if row is None:
             return
+
+        # Parse compound status (e.g., "retry_pending:45" or "failed:error message")
+        base_status = status
+        detail = ""
+        if ":" in status:
+            parts = status.split(":", 1)
+            base_status = parts[0]
+            detail = parts[1] if len(parts) > 1 else ""
+
+        # Determine display text, tooltip, and color based on base_status
+        display_text = base_status.capitalize()
+        tooltip_text = f"Status: {base_status.capitalize()}"
+        status_color = None  # Will use default if None
+
+        if base_status == 'retry_pending':
+            # Countdown display for retry
+            if detail:
+                display_text = f"Retrying in {detail}s"
+                tooltip_text = f"Retry pending - will retry in {detail} seconds"
+            else:
+                display_text = "Retrying..."
+                tooltip_text = "Retry pending"
+            status_color = QColor("#DAA520")  # Goldenrod for dark theme visibility
+        elif base_status == 'failed':
+            display_text = "Failed"
+            if detail:
+                tooltip_text = f"Failed: {detail}"
+            else:
+                tooltip_text = "Upload failed"
+            status_color = QColor("#FF6B6B")  # Red for dark theme, visible
+        elif base_status == 'network_error':
+            display_text = "Network Error"
+            if detail:
+                tooltip_text = f"Network Error: {detail}"
+            else:
+                tooltip_text = "Network error occurred"
+            status_color = QColor("#DAA520")  # Goldenrod
+        elif base_status == 'uploading':
+            status_color = QColor("darkgreen")
+        elif base_status == 'error':
+            status_color = QColor("red")
+        elif base_status == 'paused':
+            status_color = QColor("#B8860B")  # Dark goldenrod
 
         # Update icon column
         icon_col_idx = self._get_column_index('status')
         if icon_col_idx >= 0:
             icon_item = self.status_table.item(row, icon_col_idx)
             if icon_item:
-                # Use status directly for icon - no mapping needed
-                status_icon = self._icon_cache.get(status, QIcon())
+                # Use base_status for icon lookup
+                status_icon = self._icon_cache.get(base_status, QIcon())
                 icon_item.setIcon(status_icon)
-                icon_item.setToolTip(f"Status: {status.capitalize()}")
+                icon_item.setToolTip(tooltip_text)
 
         # Update text column
         text_col_idx = self._get_column_index('status_text')
         if text_col_idx >= 0:
             text_item = self.status_table.item(row, text_col_idx)
             if text_item:
-                text_item.setText(status.capitalize())
-                text_item.setToolTip(f"Status: {status.capitalize()}")
+                text_item.setText(display_text)
+                text_item.setToolTip(tooltip_text)
+
+                # Reset font to non-italic first (in case previously disabled)
+                font = text_item.font()
+                font.setItalic(False)
+                text_item.setFont(font)
 
                 # Apply color coding based on status
-                if status == 'uploading':
-                    text_item.setForeground(QColor("darkgreen"))
-                elif status == 'error':
-                    text_item.setForeground(QColor("red"))
-                elif status == 'paused':
-                    text_item.setForeground(QColor("#B8860B"))  # Dark goldenrod
-                elif status == 'disabled':
+                if status_color:
+                    text_item.setForeground(status_color)
+                elif base_status == 'disabled':
                     text_item.setForeground(self.palette().color(QPalette.ColorRole.PlaceholderText))
                     font = text_item.font()
                     font.setItalic(True)
                     text_item.setFont(font)
+                else:
+                    # Reset to default color for other statuses
+                    text_item.setForeground(self.palette().color(QPalette.ColorRole.Text))
 
     def _update_worker_progress_cell(self, worker_id: str, progress_bytes: int, total_bytes: int):
         """Update progress cell for a specific worker - targeted update.

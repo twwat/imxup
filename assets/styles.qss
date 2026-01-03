@@ -328,6 +328,11 @@ MultiLineHeaderView {
     qproperty-secondaryColor: #666666;
 }
 
+/* Worker retry/error status colors - LIGHT THEME */
+QLabel[class="worker-status-retry"] { color: #B8860B; font-weight: bold; }  /* Dark goldenrod */
+QLabel[class="worker-status-error"] { color: #CC0000; font-weight: bold; }  /* Dark red */
+QLabel[class="worker-status-failed"] { color: #CC0000; font-weight: bold; }
+
 /* LIGHT_THEME_END */
 
 /* ************************************************************************************************************************************************ */
@@ -545,6 +550,11 @@ MultiLineHeaderView {
     qproperty-primaryColor: #e0e0e0;
     qproperty-secondaryColor: #888888;
 }
+
+/* Worker retry/error status colors - DARK THEME */
+QLabel[class="worker-status-retry"] { color: #DAA520; font-weight: bold; }  /* Goldenrod */
+QLabel[class="worker-status-error"] { color: #FF6B6B; font-weight: bold; }  /* Light red */
+QLabel[class="worker-status-failed"] { color: #FF6B6B; font-weight: bold; }
 
 /* DARK_THEME_END */
 

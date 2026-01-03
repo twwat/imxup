@@ -5,6 +5,7 @@ Manages one persistent worker per enabled file host. Handles worker spawning/kil
 signal relay to GUI, and host enable/disable operations.
 """
 
+import threading
 from typing import Dict, Optional
 
 from PyQt6.QtCore import QObject, pyqtSignal
@@ -47,6 +48,7 @@ class FileHostWorkerManager(QObject):
         self.queue_store = queue_store
         self.workers: Dict[str, FileHostWorker] = {}  # Enabled workers (spinup succeeded)
         self.pending_workers: Dict[str, FileHostWorker] = {}  # Workers spinning up (testing credentials)
+        self._pending_lock = threading.Lock()  # Protects pending_workers dict
 
         import traceback
         caller = traceback.extract_stack()[-2]
@@ -126,20 +128,21 @@ class FileHostWorkerManager(QObject):
             )
             return
 
-        if host_id in self.pending_workers:
-            log(
-                f"[File Host Manager] {host_id} Worker already spinning up",
-                level="debug",
-                category="file_hosts"
-            )
-            return
+        with self._pending_lock:
+            if host_id in self.pending_workers:
+                log(
+                    f"[File Host Manager] {host_id} Worker already spinning up",
+                    level="debug",
+                    category="file_hosts"
+                )
+                return
 
-        #  Create and configure worker
-        worker = FileHostWorker(host_id, self.queue_store)
-        self._connect_worker_signals(worker)
+            #  Create and configure worker
+            worker = FileHostWorker(host_id, self.queue_store)
+            self._connect_worker_signals(worker)
 
-        # Add to pending_workers (NOT workers yet - not enabled until spinup succeeds)
-        self.pending_workers[host_id] = worker
+            # Add to pending_workers (NOT workers yet - not enabled until spinup succeeds)
+            self.pending_workers[host_id] = worker
 
         # Store persist flag for use in _on_spinup_complete
         worker._persist_on_spinup = persist
@@ -248,7 +251,8 @@ class FileHostWorkerManager(QObject):
             error: Error message from worker (empty string = success)
         """
         # Get worker from pending
-        worker = self.pending_workers.pop(host_id, None)
+        with self._pending_lock:
+            worker = self.pending_workers.pop(host_id, None)
 
         if not worker:
             log(
@@ -268,6 +272,9 @@ class FileHostWorkerManager(QObject):
                 level="warning",
                 category="file_hosts"
             )
+
+            # Worker already emits failed status before spinup_complete signal
+            # No need to emit here - would cause double status update to UI
 
             worker.wait()  # Clean up thread
             # Do NOT persist state - keep previous INI value on failure

@@ -8,6 +8,7 @@ upload to hosts, and emit progress signals to the GUI.
 import time
 import json
 import threading
+import traceback
 from pathlib import Path
 from typing import Optional, Dict, Any
 
@@ -29,6 +30,12 @@ class FileHostWorker(QThread):
 
     One worker per enabled host - handles uploads, tests, and storage checks.
     """
+
+    # Spinup retry delay sequence (seconds): 10s, 30s, 90s, 3min, 5min
+    SPINUP_RETRY_DELAYS = [10, 30, 90, 180, 300]
+
+    # Default maximum time (seconds) for spinup retry attempts
+    SPINUP_RETRY_MAX_TIME_DEFAULT = 600
 
     # Signals for communication with GUI
     upload_started = pyqtSignal(int, str)  # db_id, host_name
@@ -65,8 +72,8 @@ class FileHostWorker(QThread):
         host_config = self.config_manager.get_host(host_id)
         self.log_prefix = f"{host_config.name} Worker" if host_config else f"{host_id} Worker"
 
-        self.running = True
-        self.paused = False
+        self._stop_event = threading.Event()  # Thread-safe stop signal
+        self._pause_event = threading.Event()  # Thread-safe pause signal (set = paused)
 
         # Bandwidth tracking
         self.bandwidth_counter = AtomicCounter()
@@ -76,6 +83,7 @@ class FileHostWorker(QThread):
 
         # Load host credentials from settings
         self.host_credentials: Dict[str, str] = {}
+        self._credentials_lock = threading.Lock()  # Protects host_credentials access
         self._load_credentials()
 
         # Persistent session state (shared across all client instances)
@@ -121,7 +129,8 @@ class FileHostWorker(QThread):
             try:
                 credentials = decrypt_password(encrypted_creds)
                 if credentials:
-                    self.host_credentials[self.host_id] = credentials
+                    with self._credentials_lock:
+                        self.host_credentials[self.host_id] = credentials
                     self._log("Loaded credentials")
             except Exception as e:
                 self._log(f"Failed to decrypt credentials: {e}")
@@ -133,13 +142,14 @@ class FileHostWorker(QThread):
         Args:
             credentials: New credentials string (username:password or api_key)
         """
-        if credentials:
-            self.host_credentials[self.host_id] = credentials
-            self._log("Credentials updated from dialog", level="debug")
-        else:
-            # Empty credentials = remove
-            self.host_credentials.pop(self.host_id, None)
-            self._log("Credentials cleared", level="debug")
+        with self._credentials_lock:
+            if credentials:
+                self.host_credentials[self.host_id] = credentials
+                self._log("Credentials updated from dialog", level="debug")
+            else:
+                # Empty credentials = remove
+                self.host_credentials.pop(self.host_id, None)
+                self._log("Credentials cleared", level="debug")
 
     def _cleanup_upload_throttle_state(self, db_id: int, host_name: str):
         """Clean up throttling state for an upload to prevent memory leaks."""
@@ -157,7 +167,8 @@ class FileHostWorker(QThread):
         Returns:
             Configured FileHostClient instance with session reuse
         """
-        credentials = self.host_credentials.get(self.host_id)
+        with self._credentials_lock:
+            credentials = self.host_credentials.get(self.host_id)
 
         # Thread-safe read of session state
         with self._session_lock:
@@ -216,18 +227,35 @@ class FileHostWorker(QThread):
     def stop(self) -> None:
         """Stop the worker thread."""
         self._log("Stopping file host worker...", level="debug")
-        self.running = False
+        self._stop_event.set()
         self.wait()
 
     def pause(self) -> None:
         """Pause processing new uploads."""
-        self.paused = True
+        self._pause_event.set()
         self._log("File host worker paused", level="info")
 
     def resume(self) -> None:
         """Resume processing uploads."""
-        self.paused = False
+        self._pause_event.clear()
         self._log("File host worker resumed", level="info")
+
+    def _wait_with_countdown(self, delay: int, status_prefix: str = "retry_pending") -> bool:
+        """Wait with countdown, emitting status updates each second.
+
+        Args:
+            delay: Total seconds to wait
+            status_prefix: Status prefix for compound status (e.g., "retry_pending")
+
+        Returns:
+            True if completed normally, False if stopped early
+        """
+        for remaining in range(delay, 0, -1):
+            if self._stop_event.is_set():
+                return False
+            self.status_updated.emit(self.host_id, f"{status_prefix}:{remaining}")
+            time.sleep(1)
+        return True
 
     def _is_retryable_error(self, error: Exception, error_msg: str) -> bool:
         """
@@ -293,6 +321,94 @@ class FileHostWorker(QThread):
         self._log(f"Error is retryable (type: {type(error).__name__})", level="debug")
         return True
 
+    def _is_spinup_network_error(self, error: Optional[Exception], error_msg: str) -> bool:
+        """Determine if a spinup error is a network error that should trigger retry.
+
+        Network errors are transient and may succeed on retry (DNS, connection, timeout).
+        Authentication errors are permanent and should fail immediately.
+
+        Args:
+            error: The exception that occurred
+            error_msg: Error message string
+
+        Returns:
+            True if error is a network error (should retry), False if auth error (no retry)
+        """
+        error_lower = error_msg.lower()
+
+        # Authentication error patterns - DO NOT RETRY
+        auth_error_patterns = [
+            "invalid credentials",
+            "wrong password",
+            "unauthorized",
+            "invalid api key",
+            "authentication failed",
+            "invalid username",
+            "account not found",
+            "access denied",
+            "forbidden",
+        ]
+
+        for pattern in auth_error_patterns:
+            if pattern in error_lower:
+                self._log(f"Auth error detected (no retry): '{pattern}' in '{error_msg}'", level="debug")
+                return False
+
+        # Check for pycurl error codes (network errors)
+        # These are indicated in error messages like "pycurl error 7" or "(7)"
+        network_pycurl_codes = [6, 7, 28, 35, 52, 55, 56]  # DNS, connect, timeout, SSL, empty response, send/recv errors
+
+        for code in network_pycurl_codes:
+            if f"pycurl error {code}" in error_lower or f"({code})" in error_msg:
+                self._log(f"Network pycurl code {code} detected (retry allowed)", level="debug")
+                return True
+
+        # Network error string patterns - RETRY
+        network_error_patterns = [
+            "timeout",
+            "timed out",
+            "connection refused",
+            "dns",
+            "ssl",
+            "network",
+            "connection reset",
+            "connection failed",
+            "could not resolve",
+            "name resolution",
+            "socket",
+            "unreachable",
+        ]
+
+        for pattern in network_error_patterns:
+            if pattern in error_lower:
+                self._log(f"Network error detected (retry allowed): '{pattern}' in '{error_msg}'", level="debug")
+                return True
+
+        # Default: fail fast on unknown errors to avoid masking new auth error patterns
+        self._log(f"Unknown spinup error type, failing fast (no retry): {error_msg[:100]}", level="warning")
+        return False
+
+    def _get_spinup_retry_delay(self, retry_num: int) -> int:
+        """Get the delay in seconds for a spinup retry attempt.
+
+        Uses exponential backoff with predefined delays: [10, 30, 90, 180, 300].
+        For retry attempts beyond the sequence length, caps at 300 seconds.
+
+        Args:
+            retry_num: 1-indexed retry number (1 = first retry, 2 = second retry, etc.)
+
+        Returns:
+            Delay in seconds before the next retry attempt
+        """
+        # Convert to 0-indexed for array access
+        index = retry_num - 1
+
+        if index < len(self.SPINUP_RETRY_DELAYS):
+            return self.SPINUP_RETRY_DELAYS[index]
+        else:
+            # Cap at maximum delay (300 seconds / 5 minutes)
+            return self.SPINUP_RETRY_DELAYS[-1]
+
     def cancel_current_upload(self) -> None:
         """Cancel the current upload."""
         self._should_stop_current = True
@@ -310,64 +426,105 @@ class FileHostWorker(QThread):
         # Test credentials during spinup (power button paradigm)
         host_config = self.config_manager.get_host(self.host_id)
         if host_config and host_config.requires_auth:
-            credentials = self.host_credentials.get(self.host_id)
+            with self._credentials_lock:
+                credentials = self.host_credentials.get(self.host_id)
             if not credentials:
                 error = "Credentials required but not configured"
                 self._log(error, level="warning")
                 self.spinup_complete.emit(self.host_id, error)
-                self.running = False
+                self._stop_event.set()
                 return
 
             self._log("Testing credentials during spinup...", level="debug")
             self.status_updated.emit(self.host_id, "authenticating")
-            #log(f"Emitted status signal: {self.host_id} -> authenticating", level="debug", category="file_hosts")
+
+            # Load retry settings
+            spinup_retry_enabled = get_file_host_setting(self.host_id, "spinup_retry_enabled", "bool")
+            spinup_retry_max_time = get_file_host_setting(self.host_id, "spinup_retry_max_time", "int") or self.SPINUP_RETRY_MAX_TIME_DEFAULT
 
             spinup_success = False
             spinup_error = ""
+            last_exception = None
+            retry_num = 0
+            spinup_start_time = time.time()
 
-            try:
-                client = self._create_client(host_config)
-                cred_result = client.test_credentials()
-                if not cred_result.get('success'):
-                    spinup_error = cred_result.get('message', 'Credential validation failed')
-                    self._log(f"Credential test failed: {spinup_error}", level="warning")
-                else:
-                    # Save storage if available
-                    user_info = cred_result.get('user_info', {})
-                    if user_info:
-                        storage_total = user_info.get('storage_total')
-                        storage_left = user_info.get('storage_left')
-                        if storage_total is not None and storage_left is not None:
-                            try:
-                                total = int(storage_total)
-                                left = int(storage_left)
-                                self._save_storage_cache(total, left)
-                                self.storage_updated.emit(self.host_id, total, left)
-                                #self._log(f"Cached storage during spinup: {format_binary_size(left)}/{format_binary_size(total)}", level="debug")
-                            except (ValueError, TypeError) as e:
-                                self._log(f"Failed to parse storage: {e}", level="debug")
+            while not self._stop_event.is_set():
+                spinup_error = ""
+                last_exception = None
 
-                    self._log("Ready", level="info")
-                    spinup_success = True
-                    self.status_updated.emit(self.host_id, "idle")
-                    #log(f"Emitted status signal: {self.host_id} -> idle", level="debug", category="file_hosts")
+                try:
+                    client = self._create_client(host_config)
+                    cred_result = client.test_credentials()
 
-                    # Persist session from first login
-                    self._update_session_from_client(client)
+                    if not cred_result.get('success'):
+                        spinup_error = cred_result.get('message', 'Credential validation failed')
+                        self._log(f"Credential test failed: {spinup_error}", level="warning")
+                    else:
+                        # Success - save storage if available
+                        user_info = cred_result.get('user_info', {})
+                        if user_info:
+                            storage_total = user_info.get('storage_total')
+                            storage_left = user_info.get('storage_left')
+                            if storage_total is not None and storage_left is not None:
+                                try:
+                                    total = int(storage_total)
+                                    left = int(storage_left)
+                                    self._save_storage_cache(total, left)
+                                    self.storage_updated.emit(self.host_id, total, left)
+                                except (ValueError, TypeError) as e:
+                                    self._log(f"Failed to parse storage: {e}", level="debug")
 
-            except Exception as e:
-                import traceback
-                spinup_error = f"Credential test exception: {str(e)}"
-                self._log(f"{spinup_error}\n{traceback.format_exc()}", level="error")
+                        self._log("Ready", level="info")
+                        spinup_success = True
+                        self.status_updated.emit(self.host_id, "idle")
 
-            finally:
-                # ALWAYS emit spinup_complete signal - manager depends on this for cleanup
-                # Emit success (empty error) or failure (with error message)
-                self.spinup_complete.emit(self.host_id, "" if spinup_success else spinup_error)
+                        # Persist session from first login
+                        self._update_session_from_client(client)
+                        break
+
+                except Exception as e:
+                    spinup_error = str(e)
+                    last_exception = e
+                    self._log(f"Credential test exception: {spinup_error}\n{traceback.format_exc()}", level="error")
+
+                # Handle spinup error (from either credential failure or exception)
+                if spinup_error:
+                    # Check if this is an auth error (no retry) vs network error (retry)
+                    if not spinup_retry_enabled or not self._is_spinup_network_error(last_exception, spinup_error):
+                        # Auth error or retry disabled - fail immediately
+                        self._log(f"Authentication error, failing immediately: {spinup_error}", level="warning")
+                        self.status_updated.emit(self.host_id, "failed:Authentication failed")
+                        break
+
+                    # Network error - check if we should retry
+                    retry_num += 1
+                    elapsed_time = time.time() - spinup_start_time
+                    if elapsed_time >= spinup_retry_max_time:
+                        self._log(f"Max retry time ({spinup_retry_max_time}s) exceeded", level="warning")
+                        self.status_updated.emit(self.host_id, "failed:Max retries exhausted")
+                        spinup_error = "Max retries exhausted"
+                        break
+
+                    # Calculate delay and wait with countdown
+                    delay = self._get_spinup_retry_delay(retry_num)
+                    self._log(f"Retry {retry_num}: waiting {delay}s...", level="info")
+
+                    # Wait with countdown - returns False if stopped early
+                    if not self._wait_with_countdown(delay, "retry_pending"):
+                        spinup_error = "Worker stopped during retry"
+                        break
+
+                    # After delay, retry authentication
+                    self.status_updated.emit(self.host_id, "authenticating")
+                    continue
+
+            # ALWAYS emit spinup_complete signal - manager depends on this for cleanup
+            # Emit success (empty error) or failure (with error message)
+            self.spinup_complete.emit(self.host_id, "" if spinup_success else spinup_error)
 
             # If spinup failed, stop worker thread
             if not spinup_success:
-                self.running = False
+                self._stop_event.set()
                 return
         else:
             # No auth required - immediately signal idle
@@ -375,9 +532,9 @@ class FileHostWorker(QThread):
             log(f"Emitted status signal: {self.host_id} -> idle", level="debug", category="file_hosts")
             self.spinup_complete.emit(self.host_id, "")
 
-        while self.running:
+        while not self._stop_event.is_set():
             try:
-                if self.paused:
+                if self._pause_event.is_set():
                     time.sleep(0.5)
                     continue
 
@@ -389,7 +546,8 @@ class FileHostWorker(QThread):
 
                 if test_credentials:
                     # Update credentials and run test in worker thread
-                    self.host_credentials[self.host_id] = test_credentials
+                    with self._credentials_lock:
+                        self.host_credentials[self.host_id] = test_credentials
                     self._log("Processing test request in worker thread", level="debug")
                     self.test_connection()
                     # Continue loop to check for more tests or uploads
@@ -485,7 +643,6 @@ class FileHostWorker(QThread):
 
             except Exception as e:
                 self._log(f"Error in file host worker loop: {e}", level="error")
-                import traceback
                 traceback.print_exc()
                 time.sleep(1.0)
 
@@ -598,14 +755,13 @@ class FileHostWorker(QThread):
                     else:
                         self._emit_bandwidth()
                 except Exception as e:
-                    import traceback
                     self._log(f"Progress callback error: {e}\n{traceback.format_exc()}", level="error")
                     self._cleanup_upload_throttle_state(db_id, host_name)
                     # Continue upload - don't abort on display errors
 
             def should_stop():
                 """Check if upload should be cancelled."""
-                return self._should_stop_current or not self.running
+                return self._should_stop_current or self._stop_event.is_set()
 
             # Reset upload timing just before actual transfer (after ZIP creation)
             upload_start_time = time.time()
@@ -659,16 +815,16 @@ class FileHostWorker(QThread):
                 self._log(
                     f"Successfully uploaded {gallery_name}: {download_url}",
                     level="info")
-                
+
                 # Log raw server response for debugging (with linebreaks as \n text)
                 raw_resp = result.get('raw_response', {})
                 if raw_resp:
                     resp_str = json.dumps(raw_resp, ensure_ascii=False).replace('\n', '\\n')
                     self._log(f"Server response: {resp_str}", level="debug")
-                    
+
                 # Update session after successful upload (in case tokens refreshed)
                 self._update_session_from_client(client)
-                
+
             else:
                 raise Exception(result.get('error', 'Upload failed'))
 

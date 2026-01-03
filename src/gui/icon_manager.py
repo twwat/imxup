@@ -68,6 +68,7 @@ class IconManager:
         'toggle_theme':         ['toggle_theme-light.png',      'toggle_theme-dark.png'],
         'log_viewer':           ['log_viewer-light.png',        'log_viewer-dark.png'],
         'radio_check':          ['radio_check-light.png',       'radio_check-dark.png'],
+        'check':                ['check-light.png',             'check-dark.png'],
         'checkbox_check':       ['checkbox_check-light.png',    'checkbox_check-dark.png'],
         'main_window':          ['imxup-main-icon.png', 'imxup-main-icon.png'],
         'app_icon':             'imxup.ico',

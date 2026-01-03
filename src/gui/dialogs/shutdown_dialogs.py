@@ -6,7 +6,7 @@ a shutdown progress dialog with force quit option.
 """
 
 from threading import Event
-from typing import List, Dict, Optional, TYPE_CHECKING
+from typing import List, Dict, Optional, Tuple, TYPE_CHECKING
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QScrollArea, QWidget, QFrame, QApplication, QSystemTrayIcon
@@ -14,6 +14,7 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal, pyqtSlot, QThread, QMetaObject
 from PyQt6.QtGui import QFont
 
+from src.gui.icon_manager import get_icon_manager
 from src.storage.queue_manager import GalleryQueueItem
 from src.utils.logger import log
 
@@ -72,11 +73,23 @@ class ExitConfirmationDialog(QDialog):
         self.setMinimumSize(450, 300)
         self.setMaximumSize(600, 500)
 
+    def _is_dark_theme(self) -> bool:
+        """Check if current theme is dark based on window background luminance."""
+        bg = self.palette().color(self.palette().ColorRole.Window)
+        luminance = (0.299 * bg.red() + 0.587 * bg.green() + 0.114 * bg.blue()) / 255
+        return luminance < 0.5
+
     def _create_ui(self):
         """Create and arrange UI components."""
         layout = QVBoxLayout(self)
         layout.setSpacing(12)
         layout.setContentsMargins(20, 20, 20, 20)
+
+        # Detect theme for color choices
+        is_dark = self._is_dark_theme()
+
+        # Get theme-aware colors from palette
+        muted_color = self.palette().color(self.palette().ColorRole.PlaceholderText).name()
 
         # Warning header
         header_layout = QHBoxLayout()
@@ -112,36 +125,41 @@ class ExitConfirmationDialog(QDialog):
         details_layout.setContentsMargins(10, 10, 10, 10)
         details_layout.setSpacing(8)
 
+        # Theme-aware colors for sections
+        uploading_color = "#f39c12" if is_dark else "#e67e22"  # Orange
+        file_host_color = "#bb86fc" if is_dark else "#9b59b6"  # Purple
+        queued_color = "#64b5f6" if is_dark else "#3498db"  # Blue
+
         # Uploading galleries section
         if self.uploading_galleries:
             uploading_header = QLabel(
                 f"Currently Uploading ({len(self.uploading_galleries)}):"
             )
-            uploading_header.setStyleSheet("font-weight: bold; color: #e67e22;")
+            uploading_header.setStyleSheet(f"font-weight: bold; color: {uploading_color};")
             details_layout.addWidget(uploading_header)
 
             for gallery in self.uploading_galleries[:5]:  # Show max 5
                 name = gallery.name or gallery.path.split('/')[-1].split('\\')[-1]
                 gallery_label = QLabel(f"  - {name}")
-                gallery_label.setStyleSheet("color: #666; margin-left: 10px;")
+                gallery_label.setStyleSheet(f"color: {muted_color}; margin-left: 10px;")
                 details_layout.addWidget(gallery_label)
 
             if len(self.uploading_galleries) > 5:
                 more_label = QLabel(
                     f"  ... and {len(self.uploading_galleries) - 5} more"
                 )
-                more_label.setStyleSheet("color: #888; font-style: italic;")
+                more_label.setStyleSheet(f"color: {muted_color}; font-style: italic;")
                 details_layout.addWidget(more_label)
 
         # File host uploads section
         if self.file_host_uploads:
             host_header = QLabel("File Host Uploads:")
-            host_header.setStyleSheet("font-weight: bold; color: #9b59b6;")
+            host_header.setStyleSheet(f"font-weight: bold; color: {file_host_color};")
             details_layout.addWidget(host_header)
 
             for host_id, count in self.file_host_uploads.items():
                 host_label = QLabel(f"  - {host_id}: {count} pending")
-                host_label.setStyleSheet("color: #666;")
+                host_label.setStyleSheet(f"color: {muted_color};")
                 details_layout.addWidget(host_label)
 
         # Queued galleries section
@@ -149,23 +167,32 @@ class ExitConfirmationDialog(QDialog):
             queued_header = QLabel(
                 f"Queued for Upload ({len(self.queued_galleries)}):"
             )
-            queued_header.setStyleSheet("font-weight: bold; color: #3498db;")
+            queued_header.setStyleSheet(f"font-weight: bold; color: {queued_color};")
             details_layout.addWidget(queued_header)
 
             queued_summary = QLabel(
                 f"  {len(self.queued_galleries)} galleries waiting to start"
             )
-            queued_summary.setStyleSheet("color: #666;")
+            queued_summary.setStyleSheet(f"color: {muted_color};")
             details_layout.addWidget(queued_summary)
 
         details_layout.addStretch()
         scroll_area.setWidget(details_widget)
         layout.addWidget(scroll_area)
 
-        # Warning message
+        # Warning message with theme-aware colors
         warning_frame = QFrame()
+        if is_dark:
+            bg_color = "#3d3d00"  # Dark yellow-ish
+            border_color = "#806600"
+            text_color = "#ffd700"
+        else:
+            bg_color = "#fff3cd"
+            border_color = "#ffc107"
+            text_color = "#856404"
+
         warning_frame.setStyleSheet(
-            "background-color: #fff3cd; border: 1px solid #ffc107; "
+            f"background-color: {bg_color}; border: 1px solid {border_color}; "
             "border-radius: 4px; padding: 8px;"
         )
         warning_layout = QVBoxLayout(warning_frame)
@@ -174,7 +201,7 @@ class ExitConfirmationDialog(QDialog):
             "Uploads will automatically resume when you restart the application."
         )
         warning_label.setWordWrap(True)
-        warning_label.setStyleSheet("color: #856404;")
+        warning_label.setStyleSheet(f"color: {text_color};")
         warning_layout.addWidget(warning_label)
         layout.addWidget(warning_frame)
 
@@ -283,7 +310,8 @@ class ShutdownDialog(QDialog):
         super().__init__(parent)
         self._current_step = -1
         self._completed_steps = set()
-        self._step_labels: Dict[int, QLabel] = {}
+        self._step_labels: Dict[int, Tuple[QLabel, QLabel]] = {}
+        self._icon_mgr = get_icon_manager()
 
         self._setup_dialog()
         self._create_ui()
@@ -302,11 +330,23 @@ class ShutdownDialog(QDialog):
             Qt.WindowType.WindowTitleHint
         )
 
+    def _is_dark_theme(self) -> bool:
+        """Check if current theme is dark based on window background luminance."""
+        bg = self.palette().color(self.palette().ColorRole.Window)
+        luminance = (0.299 * bg.red() + 0.587 * bg.green() + 0.114 * bg.blue()) / 255
+        return luminance < 0.5
+
     def _create_ui(self):
         """Create and arrange UI components."""
         layout = QVBoxLayout(self)
         layout.setSpacing(15)
         layout.setContentsMargins(25, 25, 25, 25)
+
+        # Get theme-aware colors from palette
+        link_color = self.palette().color(self.palette().ColorRole.Link).name()
+        muted_color = self.palette().color(self.palette().ColorRole.PlaceholderText).name()
+        bg_color = self.palette().color(self.palette().ColorRole.AlternateBase).name()
+        border_color = self.palette().color(self.palette().ColorRole.Mid).name()
 
         # Header with spinner
         header_layout = QHBoxLayout()
@@ -333,17 +373,15 @@ class ShutdownDialog(QDialog):
         header_layout.addStretch()
         layout.addLayout(header_layout)
 
-        # Current step label
+        # Current step label with theme-aware color
         self._current_step_label = QLabel("Preparing...")
-        self._current_step_label.setStyleSheet(
-            "font-size: 10pt; color: #3498db;"
-        )
+        self._current_step_label.setStyleSheet(f"font-size: 10pt; color: {link_color};")
         layout.addWidget(self._current_step_label)
 
-        # Steps list
+        # Steps list with theme-aware styling
         steps_frame = QFrame()
         steps_frame.setStyleSheet(
-            "background-color: #f8f9fa; border: 1px solid #dee2e6; "
+            f"background-color: {bg_color}; border: 1px solid {border_color}; "
             "border-radius: 4px;"
         )
         steps_layout = QVBoxLayout(steps_frame)
@@ -351,10 +389,26 @@ class ShutdownDialog(QDialog):
         steps_layout.setSpacing(6)
 
         for step_id, description in self.STEP_DESCRIPTIONS.items():
-            step_label = QLabel(f"○ {description}")
-            step_label.setStyleSheet("color: #6c757d;")
-            self._step_labels[step_id] = step_label
-            steps_layout.addWidget(step_label)
+            step_layout = QHBoxLayout()
+            step_layout.setContentsMargins(0, 0, 0, 0)
+            step_layout.setSpacing(6)
+
+            # Icon label (empty circle initially)
+            icon_label = QLabel("○")
+            icon_label.setFixedWidth(16)
+            icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            icon_label.setStyleSheet(f"color: {muted_color};")
+            step_layout.addWidget(icon_label)
+
+            # Text label
+            text_label = QLabel(description)
+            text_label.setStyleSheet(f"color: {muted_color};")
+            step_layout.addWidget(text_label)
+            step_layout.addStretch()
+
+            # Store both labels as tuple
+            self._step_labels[step_id] = (icon_label, text_label)
+            steps_layout.addLayout(step_layout)
 
         layout.addWidget(steps_frame)
 
@@ -407,10 +461,12 @@ class ShutdownDialog(QDialog):
 
         # Update step label to show in-progress
         if step_id in self._step_labels:
-            self._step_labels[step_id].setText(f"● {desc}")
-            self._step_labels[step_id].setStyleSheet(
-                "color: #007bff; font-weight: bold;"
-            )
+            icon_label, text_label = self._step_labels[step_id]
+            icon_label.setText("●")  # Filled circle for in-progress
+            link_color = self.palette().color(self.palette().ColorRole.Link).name()
+            icon_label.setStyleSheet(f"color: {link_color}; font-weight: bold;")
+            text_label.setText(desc)
+            text_label.setStyleSheet(f"color: {link_color}; font-weight: bold;")
 
     @pyqtSlot(int)
     def mark_step_complete(self, step_id: int):
@@ -422,11 +478,25 @@ class ShutdownDialog(QDialog):
         self._completed_steps.add(step_id)
 
         if step_id in self._step_labels:
+            icon_label, text_label = self._step_labels[step_id]
             desc = self.STEP_DESCRIPTIONS.get(step_id, "Done")
-            self._step_labels[step_id].setText(f"✓ {desc}")
-            self._step_labels[step_id].setStyleSheet(
-                "color: #28a745;"
-            )
+
+            # Use check icon from icon manager
+            if self._icon_mgr:
+                check_icon = self._icon_mgr.get_icon('check')
+                if not check_icon.isNull():
+                    icon_label.setPixmap(check_icon.pixmap(14, 14))
+                    icon_label.setText("")  # Clear text since we're using pixmap
+                else:
+                    icon_label.setText("✓")  # Fallback to unicode
+            else:
+                icon_label.setText("✓")  # Fallback to unicode
+
+            # Green color for completed - use a theme-appropriate green
+            success_color = "#4caf50" if self._is_dark_theme() else "#27ae60"
+            icon_label.setStyleSheet(f"color: {success_color};")
+            text_label.setText(desc)
+            text_label.setStyleSheet(f"color: {success_color};")
 
     def closeEvent(self, event):
         """Prevent dialog from being closed."""

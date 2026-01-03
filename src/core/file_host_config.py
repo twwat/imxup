@@ -232,7 +232,9 @@ _HARDCODED_DEFAULTS = {
     "max_retries": 3,
     "inactivity_timeout": 300,
     "upload_timeout": None,
-    "bbcode_format": ""
+    "bbcode_format": "",
+    "spinup_retry_enabled": True,
+    "spinup_retry_max_time": 1800,  # 30 minutes in seconds
 }
 
 
@@ -325,7 +327,7 @@ def save_file_host_setting(host_id: str, key: str, value: Any) -> None:
     # Validate key (whitelist approach)
     valid_keys = {"enabled", "trigger", "max_connections", "max_file_size_mb",
                   "auto_retry", "max_retries", "inactivity_timeout", "upload_timeout",
-                  "bbcode_format"}
+                  "bbcode_format", "spinup_retry_enabled", "spinup_retry_max_time"}
     if key not in valid_keys:
         raise ValueError(f"Invalid setting key: {key}")
 
@@ -361,6 +363,14 @@ def save_file_host_setting(host_id: str, key: str, value: Any) -> None:
     elif key == "bbcode_format":
         if value is not None and not isinstance(value, str):
             raise ValueError(f"bbcode_format must be str or None, got {type(value).__name__}")
+    elif key == "spinup_retry_enabled":
+        if not isinstance(value, bool):
+            raise ValueError(f"spinup_retry_enabled must be bool, got {type(value).__name__}")
+    elif key == "spinup_retry_max_time":
+        if isinstance(value, bool):
+            raise ValueError(f"{key} must be int, not bool")
+        if not isinstance(value, int) or value < 60 or value > 7200:
+            raise ValueError(f"{key} must be int between 60-7200, got {value}")
 
     # Thread-safe read-modify-write operation
     with _ini_file_lock:
