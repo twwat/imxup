@@ -116,7 +116,7 @@ class AdaptiveQuickSettingsPanel(QWidget):
             'file_hosts': ' File Hosts',
             'hooks': ' App Hooks',
             'log_viewer': ' View Logs',
-            'help': ' Help',
+            'help': ' Help Docs',
             'theme': ''  # Theme button never shows text in 2-row/3-row/4-row modes
         }
 

@@ -3847,6 +3847,17 @@ class ImxUploadGUI(QMainWindow):
                         clipboard.setText(download_link)
                         log(f"Copied {host_name} link to clipboard", level="info", category="file_hosts")
             else:
+                # Validate gallery folder exists before queuing
+                if not os.path.isdir(gallery_path):
+                    log(f"Cannot upload to {host_name}: gallery folder not found: {gallery_path}", level="warning", category="file_hosts")
+                    new_path = self._handle_missing_gallery_folder(gallery_path, host_name)
+                    if new_path:
+                        # User relocated the gallery, retry with new path
+                        gallery_path = new_path
+                    else:
+                        # User cancelled or removed gallery
+                        return
+
                 # Queue manual upload
                 log(f"Queueing manual upload to {host_name} for {os.path.basename(gallery_path)}", level="info", category="file_hosts")
 
@@ -3880,6 +3891,149 @@ class ImxUploadGUI(QMainWindow):
         except Exception as e:
             log(f"Error handling file host icon click: {e}", level="error", category="file_hosts")
             QMessageBox.critical(self, "Error", f"Failed to process click: {str(e)}")
+
+    def _handle_missing_gallery_folder(self, gallery_path: str, host_name: str) -> Optional[str]:
+        """Handle missing gallery folder - offer to relocate or remove.
+
+        Args:
+            gallery_path: Path to the missing gallery
+            host_name: Name of the file host (for context in messages)
+
+        Returns:
+            New path if user relocated the gallery, None if cancelled/removed
+        """
+        from PyQt6.QtWidgets import QMessageBox, QFileDialog
+
+        gallery_name = os.path.basename(gallery_path)
+        old_parent = os.path.dirname(gallery_path)
+
+        # Create dialog with options
+        msg = QMessageBox(self)
+        msg.setIcon(QMessageBox.Icon.Warning)
+        msg.setWindowTitle("Gallery Folder Not Found")
+        msg.setText(f"The gallery folder no longer exists:\n{gallery_path}")
+        msg.setInformativeText("Would you like to locate it?")
+
+        browse_btn = msg.addButton("Browse...", QMessageBox.ButtonRole.ActionRole)
+        remove_btn = msg.addButton("Remove from Queue", QMessageBox.ButtonRole.DestructiveRole)
+        msg.addButton(QMessageBox.StandardButton.Cancel)
+
+        msg.exec()
+        clicked = msg.clickedButton()
+
+        if clicked == browse_btn:
+            # Let user browse for new location
+            new_path = QFileDialog.getExistingDirectory(
+                self,
+                f"Locate Gallery: {gallery_name}",
+                os.path.dirname(old_parent) if os.path.exists(os.path.dirname(old_parent)) else "",
+                QFileDialog.Option.ShowDirsOnly
+            )
+
+            if new_path and os.path.isdir(new_path):
+                # Update database
+                success = self.queue_manager.store.update_gallery_path(gallery_path, new_path)
+
+                if success:
+                    log(f"User relocated gallery: {gallery_path} -> {new_path}", level="info", category="file_hosts")
+
+                    # Refresh the table to show updated path
+                    self._refresh_gallery_table()
+
+                    # Check for sibling galleries that might also need updating
+                    self._check_sibling_galleries(old_parent, os.path.dirname(new_path), gallery_path)
+
+                    return new_path
+                else:
+                    QMessageBox.warning(self, "Error", "Failed to update gallery path in database.")
+                    return None
+
+        elif clicked == remove_btn:
+            # Remove gallery from queue
+            try:
+                self.queue_manager.remove_items([gallery_path])
+                self._refresh_gallery_table()
+                log(f"User removed missing gallery from queue: {gallery_path}", level="info", category="file_hosts")
+            except Exception as e:
+                log(f"Error removing gallery: {e}", level="error", category="file_hosts")
+
+        return None
+
+    def _check_sibling_galleries(self, old_parent: str, new_parent: str, already_relocated: str):
+        """Check if other galleries from the same parent folder need updating.
+
+        Args:
+            old_parent: Original parent folder
+            new_parent: New parent folder where gallery was relocated
+            already_relocated: Path that was just relocated (skip this one)
+        """
+        from PyQt6.QtWidgets import QMessageBox, QCheckBox, QVBoxLayout, QDialog, QDialogButtonBox, QLabel
+
+        # Get all galleries that were in the same parent folder
+        try:
+            siblings = self.queue_manager.store.get_galleries_by_parent_folder(old_parent)
+        except Exception as e:
+            log(f"Error checking sibling galleries: {e}", level="error", category="gui")
+            return
+
+        # Filter to only those that are missing but exist in new location
+        relocatable = []
+        for gal in siblings:
+            if gal['path'] == already_relocated:
+                continue
+            if os.path.isdir(gal['path']):
+                continue  # Still exists, no need to relocate
+
+            # Check if it exists under the new parent
+            gallery_name = os.path.basename(gal['path'])
+            potential_new_path = os.path.join(new_parent, gallery_name)
+            if os.path.isdir(potential_new_path):
+                relocatable.append({
+                    'old_path': gal['path'],
+                    'new_path': potential_new_path,
+                    'name': gal['name'] or gallery_name
+                })
+
+        if not relocatable:
+            return
+
+        # Show dialog to update siblings
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Update Related Galleries")
+        layout = QVBoxLayout(dialog)
+
+        layout.addWidget(QLabel(
+            f"Found {len(relocatable)} other galleries from the same folder\n"
+            f"that also exist in the new location.\n\n"
+            f"Select which ones to update:"
+        ))
+
+        checkboxes = []
+        for item in relocatable:
+            cb = QCheckBox(f"{item['name']}")
+            cb.setChecked(True)
+            cb.setProperty("paths", (item['old_path'], item['new_path']))
+            checkboxes.append(cb)
+            layout.addWidget(cb)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            updated = 0
+            for cb in checkboxes:
+                if cb.isChecked():
+                    old_path, new_path = cb.property("paths")
+                    if self.queue_manager.store.update_gallery_path(old_path, new_path):
+                        updated += 1
+
+            if updated > 0:
+                log(f"Batch relocated {updated} sibling galleries", level="info", category="file_hosts")
+                self._refresh_gallery_table()
 
     def _on_file_hosts_manage_clicked(self, gallery_path: str):
         """Handle 'Manage' button click - show File Host Details Dialog"""

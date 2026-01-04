@@ -15,6 +15,7 @@ from PyQt6.QtCore import Qt, QTimer, pyqtSignal, pyqtSlot, QThread, QMetaObject
 from PyQt6.QtGui import QFont
 
 from src.gui.icon_manager import get_icon_manager
+from src.gui.theme_manager import is_dark_mode
 from src.storage.queue_manager import GalleryQueueItem
 from src.utils.logger import log
 
@@ -72,12 +73,8 @@ class ExitConfirmationDialog(QDialog):
         self.setModal(True)
         self.setMinimumSize(450, 300)
         self.setMaximumSize(600, 500)
-
-    def _is_dark_theme(self) -> bool:
-        """Check if current theme is dark based on window background luminance."""
-        bg = self.palette().color(self.palette().ColorRole.Window)
-        luminance = (0.299 * bg.red() + 0.587 * bg.green() + 0.114 * bg.blue()) / 255
-        return luminance < 0.5
+        self.setAutoFillBackground(True)
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
 
     def _create_ui(self):
         """Create and arrange UI components."""
@@ -86,10 +83,15 @@ class ExitConfirmationDialog(QDialog):
         layout.setContentsMargins(20, 20, 20, 20)
 
         # Detect theme for color choices
-        is_dark = self._is_dark_theme()
+        is_dark = is_dark_mode()
 
         # Get theme-aware colors from palette
         muted_color = self.palette().color(self.palette().ColorRole.PlaceholderText).name()
+        window_bg = self.palette().color(self.palette().ColorRole.Window).name()
+        text_color = self.palette().color(self.palette().ColorRole.WindowText).name()
+
+        # Apply theme-aware background to dialog
+        self.setStyleSheet(f"QDialog {{ background-color: {window_bg}; color: {text_color}; }}")
 
         # Warning header
         header_layout = QHBoxLayout()
@@ -323,18 +325,14 @@ class ShutdownDialog(QDialog):
         self.setWindowTitle("Shutting Down...")
         self.setModal(True)
         self.setFixedSize(350, 280)
+        self.setAutoFillBackground(True)
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         # Remove all window buttons
         self.setWindowFlags(
             Qt.WindowType.Dialog |
             Qt.WindowType.CustomizeWindowHint |
             Qt.WindowType.WindowTitleHint
         )
-
-    def _is_dark_theme(self) -> bool:
-        """Check if current theme is dark based on window background luminance."""
-        bg = self.palette().color(self.palette().ColorRole.Window)
-        luminance = (0.299 * bg.red() + 0.587 * bg.green() + 0.114 * bg.blue()) / 255
-        return luminance < 0.5
 
     def _create_ui(self):
         """Create and arrange UI components."""
@@ -347,6 +345,11 @@ class ShutdownDialog(QDialog):
         muted_color = self.palette().color(self.palette().ColorRole.PlaceholderText).name()
         bg_color = self.palette().color(self.palette().ColorRole.AlternateBase).name()
         border_color = self.palette().color(self.palette().ColorRole.Mid).name()
+        window_bg = self.palette().color(self.palette().ColorRole.Window).name()
+        text_color = self.palette().color(self.palette().ColorRole.WindowText).name()
+
+        # Apply theme-aware background to dialog
+        self.setStyleSheet(f"QDialog {{ background-color: {window_bg}; color: {text_color}; }}")
 
         # Header with spinner
         header_layout = QHBoxLayout()
@@ -493,7 +496,7 @@ class ShutdownDialog(QDialog):
                 icon_label.setText("✓")  # Fallback to unicode
 
             # Green color for completed - use a theme-appropriate green
-            success_color = "#4caf50" if self._is_dark_theme() else "#27ae60"
+            success_color = "#4caf50" if is_dark_mode() else "#27ae60"
             icon_label.setStyleSheet(f"color: {success_color};")
             text_label.setText(desc)
             text_label.setStyleSheet(f"color: {success_color};")

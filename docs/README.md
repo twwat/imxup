@@ -1,165 +1,144 @@
-# ImxUp Documentation Index
+# IMXuploader Documentation Index
 
-**Version:** 0.6.00
-**Last Updated:** 2025-11-15
+**Version:** 0.6.16
+**Last Updated:** 2026-01-03
 
-Welcome to the ImxUp documentation! This index will help you find the right documentation for your needs.
+Welcome to the IMXuploader documentation! This index will help you find the right documentation for your needs.
 
 ---
 
-## 🚀 Quick Navigation
+## Quick Navigation
 
-**New to ImxUp?**
-- Start with [Quick Start Guide](user/quick-start.md)
+**New to IMXuploader?**
+- Start with [Quick Start Guide](user/getting-started/quick-start.md)
 - Or read the [Main README](../README.md) in the project root
 
 **Looking for specific features?**
-- [Multi-Host Upload Guide](user/multi-host-upload.md) - Upload to multiple file hosts
-- [Archive Management](user/archive-management.md) - Working with ZIP archives
-- [Troubleshooting](user/troubleshooting.md) - Common issues and solutions
+- [Multi-Host Upload Guide](user/guides/multi-host-upload.md) - Upload to multiple file hosts
+- [Archive Management](user/guides/archive-management.md) - Working with ZIP archives
+- [Troubleshooting](user/troubleshooting/troubleshooting.md) - Common issues and solutions
 
 **Developer?**
-- Check out [Developer Documentation](dev/README.md)
-- Start with [Architecture Overview](dev/ARCHITECTURE.md)
+- Coming Soon: Developer Documentation
 
 ---
 
-## 📚 Documentation Categories
+## Documentation Categories
 
-### 👤 User Documentation
-**For end users of the ImxUp application**
+### User Documentation
+**For end users of the IMXuploader application**
 
-Documentation for using the GUI, uploading galleries, managing archives, and configuring settings.
+Complete guides for using the GUI, uploading galleries, managing archives, and configuring settings.
 
-📁 **Location:** `/docs/user/`
+**Location:** `/docs/user/`
+
+**Getting Started:**
+- [User Documentation Index](user/index.md) - Overview of all user guides
+- [Quick Start](user/getting-started/quick-start.md) - Get started in 5 minutes
+- [Setup Guide](user/getting-started/setup.md) - Installation and configuration
 
 **Core Guides:**
-- [Quick Start](user/quick-start.md) - Get started in 5 minutes
-- [GUI Guide](user/gui-guide.md) - Complete GUI documentation
-- [Multi-Host Upload](user/multi-host-upload.md) - Upload to multiple file hosts ⭐ NEW
-- [BBCode Templates](user/bbcode-templates.md) - Custom BBCode templates
-- [Keyboard Shortcuts](user/keyboard-shortcuts.md) - All keyboard shortcuts
-- [Troubleshooting](user/troubleshooting.md) - Common issues and solutions
-- [Help Content](user/HELP_CONTENT.md) - In-app help dialog content
-- [GUI Improvements](user/gui-improvements.md) - GUI feature changelog
-- [Testing Quick Start](user/TESTING_QUICKSTART.md) - Quick testing setup
-- [Testing Status](user/TESTING_STATUS.md) - Current testing status
+- [GUI Guide](user/guides/gui-guide.md) - Complete GUI documentation
+- [Multi-Host Upload](user/guides/multi-host-upload.md) - Upload to multiple file hosts
+- [BBCode Templates](user/guides/bbcode-templates.md) - Custom BBCode templates and placeholders
+- [Archive Management](user/guides/archive-management.md) - Working with ZIP and other archives
 
-📖 **[Browse All User Docs →](user/README.md)**
+**Reference:**
+- [Features List](user/reference/FEATURES.md) - Complete feature inventory
+- [Keyboard Shortcuts](user/getting-started/keyboard-shortcuts.md) - All keyboard shortcuts
+- [Quick Reference](user/reference/quick-reference.md) - Quick lookup for common tasks
+- [External Apps Parameters](user/reference/external-apps-parameters.md) - Parameters for external applications
 
----
+**Troubleshooting:**
+- [Troubleshooting Guide](user/troubleshooting/troubleshooting.md) - Common issues and solutions
+- [FAQ](user/troubleshooting/faq.md) - Frequently asked questions
+- [Silent Failures Guide](user/troubleshooting/silent-failures.md) - Diagnosing silent failures
+- [WSL2 Drag-Drop Fix](user/troubleshooting/wsl2-drag-drop-fix.md) - WSL2 integration issues
+- [Log Diagnosis Quick Reference](user/troubleshooting/LOG_DIAGNOSIS_QUICK_REF.md) - Using logs for diagnosis
+- [Log Filtering Quick Diagnosis](user/troubleshooting/LOG_FILTERING_QUICK_DIAGNOSIS.md) - Filtering logs for issues
 
-### 🛠️ Developer Documentation
-**For contributors and developers extending ImxUp**
-
-Technical documentation covering architecture, APIs, development workflows, and contribution guidelines.
-
-📁 **Location:** `/docs/dev/`
-
-**Core References:**
-- [Architecture](dev/architecture.md) - System design and components ⭐ UPDATED
-- [API Reference](dev/api-reference.md) - Complete file host API documentation ⭐ NEW
-- [Architecture Analysis](dev/architecture-analysis.md) - Detailed architecture analysis
-- [Integration Guide](dev/integration-guide.md) - Integration documentation
-- [Testing Guide](dev/testing-guide.md) - Running and writing tests ⭐ NEW
-- [Security Audit](dev/security-audit.md) - Security audit report
-- [Security Fixes](dev/security-fixes.md) - Implemented security fixes
-- [Database Reference](dev/database-reference.md) - Database quick reference
-- [Database Maintenance](dev/database-maintenance.md) - Database maintenance guide
-- [Module Dependencies](dev/module-dependencies.md) - Module dependency map
-- [Implementation Roadmap](dev/implementation-roadmap.md) - Implementation roadmap
-- [Coverage Roadmap](dev/COVERAGE_ROADMAP.md) - Test coverage roadmap
-- [PyCURL PyInstaller Fix](dev/pycurl-pyinstaller-fix.md) - PyCURL bundling for PyInstaller
-- [PyCURL Bundling](dev/pycurl-bundling.md) - PyCURL bundling verification
-- [PyCURL Windows](dev/pycurl-windows.md) - PyCURL Windows structure
-- [Cross-Platform Fixes](dev/cross-platform-fixes.md) - Cross-platform compatibility
-- [Python 3.14 Upgrade](dev/python-314-upgrade.md) - Python 3.14 upgrade guide
-- [Performance Reference](dev/performance_quick_reference.md) - Performance quick reference
-- [Bottleneck Analysis](dev/BOTTLENECK_ANALYSIS.md) - Bottleneck analysis
-- [GUI Blocking Investigation](dev/GUI_BLOCKING_INVESTIGATION.md) - GUI blocking investigation
-- [Initialization System](dev/initialization-system.md) - Initialization system design
-- [Emergency Startup Optimization](dev/EMERGENCY_STARTUP_OPTIMIZATION_ARCHITECTURE.md) - Startup optimization
-- [Memory System](dev/memory-system/) - Memory system documentation
-
-📖 **[Browse All Developer Docs →](dev/README.md)**
+**Other:**
+- [Help Content](user/reference/HELP_CONTENT.md) - In-app help dialog content
 
 ---
 
-### 📦 Historical Documentation
+### Developer Documentation
+**For contributors and developers extending IMXuploader**
+
+**Location:** `/docs/dev/`
+
+**Status:** Coming Soon
+
+Developer documentation is being reorganized. In the interim, refer to:
+- [CLAUDE.md](../CLAUDE.md) - Project context and architecture overview
+- [Testing Quick Start](dev/testing/TESTING_QUICKSTART.md) - Getting started with testing
+- [Testing Status](dev/testing/TESTING_STATUS.md) - Current testing status and coverage
+- [Manual Testing State Isolation](dev/testing/MANUAL_TESTING_STATE_ISOLATION.md) - Test isolation guide
+- [Coverage Quickstart](dev/testing/coverage-quickstart.md) - Coverage measurement guide
+
+---
+
+### Historical Documentation
 **Archive of development history and technical investigations**
 
 Historical development sessions, performance analyses, implementation notes, and legacy fixes preserved for reference.
 
-📁 **Location:** `/docs/archive/`
-
-**Categories:**
-- **Development History** - Development sessions and phase results
-- **Performance Analysis** - Performance investigations and optimizations
-- **Implementation Notes** - Specific feature implementation details
-- **Legacy Fixes** - Historical bug fixes and patches
-- **Testing History** - Old test documentation and reports
-- **Quality Audits** - Point-in-time quality and security audits
+**Location:** `/docs/archive/`
 
 📖 **[Browse Archive Index →](archive/README.md)**
 
 ---
 
-## 🎯 Documentation by Task
+## Documentation by Task
 
 ### Getting Started
 1. [Project README](../README.md) - Project overview
-2. [Quick Start Guide](user/quick-start.md) - Installation and first upload
-3. [GUI Guide](user/gui-guide.md) - Learn the interface
+2. [Quick Start Guide](user/getting-started/quick-start.md) - Installation and first upload
+3. [GUI Guide](user/guides/gui-guide.md) - Learn the interface
 
 ### Uploading Galleries
-1. [Quick Start](user/quick-start.md) - Basic upload
-2. [Multi-Host Upload](user/multi-host-upload.md) - Upload to multiple hosts
-3. [Templates](user/templates-advanced.md) - Customize BBCode output
+1. [Quick Start](user/getting-started/quick-start.md) - Basic upload
+2. [Multi-Host Upload](user/guides/multi-host-upload.md) - Upload to multiple hosts
+3. [BBCode Templates](user/guides/bbcode-templates.md) - Customize BBCode output
 
 ### Managing Content
-1. [Archive Management](user/archive-management.md) - Create and manage ZIP archives
-2. [Duplicate Detection](user/duplicate-detection.md) - Find duplicate galleries
-3. [GUI Guide](user/gui-guide.md) - Queue management and tabs
+1. [Archive Management](user/guides/archive-management.md) - Create and manage ZIP archives
+2. [GUI Guide](user/guides/gui-guide.md) - Queue management and tabs
 
 ### Troubleshooting
-1. [Troubleshooting Guide](user/troubleshooting.md) - Common issues
-2. [FAQ](user/faq.md) - Frequently asked questions
-3. [GitHub Issues](https://github.com/YOUR_REPO/issues) - Report bugs
+1. [Troubleshooting Guide](user/troubleshooting/troubleshooting.md) - Common issues
+2. [FAQ](user/troubleshooting/faq.md) - Frequently asked questions
+3. [Log Diagnosis](user/troubleshooting/LOG_DIAGNOSIS_QUICK_REF.md) - Using logs to debug issues
 
-### Contributing
-1. [Contributing Guide](dev/contributing.md) - How to contribute
-2. [Architecture](dev/ARCHITECTURE.md) - Understand the codebase
-3. [Testing Guide](dev/testing-guide.md) - Run and write tests
-4. [Build & Deploy](dev/build-deploy.md) - Build the application
+### Testing & Contributing
+1. [Testing Quick Start](dev/testing/TESTING_QUICKSTART.md) - How to run tests
+2. [Testing Status](dev/testing/TESTING_STATUS.md) - Current test coverage
+3. [Architecture Overview](../CLAUDE.md) - Understand the codebase
 
 ---
 
-## 🔍 Finding Documentation
+## Finding Documentation
 
 ### By Feature
 
 | Feature | Documentation |
 |---------|---------------|
-| **Multi-Host Upload** | [Multi-Host Upload Guide](user/multi-host-upload.md) |
-| **Archive/ZIP Creation** | [Archive Management](user/archive-management.md) |
-| **BBCode Templates** | [Templates Advanced](user/templates-advanced.md) |
-| **Duplicate Detection** | [Duplicate Detection](user/duplicate-detection.md) |
-| **Keyboard Shortcuts** | [Keyboard Shortcuts](user/keyboard-shortcuts.md) |
-| **Icon Customization** | [Icon Customization](user/icon-customization.md) |
-| **Database** | [Database Schema](dev/database-schema.md) |
-| **Networking** | [Network Layer](dev/network-layer.md) |
-| **Threading** | [Threading Model](dev/threading-model.md) |
-| **Hooks/Plugins** | [Hooks Development](dev/hooks-development.md) |
+| **Multi-Host Upload** | [Multi-Host Upload Guide](user/guides/multi-host-upload.md) |
+| **Archive/ZIP Management** | [Archive Management](user/guides/archive-management.md) |
+| **BBCode Templates** | [BBCode Templates Guide](user/guides/bbcode-templates.md) |
+| **Keyboard Shortcuts** | [Keyboard Shortcuts](user/getting-started/keyboard-shortcuts.md) |
+| **Settings & Configuration** | [Setup Guide](user/getting-started/setup.md) |
+| **Troubleshooting** | [Troubleshooting Guide](user/troubleshooting/troubleshooting.md) |
 
 ### By Role
 
-**End Users:** → [User Documentation](user/README.md)
-**Developers:** → [Developer Documentation](dev/README.md)
-**Researchers:** → [Historical Archive](archive/README.md)
+**End Users:** → [User Documentation Index](user/index.md)
+**Testers:** → [Testing Quick Start](dev/testing/TESTING_QUICKSTART.md)
+**Researchers/Contributors:** → [CLAUDE.md Architecture](../CLAUDE.md)
 
 ---
 
-## 📝 Documentation Standards
+## Documentation Standards
 
 All documentation follows these standards:
 
@@ -187,45 +166,46 @@ All documentation follows these standards:
 
 ---
 
-## 🤝 Contributing to Documentation
+## Contributing to Documentation
 
 Found an error or want to improve documentation?
 
 1. **Quick Fixes:** Edit the file directly and submit a PR
-2. **New Documentation:** Follow the [Contributing Guide](dev/contributing.md)
+2. **New Documentation:** Follow the [Contributing Guide](../CONTRIBUTING.md)
 3. **Structure Changes:** Open an issue first for discussion
 
 All documentation contributions are welcome!
 
 ---
 
-## 📋 Documentation Status
+## Documentation Status
 
 ### Coverage
 
-| Category | Files | Coverage | Status |
-|----------|-------|----------|--------|
-| User Docs | 10 | 85% | ✅ Complete |
-| Dev Docs | 23 | 90% | ✅ Complete |
-| Archive | 65+ | 100% | ✅ Organized |
+| Category | Status |
+|----------|--------|
+| User Docs | Completed (18 files) |
+| Dev Docs (Testing) | Available (4 files) |
+| Dev Docs (General) | Coming Soon |
+| Archive | Organized |
 
 ### Recent Updates
 
+- **2026-01-03:** Fixed links to reflect actual directory structure
+- **2026-01-03:** Marked non-existent dev docs as "Coming Soon"
+- **2026-01-03:** Updated version to 0.6.16
 - **2025-11-15:** Documentation reorganization complete
-- **2025-11-15:** Added multi-host upload documentation
-- **2025-11-15:** Created archive for historical docs
-- **2025-11-15:** Restructured user/dev separation
 
 ---
 
-## 🆘 Need Help?
+## Need Help?
 
 **Can't find what you're looking for?**
 
-1. Check the [FAQ](user/faq.md)
-2. Search [all documentation](https://github.com/YOUR_REPO/tree/master/docs)
-3. Ask in [GitHub Discussions](https://github.com/YOUR_REPO/discussions)
-4. Open an [issue](https://github.com/YOUR_REPO/issues)
+1. Check the [FAQ](user/troubleshooting/faq.md)
+2. Review the [Troubleshooting Guide](user/troubleshooting/troubleshooting.md)
+3. Check [Log Diagnosis Quick Reference](user/troubleshooting/LOG_DIAGNOSIS_QUICK_REF.md)
+4. Open an issue on GitHub
 
 **In the GUI:**
 - Press `F1` or `Ctrl+.` to open the Help Dialog
@@ -233,5 +213,5 @@ All documentation contributions are welcome!
 
 ---
 
-**Last Updated:** 2025-11-15
-**Documentation Version:** 1.0 (Post-Reorganization)
+**Last Updated:** 2026-01-03
+**Documentation Version:** 0.6.16

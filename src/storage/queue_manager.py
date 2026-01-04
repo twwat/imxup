@@ -72,7 +72,8 @@ class GalleryQueueItem:
     
     # Tab organization
     tab_name: str = "Main"
-    
+    tab_id: int = 1
+
     # Custom fields
     custom1: str = ""
     custom2: str = ""
@@ -844,6 +845,7 @@ class QueueManager(QObject):
             'added_time': item.added_time,
             'finished_time': item.finished_time,
             'tab_name': item.tab_name,
+            'tab_id': getattr(item, 'tab_id', 1),
             'total_size': item.total_size,
             'avg_width': item.avg_width,
             'avg_height': item.avg_height,
@@ -867,7 +869,9 @@ class QueueManager(QObject):
             'ext3': item.ext3,
             'ext4': item.ext4,
             'source_archive_path': item.source_archive_path,
-            'is_from_archive': item.is_from_archive
+            'is_from_archive': item.is_from_archive,
+            'imx_status': item.imx_status,
+            'imx_status_checked': item.imx_status_checked
         }
     
     def load_persistent_queue(self):
@@ -946,7 +950,7 @@ class QueueManager(QObject):
                      'max_height', 'min_width', 'min_height', 'scan_complete',
                      'uploaded_bytes', 'final_kibps', 'error_message',
                      'source_archive_path', 'is_from_archive',
-                     'imx_status', 'imx_status_checked']:
+                     'imx_status', 'imx_status_checked', 'tab_id']:
             if field in data:
                 setattr(item, field, data[field])
 

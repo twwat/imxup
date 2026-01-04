@@ -1781,3 +1781,56 @@ class QueueStore:
                 log(f"Error updating IMX status for {gallery_path}: {e}", level="error", category="database")
                 return False
 
+    def update_gallery_path(self, old_path: str, new_path: str) -> bool:
+        """Update a gallery's path when it has been relocated.
+
+        Args:
+            old_path: Original gallery path
+            new_path: New gallery path
+
+        Returns:
+            True if update was successful, False otherwise
+        """
+        with _ConnectionContext(self.db_path) as conn:
+            _ensure_schema(conn)
+            try:
+                old_path = os.path.normpath(old_path)
+                new_path = os.path.normpath(new_path)
+
+                cursor = conn.execute(
+                    "UPDATE galleries SET path = ? WHERE path = ?",
+                    (new_path, old_path)
+                )
+
+                if cursor.rowcount > 0:
+                    log(f"Relocated gallery: {old_path} -> {new_path}",
+                        level="info", category="database")
+                    return True
+                return False
+            except Exception as e:
+                log(f"Error updating gallery path: {e}", level="error", category="database")
+                return False
+
+    def get_galleries_by_parent_folder(self, parent_folder: str) -> List[Dict[str, Any]]:
+        """Get all galleries that are children of a parent folder.
+
+        Args:
+            parent_folder: Parent directory path
+
+        Returns:
+            List of gallery records whose paths are under parent_folder
+        """
+        with _ConnectionContext(self.db_path) as conn:
+            _ensure_schema(conn)
+            parent_prefix = os.path.normpath(parent_folder).rstrip(os.sep) + os.sep
+            # Escape LIKE special characters to prevent unintended matches
+            escaped_prefix = parent_prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+            cursor = conn.execute(
+                "SELECT id, path, name, status FROM galleries WHERE path LIKE ? ESCAPE '\\'",
+                (escaped_prefix + "%",)
+            )
+            return [
+                {'id': r[0], 'path': r[1], 'name': r[2], 'status': r[3]}
+                for r in cursor.fetchall()
+            ]
+

@@ -500,15 +500,20 @@ class TabbedGalleryWidget(QWidget):
             # Update queue manager's in-memory items to match database
             #print(f"DEBUG: moved_count={moved_count}, has_queue_manager={hasattr(self, 'queue_manager')}, has_tab_manager={bool(self.tab_manager)}")
             if moved_count > 0 and hasattr(self, 'queue_manager') and self.tab_manager:
+                # Get the tab_id for the target tab (same pattern as right-click path)
+                tab_info = self.tab_manager.get_tab_by_name(tab_name)
+                tab_id = tab_info.id if tab_info else 1
+
                 updated_count = 0
                 for path in gallery_paths:
                     item = self.queue_manager.get_item(path)
                     if item:
                         old_tab = item.tab_name
                         item.tab_name = tab_name
+                        item.tab_id = tab_id
                         updated_count += 1
                         # Verify the change stuck
-                        log(f"Drag-drop updated item {path} tab '{old_tab}' -> '{tab_name}' (item.tab_name is now '{item.tab_name}')", level="debug", category="ui")
+                        log(f"Drag-drop updated item {path} tab '{old_tab}' -> '{tab_name}' (item.tab_name is now '{item.tab_name}', tab_id={tab_id})", level="debug", category="ui")
                     else:
                         log(f" [ui] INFO: No item found for path: {path}")
                 log(f"Updated {updated_count} in-memory items out of {len(gallery_paths)} paths", level="debug")

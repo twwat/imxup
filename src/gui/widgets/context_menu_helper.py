@@ -192,7 +192,7 @@ class GalleryContextMenuHelper(QObject):
             return
             
         available_tabs = tab_manager.get_visible_tab_names()
-        current_tab = getattr(self.main_window, 'current_tab', 'Main')
+        current_tab = getattr(self.main_window.gallery_table, 'current_tab', 'Main')
         
         # Create "Move to" submenu with tabs other than the current one and excluding "All Tabs"
         other_tabs = [tab for tab in available_tabs if tab != current_tab and tab != "All Tabs"]

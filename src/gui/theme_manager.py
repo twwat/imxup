@@ -32,6 +32,17 @@ def get_assets_dir() -> str:
     return os.path.join(get_project_root(), "assets")
 
 
+def is_dark_mode() -> bool:
+    """Check if the application is in dark mode.
+
+    Returns:
+        True if dark mode, False if light mode.
+    """
+    from PyQt6.QtCore import QSettings
+    settings = QSettings()
+    return settings.value('ui/theme', 'dark') == 'dark'
+
+
 class ThemeManager(QObject):
     """Manages theme and font settings for the main window.
 

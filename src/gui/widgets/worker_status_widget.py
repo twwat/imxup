@@ -63,7 +63,7 @@ class MultiLineHeaderView(QHeaderView):
         self._secondaryColor = None
         self._worker_widget = worker_widget  # Direct reference for tooltip access
         # Increase default section height for two lines
-        self.setMinimumSectionSize(28)  # Allow icon columns to be 28px
+        self.setMinimumSectionSize(30)  # Allow icon columns to be 28px
 
     def getPrimaryColor(self):
         return self._primaryColor or self.palette().color(QPalette.ColorRole.WindowText)
@@ -87,7 +87,7 @@ class MultiLineHeaderView(QHeaderView):
         """Return size hint with room for two lines."""
         base = super().sizeHint()
         # Height for two lines + padding
-        return QSize(base.width(), 44)
+        return QSize(base.width(), 40)
 
     def paintSection(self, painter, rect, logicalIndex):
         """Paint header section with two-line text."""
@@ -152,14 +152,14 @@ class MultiLineHeaderView(QHeaderView):
 
         if secondary_text:
             # Two-line layout
-            line_height = text_rect.height() // 2
+            line_height = (text_rect.height() // 2) - 2
             primary_rect = QRect(text_rect.x(), text_rect.y(), text_rect.width(), line_height)
             secondary_rect = QRect(text_rect.x(), text_rect.y() + line_height, text_rect.width(), line_height)
 
             # Draw primary text (metric name)
             painter.setPen(self.getPrimaryColor())
             primary_font = painter.font()
-            primary_font.setPixelSize(10)
+            primary_font.setPixelSize(11)
             primary_font.setBold(True)
             painter.setFont(primary_font)
 
@@ -178,8 +178,8 @@ class MultiLineHeaderView(QHeaderView):
             # Draw secondary text (period)
             painter.setPen(self.getSecondaryColor())
             secondary_font = painter.font()
-            secondary_font.setBold(True)
-            secondary_font.setPixelSize(10)
+            secondary_font.setBold(False)
+            secondary_font.setPixelSize(11)
             painter.setFont(secondary_font)
 
             # Elide secondary text if too long
@@ -190,7 +190,7 @@ class MultiLineHeaderView(QHeaderView):
             # Single line (for columns without periods like "Host", "Speed")
             painter.setPen(self.getPrimaryColor())
             single_font = painter.font()
-            single_font.setPixelSize(10)
+            single_font.setPixelSize(11)
             single_font.setBold(True)
             painter.setFont(single_font)
 
@@ -285,10 +285,10 @@ class ColumnConfig:
 
 # Core columns (always available)
 CORE_COLUMNS = [
-    ColumnConfig('icon', '', 28, ColumnType.ICON, resizable=False, hideable=False, alignment=Qt.AlignmentFlag.AlignCenter | Qt.AlignmentFlag.AlignVCenter),
+    ColumnConfig('icon', '', 30, ColumnType.ICON, resizable=False, hideable=False, alignment=Qt.AlignmentFlag.AlignCenter | Qt.AlignmentFlag.AlignVCenter),
     ColumnConfig('hostname', 'host', 120, ColumnType.TEXT),
     ColumnConfig('speed', 'speed', 90, ColumnType.SPEED, alignment=Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter),
-    ColumnConfig('status', 'status', 40, ColumnType.ICON, default_visible=True, resizable=False, hideable=False, alignment=Qt.AlignmentFlag.AlignCenter | Qt.AlignmentFlag.AlignVCenter),
+    ColumnConfig('status', 'status', 30, ColumnType.ICON, default_visible=True, resizable=False, hideable=False, alignment=Qt.AlignmentFlag.AlignCenter | Qt.AlignmentFlag.AlignVCenter),
     ColumnConfig('status_text', 'status text', 100, ColumnType.TEXT, default_visible=True, alignment=Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter),
     ColumnConfig('files_remaining', 'queue (files)', 90, ColumnType.COUNT, default_visible=True, alignment=Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter),
     ColumnConfig('bytes_remaining', 'queue (bytes)', 110, ColumnType.BYTES, default_visible=True, alignment=Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter),
@@ -492,6 +492,7 @@ class WorkerStatusWidget(QWidget):
 
         # Status table
         self.status_table = NoAutoScrollTable()
+        self.status_table.setIconSize(QSize(22, 22))  # Host icons - scale by height, centered
 
         # Configure table behavior
         self.status_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
@@ -1382,7 +1383,7 @@ class WorkerStatusWidget(QWidget):
                     if show_logos:
                         # Try to load host logo
                         host_id = 'imx' if worker.worker_type == 'imx' else worker.hostname.lower()
-                        logo_label = self._load_host_logo(host_id, height=18)
+                        logo_label = self._load_host_logo(host_id, height=22)
 
                     # Decide whether to use widget (logo or auto icon) or plain text
                     use_widget = has_auto_upload or (show_logos and logo_label is not None)
@@ -1396,7 +1397,7 @@ class WorkerStatusWidget(QWidget):
 
                         # Add logo or text based on availability
                         if show_logos and logo_label:
-                            # Show logo instead of text
+                            # Show logo instead of text (left-aligned)
                             layout.addWidget(logo_label)
                         else:
                             # Fallback to text (when logo not found or setting disabled)
@@ -1409,7 +1410,7 @@ class WorkerStatusWidget(QWidget):
 
                             layout.addWidget(text_label)
 
-                        # Stretch pushes auto icon to the right edge
+                        # Stretch pushes auto icon to right edge (if present)
                         if has_auto_upload:
                             layout.addStretch()
 

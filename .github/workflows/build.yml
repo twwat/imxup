@@ -25,12 +25,19 @@ jobs:
         include:
           - os: windows-latest
             platform: windows
+            arch: x64
             asset_ext: .zip
           - os: ubuntu-22.04
             platform: linux
+            arch: x64
             asset_ext: .tar.gz
           - os: macos-15  # Apple Silicon (arm64)
-            platform: macos-arm64
+            platform: macos
+            arch: arm64
+            asset_ext: .tar.gz
+          - os: macos-15-intel  # Intel Mac (x64)
+            platform: macos
+            arch: x64
             asset_ext: .tar.gz
 
     runs-on: ${{ matrix.os }}
@@ -44,9 +51,12 @@ jobs:
         shell: bash
         run: |
           if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
+            # Strip 'v' prefix for cleaner filenames (v0.6.16 -> 0.6.16)
             VERSION="${{ github.ref_name }}"
+            VERSION="${VERSION#v}"
           elif [[ -n "${{ github.event.inputs.version }}" ]]; then
             VERSION="${{ github.event.inputs.version }}"
+            VERSION="${VERSION#v}"
           else
             VERSION="dev"
           fi
@@ -82,7 +92,8 @@ jobs:
       - name: Install macOS dependencies
         if: runner.os == 'macOS'
         run: |
-          brew install curl openssl@3
+          # Install quietly, suppress "already installed" warnings
+          brew install curl openssl@3 2>/dev/null || true
           echo "PYCURL_SSL_LIBRARY=openssl" >> $GITHUB_ENV
           echo "LDFLAGS=-L$(brew --prefix openssl@3)/lib -L$(brew --prefix curl)/lib" >> $GITHUB_ENV
           echo "CPPFLAGS=-I$(brew --prefix openssl@3)/include -I$(brew --prefix curl)/include" >> $GITHUB_ENV
@@ -169,29 +180,358 @@ jobs:
           find dist -name "*curl*" -type f 2>/dev/null || echo "Warning: libcurl not found"
           true  # Always succeed - this is informational only
 
-      # Package Windows
+      # Package Windows (portable zip)
       - name: Package (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
           $version = "${{ steps.version.outputs.VERSION }}"
+          $filename = "imxup-$version-${{ matrix.platform }}-${{ matrix.arch }}-portable"
           Rename-Item dist imxup
-          Compress-Archive -Path imxup -DestinationPath "imxup-$version-${{ matrix.platform }}.zip" -Force
+          Compress-Archive -Path imxup -DestinationPath "$filename.zip" -Force
 
-      # Package Unix
+      # Create Windows installer with Inno Setup
+      - name: Create Inno Setup script
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $version = "${{ steps.version.outputs.VERSION }}"
+          $issContent = @"
+          [Setup]
+          AppName=ImXup
+          AppVersion=$version
+          AppPublisher=ImXup
+          DefaultDirName={autopf}\ImXup
+          DefaultGroupName=ImXup
+          OutputDir=.
+          OutputBaseFilename=imxup-$version-${{ matrix.platform }}-${{ matrix.arch }}-setup
+          Compression=lzma2
+          SolidCompression=yes
+          ArchitecturesAllowed=x64compatible
+          ArchitecturesInstallIn64BitMode=x64compatible
+
+          [Files]
+          Source: "imxup\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs
+
+          [Icons]
+          Name: "{group}\ImXup"; Filename: "{app}\imxup.exe"
+          Name: "{autodesktop}\ImXup"; Filename: "{app}\imxup.exe"; Tasks: desktopicon
+
+          [Tasks]
+          Name: "desktopicon"; Description: "Create desktop shortcut"; GroupDescription: "Additional icons:"
+
+          [Run]
+          Filename: "{app}\imxup.exe"; Description: "Launch ImXup"; Flags: nowait postinstall skipifsilent
+          "@
+          $issContent | Out-File -FilePath "imxup.iss" -Encoding UTF8
+
+      - name: Build Windows Installer (exe)
+        if: runner.os == 'Windows'
+        uses: Minionguyjpro/Inno-Setup-Action@v1.2.4
+        with:
+          path: imxup.iss
+
+      # Create Windows MSI installer with WiX
+      - name: Create WiX script
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $version = "${{ steps.version.outputs.VERSION }}"
+          # WiX requires a GUID for the product - generate deterministically from version
+          $guid = [guid]::NewGuid().ToString().ToUpper()
+
+          $wxsContent = @"
+          <?xml version="1.0" encoding="UTF-8"?>
+          <Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+            <Product Id="*"
+                     Name="ImXup"
+                     Language="1033"
+                     Version="$version.0"
+                     Manufacturer="ImXup"
+                     UpgradeCode="F8E7D6C5-B4A3-4210-9F8E-7D6C5B4A3210">
+              <Package InstallerVersion="200" Compressed="yes" InstallScope="perMachine" />
+              <MajorUpgrade DowngradeErrorMessage="A newer version is already installed." />
+              <MediaTemplate EmbedCab="yes" />
+
+              <Feature Id="ProductFeature" Title="ImXup" Level="1">
+                <ComponentGroupRef Id="HeatGenerated" />
+                <ComponentRef Id="StartMenuShortcut" />
+                <ComponentRef Id="DesktopShortcut" />
+              </Feature>
+
+              <Directory Id="TARGETDIR" Name="SourceDir">
+                <Directory Id="ProgramFiles64Folder">
+                  <Directory Id="INSTALLFOLDER" Name="ImXup" />
+                </Directory>
+                <Directory Id="ProgramMenuFolder">
+                  <Directory Id="ApplicationProgramsFolder" Name="ImXup" />
+                </Directory>
+                <Directory Id="DesktopFolder" Name="Desktop" />
+              </Directory>
+
+              <DirectoryRef Id="ApplicationProgramsFolder">
+                <Component Id="StartMenuShortcut" Guid="*">
+                  <Shortcut Id="StartMenuShortcut"
+                            Name="ImXup"
+                            Target="[INSTALLFOLDER]imxup.exe"
+                            WorkingDirectory="INSTALLFOLDER" />
+                  <RemoveFolder Id="RemoveStartMenuFolder" On="uninstall" />
+                  <RegistryValue Root="HKCU" Key="Software\ImXup" Name="installed" Type="integer" Value="1" KeyPath="yes" />
+                </Component>
+              </DirectoryRef>
+
+              <DirectoryRef Id="DesktopFolder">
+                <Component Id="DesktopShortcut" Guid="*">
+                  <Shortcut Id="DesktopShortcut"
+                            Name="ImXup"
+                            Target="[INSTALLFOLDER]imxup.exe"
+                            WorkingDirectory="INSTALLFOLDER" />
+                  <RegistryValue Root="HKCU" Key="Software\ImXup" Name="desktop" Type="integer" Value="1" KeyPath="yes" />
+                </Component>
+              </DirectoryRef>
+            </Product>
+          </Wix>
+          "@
+          $wxsContent | Out-File -FilePath "imxup.wxs" -Encoding UTF8
+
+      - name: Build Windows MSI
+        if: runner.os == 'Windows'
+        run: |
+          choco install wixtoolset -y
+          $env:PATH += ";C:\Program Files (x86)\WiX Toolset v3.14\bin"
+          # Use HeatGenerated as the component group name, -arch x64 for 64-bit components
+          heat dir imxup -cg HeatGenerated -dr INSTALLFOLDER -scom -sreg -srd -var var.SourceDir -gg -sfrag -arch x64 -out components.wxs
+          candle -arch x64 -dSourceDir=imxup imxup.wxs components.wxs
+          light -ext WixUIExtension -out "imxup-${{ steps.version.outputs.VERSION }}-${{ matrix.platform }}-${{ matrix.arch }}.msi" imxup.wixobj components.wixobj
+        shell: pwsh
+
+      # Package Unix (portable tarball)
       - name: Package (Unix)
         if: runner.os != 'Windows'
         run: |
           VERSION="${{ steps.version.outputs.VERSION }}"
+          FILENAME="imxup-$VERSION-${{ matrix.platform }}-${{ matrix.arch }}-portable"
           mv dist imxup
-          tar -czvf "imxup-$VERSION-${{ matrix.platform }}.tar.gz" imxup
+          tar -czvf "$FILENAME.tar.gz" imxup
 
-      # Upload artifact
-      - name: Upload artifact
+      # Create Linux packages (deb, rpm, AppImage)
+      - name: Create Linux packages
+        if: runner.os == 'Linux'
+        run: |
+          VERSION="${{ steps.version.outputs.VERSION }}"
+          ARCH="${{ matrix.arch }}"
+
+          # Install fpm for deb/rpm creation
+          sudo apt-get install -y ruby ruby-dev rubygems build-essential rpm
+          sudo gem install fpm
+
+          # Create .deb package
+          fpm -s dir -t deb \
+            -n imxup \
+            -v "$VERSION" \
+            -a amd64 \
+            --description "Professional image gallery uploader for imx.to" \
+            --url "https://github.com/twwat/imxup" \
+            --license "MIT" \
+            --prefix /opt/imxup \
+            --after-install <(echo '#!/bin/bash
+              ln -sf /opt/imxup/imxup /usr/local/bin/imxup
+              cat > /usr/share/applications/imxup.desktop << EOD
+          [Desktop Entry]
+          Name=ImXup
+          Exec=/opt/imxup/imxup --gui
+          Icon=/opt/imxup/assets/imxup-main-icon.png
+          Type=Application
+          Categories=Utility;Network;
+          EOD') \
+            --after-remove <(echo '#!/bin/bash
+              rm -f /usr/local/bin/imxup
+              rm -f /usr/share/applications/imxup.desktop') \
+            imxup/=/opt/imxup/
+
+          mv *.deb "imxup-$VERSION-${{ matrix.platform }}-${{ matrix.arch }}.deb"
+
+          # Create .rpm package
+          fpm -s dir -t rpm \
+            -n imxup \
+            -v "$VERSION" \
+            -a x86_64 \
+            --description "Professional image gallery uploader for imx.to" \
+            --url "https://github.com/twwat/imxup" \
+            --license "MIT" \
+            --prefix /opt/imxup \
+            --after-install <(echo '#!/bin/bash
+              ln -sf /opt/imxup/imxup /usr/local/bin/imxup
+              cat > /usr/share/applications/imxup.desktop << EOD
+          [Desktop Entry]
+          Name=ImXup
+          Exec=/opt/imxup/imxup --gui
+          Icon=/opt/imxup/assets/imxup-main-icon.png
+          Type=Application
+          Categories=Utility;Network;
+          EOD') \
+            --after-remove <(echo '#!/bin/bash
+              rm -f /usr/local/bin/imxup
+              rm -f /usr/share/applications/imxup.desktop') \
+            imxup/=/opt/imxup/
+
+          mv *.rpm "imxup-$VERSION-${{ matrix.platform }}-${{ matrix.arch }}.rpm"
+
+          # Create AppImage
+          sudo apt-get install -y libfuse2
+          wget -q "https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage" -O appimagetool
+          chmod +x appimagetool
+
+          # Create AppDir structure
+          mkdir -p ImXup.AppDir/usr/bin
+          mkdir -p ImXup.AppDir/usr/share/applications
+          mkdir -p ImXup.AppDir/usr/share/icons/hicolor/256x256/apps
+          cp -r imxup/* ImXup.AppDir/usr/bin/
+          cp imxup/assets/imxup-main-icon.png ImXup.AppDir/usr/share/icons/hicolor/256x256/apps/imxup.png
+          cp imxup/assets/imxup-main-icon.png ImXup.AppDir/imxup.png
+
+          # Create desktop file (no leading spaces, single category)
+          cat > ImXup.AppDir/imxup.desktop << 'EOD'
+          [Desktop Entry]
+          Name=ImXup
+          Exec=imxup --gui
+          Icon=imxup
+          Type=Application
+          Categories=Network;
+          EOD
+          # Remove leading spaces from heredoc
+          sed -i 's/^          //' ImXup.AppDir/imxup.desktop
+          cp ImXup.AppDir/imxup.desktop ImXup.AppDir/usr/share/applications/
+
+          # Create AppRun
+          cat > ImXup.AppDir/AppRun << 'EOD'
+          #!/bin/bash
+          SELF=$(readlink -f "$0")
+          HERE=${SELF%/*}
+          export PATH="${HERE}/usr/bin:${PATH}"
+          exec "${HERE}/usr/bin/imxup" "$@"
+          EOD
+          sed -i 's/^          //' ImXup.AppDir/AppRun
+          chmod +x ImXup.AppDir/AppRun
+
+          # Build AppImage
+          ARCH=x86_64 ./appimagetool ImXup.AppDir "imxup-$VERSION-${{ matrix.platform }}-${{ matrix.arch }}.AppImage"
+
+      # Create macOS DMG
+      - name: Create macOS DMG
+        if: runner.os == 'macOS'
+        run: |
+          VERSION="${{ steps.version.outputs.VERSION }}"
+          FILENAME="imxup-$VERSION-${{ matrix.platform }}-${{ matrix.arch }}"
+
+          # Install create-dmg
+          brew install create-dmg
+
+          # Create .app bundle structure
+          mkdir -p ImXup.app/Contents/MacOS
+          mkdir -p ImXup.app/Contents/Resources
+          cp -r imxup/* ImXup.app/Contents/MacOS/
+
+          # Create Info.plist
+          cat > ImXup.app/Contents/Info.plist << EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+              <key>CFBundleExecutable</key>
+              <string>imxup</string>
+              <key>CFBundleIdentifier</key>
+              <string>com.imxup.app</string>
+              <key>CFBundleName</key>
+              <string>ImXup</string>
+              <key>CFBundleVersion</key>
+              <string>$VERSION</string>
+              <key>CFBundleShortVersionString</key>
+              <string>$VERSION</string>
+              <key>CFBundlePackageType</key>
+              <string>APPL</string>
+              <key>LSMinimumSystemVersion</key>
+              <string>10.15</string>
+              <key>NSHighResolutionCapable</key>
+              <true/>
+          </dict>
+          </plist>
+          EOF
+
+          # Create DMG
+          create-dmg \
+            --volname "ImXup $VERSION" \
+            --window-pos 200 120 \
+            --window-size 600 400 \
+            --icon-size 100 \
+            --icon "ImXup.app" 150 185 \
+            --hide-extension "ImXup.app" \
+            --app-drop-link 450 185 \
+            "$FILENAME.dmg" \
+            "ImXup.app" || true  # create-dmg returns non-zero even on success sometimes
+
+      # Upload portable artifact
+      - name: Upload portable artifact
         uses: actions/upload-artifact@v4
         with:
-          name: imxup-${{ steps.version.outputs.VERSION }}-${{ matrix.platform }}
-          path: imxup-${{ steps.version.outputs.VERSION }}-${{ matrix.platform }}${{ matrix.asset_ext }}
+          name: imxup-${{ steps.version.outputs.VERSION }}-${{ matrix.platform }}-${{ matrix.arch }}-portable
+          path: imxup-${{ steps.version.outputs.VERSION }}-${{ matrix.platform }}-${{ matrix.arch }}-portable${{ matrix.asset_ext }}
+          retention-days: 30
+
+      # Upload Windows installer (raw .exe, not zipped)
+      - name: Upload Windows installer (exe)
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: imxup-${{ steps.version.outputs.VERSION }}-${{ matrix.platform }}-${{ matrix.arch }}-setup
+          path: imxup-${{ steps.version.outputs.VERSION }}-${{ matrix.platform }}-${{ matrix.arch }}-setup.exe
+          compression-level: 0  # Don't compress the .exe
+          retention-days: 30
+
+      # Upload Windows MSI installer
+      - name: Upload Windows installer (msi)
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: imxup-${{ steps.version.outputs.VERSION }}-${{ matrix.platform }}-${{ matrix.arch }}-msi
+          path: imxup-${{ steps.version.outputs.VERSION }}-${{ matrix.platform }}-${{ matrix.arch }}.msi
+          retention-days: 30
+
+      # Upload macOS DMG
+      - name: Upload macOS DMG
+        if: runner.os == 'macOS'
+        uses: actions/upload-artifact@v4
+        with:
+          name: imxup-${{ steps.version.outputs.VERSION }}-${{ matrix.platform }}-${{ matrix.arch }}-dmg
+          path: imxup-${{ steps.version.outputs.VERSION }}-${{ matrix.platform }}-${{ matrix.arch }}.dmg
+          compression-level: 0  # DMG is already compressed
+          retention-days: 30
+
+      # Upload Linux .deb
+      - name: Upload Linux deb
+        if: runner.os == 'Linux'
+        uses: actions/upload-artifact@v4
+        with:
+          name: imxup-${{ steps.version.outputs.VERSION }}-${{ matrix.platform }}-${{ matrix.arch }}-deb
+          path: imxup-${{ steps.version.outputs.VERSION }}-${{ matrix.platform }}-${{ matrix.arch }}.deb
+          retention-days: 30
+
+      # Upload Linux .rpm
+      - name: Upload Linux rpm
+        if: runner.os == 'Linux'
+        uses: actions/upload-artifact@v4
+        with:
+          name: imxup-${{ steps.version.outputs.VERSION }}-${{ matrix.platform }}-${{ matrix.arch }}-rpm
+          path: imxup-${{ steps.version.outputs.VERSION }}-${{ matrix.platform }}-${{ matrix.arch }}.rpm
+          retention-days: 30
+
+      # Upload Linux AppImage
+      - name: Upload Linux AppImage
+        if: runner.os == 'Linux'
+        uses: actions/upload-artifact@v4
+        with:
+          name: imxup-${{ steps.version.outputs.VERSION }}-${{ matrix.platform }}-${{ matrix.arch }}-appimage
+          path: imxup-${{ steps.version.outputs.VERSION }}-${{ matrix.platform }}-${{ matrix.arch }}.AppImage
           retention-days: 30
 
   # Create release when triggered by tag
@@ -215,8 +555,13 @@ jobs:
           draft: true
           generate_release_notes: true
           files: |
-            artifacts/imxup-*-windows/*.zip
-            artifacts/imxup-*-linux/*.tar.gz
-            artifacts/imxup-*-macos-arm64/*.tar.gz
+            artifacts/**/*.zip
+            artifacts/**/*.tar.gz
+            artifacts/**/*.exe
+            artifacts/**/*.msi
+            artifacts/**/*.dmg
+            artifacts/**/*.deb
+            artifacts/**/*.rpm
+            artifacts/**/*.AppImage
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

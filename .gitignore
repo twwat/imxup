@@ -63,6 +63,7 @@ nul
 *.zip
 *.html
 bak/
+temp/
 
 
 # Removed Windows wrapper files per user request
@@ -122,3 +123,6 @@ pyrightconfig.json
 assets/upload-anim/
 
 *.exe
+
+docs/internal/
+

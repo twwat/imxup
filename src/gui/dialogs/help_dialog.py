@@ -9,10 +9,12 @@ Uses QThread for non-blocking document loading to keep UI responsive.
 import os
 from typing import Dict, List, Tuple, Optional
 from PyQt6.QtWidgets import (
-    QDialog, QVBoxLayout, QHBoxLayout, QTextEdit, QLineEdit,
+    QDialog, QVBoxLayout, QHBoxLayout, QTextBrowser, QLineEdit,
     QDialogButtonBox, QApplication, QTreeWidget, QTreeWidgetItem,
     QSplitter, QLabel, QPushButton
 )
+from PyQt6.QtCore import QUrl
+import webbrowser
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
 from PyQt6.QtGui import QFont, QColor
 
@@ -265,24 +267,29 @@ class HelpDialog(QDialog):
         os.path.dirname(os.path.abspath(__file__))))), "assets", "emoji")
 
     # Documentation structure: category -> [(title, filename), ...]
+    # Paths are relative to docs/user/
     DOC_STRUCTURE = {
         "Getting Started": [
-            ("Overview", "HELP_CONTENT.md"),
-            ("Quick Start", "quick-start.md"),
+            ("Overview", "reference/HELP_CONTENT.md"),
+            ("Quick Start", "getting-started/quick-start.md"),
+            ("Setup", "getting-started/setup.md"),
+            ("Keyboard Shortcuts", "getting-started/keyboard-shortcuts.md"),
         ],
-        "Features": [
-            ("Multi-Host Upload", "multi-host-upload.md"),
-            ("BBCode Templates", "bbcode-templates.md"),
-            ("GUI Guide", "gui-guide.md"),
-            ("GUI Improvements", "gui-improvements.md"),
+        "Guides": [
+            ("GUI Guide", "guides/gui-guide.md"),
+            ("Multi-Host Upload", "guides/multi-host-upload.md"),
+            ("BBCode Templates", "guides/bbcode-templates.md"),
+            ("Archive Management", "guides/archive-management.md"),
+            ("Hooks System", "guides/hooks-system.md"),
         ],
         "Reference": [
-            ("Keyboard Shortcuts", "keyboard-shortcuts.md"),
-            ("Troubleshooting", "troubleshooting.md"),
+            ("Features", "reference/FEATURES.md"),
+            ("Quick Reference", "reference/quick-reference.md"),
+            ("External Apps", "reference/external-apps-parameters.md"),
         ],
-        "Testing": [
-            ("Quick Start", "TESTING_QUICKSTART.md"),
-            ("Status", "TESTING_STATUS.md"),
+        "Troubleshooting": [
+            ("FAQ", "troubleshooting/faq.md"),
+            ("Troubleshooting Guide", "troubleshooting/troubleshooting.md"),
         ],
     }
 
@@ -332,10 +339,12 @@ class HelpDialog(QDialog):
         self.tree.itemClicked.connect(self._on_tree_item_clicked)
         splitter.addWidget(self.tree)
 
-        # Right side: Content viewer
-        self.content_viewer = QTextEdit()
+        # Right side: Content viewer (QTextBrowser for link support)
+        self.content_viewer = QTextBrowser()
         self.content_viewer.setReadOnly(True)
         self.content_viewer.setProperty("class", "help-content")
+        self.content_viewer.setOpenExternalLinks(False)  # We handle all links
+        self.content_viewer.anchorClicked.connect(self._on_link_clicked)
 
         # Set font with emoji support
         font = QFont()
@@ -386,7 +395,8 @@ class HelpDialog(QDialog):
 
     def _start_document_loading(self):
         """Start the background document loading thread."""
-        docs_dir = os.path.join(os.getcwd(), "docs", "user")
+        from imxup import get_project_root
+        docs_dir = os.path.join(get_project_root(), "docs", "user")
 
         if not os.path.exists(docs_dir):
             self._show_error("Documentation directory not found")
@@ -482,6 +492,62 @@ class HelpDialog(QDialog):
         else:
             # Document still loading - show loading indicator
             self._show_document_loading(item.text(0))
+
+    def _on_link_clicked(self, url):
+        """Handle link clicks in the content viewer.
+
+        Routes external links to browser and internal .md links to tree navigation.
+        """
+        url_string = url.toString()
+        scheme = url.scheme().lower()
+
+        # External link - open in default browser (only allow safe schemes)
+        if scheme in ('http', 'https'):
+            webbrowser.open(url_string)
+            return
+
+        # Block dangerous schemes (javascript:, file:, data:, etc.)
+        if scheme and scheme not in ('', 'file'):
+            return
+
+        # Anchor link (same page) - scroll to it
+        if url_string.startswith('#'):
+            self.content_viewer.scrollToAnchor(url.fragment())
+            return
+
+        # Internal .md link - navigate to the topic in tree
+        if url_string.endswith('.md'):
+            self._navigate_to_doc(url_string)
+
+    def _navigate_to_doc(self, relative_path: str):
+        """Navigate to an internal documentation link.
+
+        Tries two resolution strategies to handle inconsistent link conventions.
+        Only navigates to documents already in the tree (prevents path traversal).
+        """
+        def normalize(path: str) -> str:
+            return os.path.normpath(path).replace("\\", "/")
+
+        # Strategy 1: Resolve relative to current document's directory
+        if self.current_doc:
+            current_dir = os.path.dirname(self.current_doc)
+            resolved = normalize(os.path.join(current_dir, relative_path))
+            # Security: Only allow navigation to docs already in the tree
+            if resolved in self._filename_to_item:
+                self._select_doc(resolved)
+                return
+
+        # Strategy 2: Treat as path from docs/user/ root
+        resolved = normalize(relative_path)
+        # Security: Only allow navigation to docs already in the tree
+        if resolved in self._filename_to_item:
+            self._select_doc(resolved)
+
+    def _select_doc(self, filename: str):
+        """Select a document in the tree and display it."""
+        item = self._filename_to_item[filename]
+        self.tree.setCurrentItem(item)
+        self._on_tree_item_clicked(item, 0)
 
     def _show_document_loading(self, title: str):
         """Show loading indicator for a specific document.
@@ -705,7 +771,7 @@ class HelpDialog(QDialog):
             for j in range(category.childCount()):
                 item = category.child(j)
                 filename = item.data(0, Qt.ItemDataRole.UserRole)
-                if filename == "keyboard-shortcuts.md":
+                if filename and filename.endswith("keyboard-shortcuts.md"):
                     self.tree.setCurrentItem(item)
                     self._on_tree_item_clicked(item, 0)
                     self.show()
