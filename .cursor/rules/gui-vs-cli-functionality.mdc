@@ -1,6 +1,0 @@
----
-description: Maintain functionality between GUI and CLI
-globs: *.py
-alwaysApply: true
----
-// To maintain consistency between the CLI and GUI, all calculations, statistics, and gallery file generation should be performed in the underlying worker thread and/or imxup.py. The GUI should only display results and never duplicate or reimplement logic already present in imxup.py or the worker. This ensures a single source of truth and prevents divergence between CLI and GUI outputs.
