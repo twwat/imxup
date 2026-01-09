@@ -12,7 +12,209 @@ from typing import Dict, Any, List
 import sqlite3
 from datetime import datetime
 import os
+import gc
 
+
+@pytest.fixture(autouse=True)
+def mock_qmessagebox_globally(monkeypatch):
+    """
+    CRITICAL: Mock QMessageBox to prevent modal dialogs from blocking test teardown.
+
+    Many dialogs (e.g., FileHostConfigDialog) show confirmation messages in closeEvent,
+    which blocks pytest-qt's internal _close_widgets() function during teardown.
+
+    This fixture auto-returns Discard for all warning/question dialogs to prevent
+    the test suite from hanging indefinitely.
+    """
+    try:
+        from PyQt6.QtWidgets import QMessageBox
+
+        # Create mock that returns Discard (to skip saving) or Yes/Ok (to proceed)
+        def mock_warning(*args, **kwargs):
+            return QMessageBox.StandardButton.Discard
+
+        def mock_question(*args, **kwargs):
+            return QMessageBox.StandardButton.Yes
+
+        def mock_information(*args, **kwargs):
+            return QMessageBox.StandardButton.Ok
+
+        def mock_critical(*args, **kwargs):
+            return QMessageBox.StandardButton.Ok
+
+        # Patch all static dialog methods
+        monkeypatch.setattr(QMessageBox, 'warning', mock_warning)
+        monkeypatch.setattr(QMessageBox, 'question', mock_question)
+        monkeypatch.setattr(QMessageBox, 'information', mock_information)
+        monkeypatch.setattr(QMessageBox, 'critical', mock_critical)
+    except ImportError:
+        # PyQt6 not available in this test environment
+        pass
+
+    yield
+
+
+@pytest.fixture(autouse=True)
+def cleanup_qt_resources():
+    """Comprehensive cleanup of Qt resources after each test to prevent hangs.
+
+    This fixture addresses multiple resource leak sources:
+    - QTimer instances (from ProportionalBar, dialogs, etc.)
+    - QThread instances (workers)
+    - Singleton instances (MetricsStore, IconManager, etc.)
+    - Database connections
+    - Pending deleteLater() calls
+    - Signal connections
+    """
+    yield
+
+    # Step 1: Stop ALL QTimers FIRST (critical for preventing hangs)
+    try:
+        from PyQt6.QtWidgets import QApplication
+        from PyQt6.QtCore import QTimer, QThread
+
+        app = QApplication.instance()
+        if app is not None:
+            # Process any pending events before cleanup
+            app.processEvents()
+
+            # Stop all QTimers (ProportionalBar animations, etc.)
+            for timer in app.findChildren(QTimer):
+                if timer.isActive():
+                    timer.stop()
+
+            # Process events again to let timers actually stop
+            app.processEvents()
+    except (ImportError, Exception):
+        pass
+
+    # Step 2: Stop and cleanup all QThreads
+    try:
+        from PyQt6.QtWidgets import QApplication
+        from PyQt6.QtCore import QThread
+
+        app = QApplication.instance()
+        if app is not None:
+            threads = app.findChildren(QThread)
+            for thread in threads:
+                if thread.isRunning():
+                    # Call custom stop method if available
+                    if hasattr(thread, 'stop') and callable(thread.stop):
+                        try:
+                            thread.stop()
+                        except Exception:
+                            pass
+
+                    # Request thread to quit
+                    thread.quit()
+
+                    # Wait briefly (100ms max to avoid test suite hanging)
+                    if not thread.wait(100):
+                        # Force terminate immediately if not responsive
+                        thread.terminate()
+                        thread.wait(50)
+
+            # Process events to let threads finish cleanup
+            app.processEvents()
+    except (ImportError, Exception):
+        pass
+
+    # Step 3: Close all database connections
+    try:
+        import sqlite3
+        # Close any open sqlite3 connections in the current thread
+        # This is important for tests that create database connections
+        gc.collect()  # Trigger garbage collection to close unreferenced connections
+    except Exception:
+        pass
+
+    # Step 4: Reset singleton instances
+    try:
+        # Reset MetricsStore singleton
+        from src.utils.metrics_store import MetricsStore
+        if hasattr(MetricsStore, '_instance') and MetricsStore._instance is not None:
+            instance = MetricsStore._instance
+            try:
+                instance.close()
+            except Exception:
+                pass
+            MetricsStore._instance = None
+    except (ImportError, Exception):
+        pass
+
+    try:
+        # Reset IconManager global instance and cache
+        import src.gui.icon_manager as icon_mgr_module
+        if hasattr(icon_mgr_module, '_icon_manager') and icon_mgr_module._icon_manager is not None:
+            icon_manager = icon_mgr_module._icon_manager
+            try:
+                # Clear the icon cache to release QIcon objects
+                icon_manager.refresh_cache()
+            except Exception:
+                pass
+            # Reset the global instance
+            icon_mgr_module._icon_manager = None
+    except (ImportError, Exception):
+        pass
+
+    try:
+        # Reset any other singletons that might exist
+        from src.core.file_host_config import FileHostConfigLoader
+        if hasattr(FileHostConfigLoader, '_instance'):
+            FileHostConfigLoader._instance = None
+    except (ImportError, Exception):
+        pass
+
+    try:
+        # Clear database schema initialization tracker to avoid state leakage
+        from src.storage import database
+        if hasattr(database, '_schema_initialized_dbs'):
+            database._schema_initialized_dbs.clear()
+    except (ImportError, Exception):
+        pass
+
+    # Step 5: Process ALL pending deleteLater() calls
+    try:
+        from PyQt6.QtWidgets import QApplication
+
+        app = QApplication.instance()
+        if app is not None:
+            # Send all deferred delete events
+            app.sendPostedEvents(None, 0)  # 0 = QEvent.DeferredDelete
+
+            # Process events multiple times to ensure all deleteLater() calls are processed
+            for _ in range(5):
+                app.processEvents()
+    except (ImportError, Exception):
+        pass
+
+    # Step 6: Disconnect any lingering signal connections
+    # (Qt should handle this automatically, but we'll force cleanup)
+    try:
+        from PyQt6.QtWidgets import QApplication
+        from PyQt6.QtCore import QObject
+
+        app = QApplication.instance()
+        if app is not None:
+            # Let Qt's internal cleanup handle disconnections
+            app.processEvents()
+    except (ImportError, Exception):
+        pass
+
+    # Step 7: Force garbage collection (multiple passes)
+    gc.collect()
+    gc.collect()  # Second pass to catch circular references
+    gc.collect()  # Third pass to be absolutely sure
+
+    # Step 8: Final event processing
+    try:
+        from PyQt6.QtWidgets import QApplication
+
+        app = QApplication.instance()
+        if app is not None:
+            app.processEvents()
+    except (ImportError, Exception):
+        pass
 
 @pytest.fixture(scope="session")
 def test_root():

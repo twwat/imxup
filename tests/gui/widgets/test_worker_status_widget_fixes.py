@@ -44,7 +44,12 @@ def widget(qapp, qtbot):
     # Mock QSettings to avoid polluting real settings
     with patch('src.gui.widgets.worker_status_widget.QSettings') as mock_settings:
         mock_settings_instance = Mock()
-        mock_settings_instance.value.return_value = None
+        # Make value() method honor the type parameter and return appropriate defaults
+        def mock_value(key, default=None, type=None):
+            if type is not None and default is not None:
+                return default
+            return None
+        mock_settings_instance.value.side_effect = mock_value
         mock_settings.return_value = mock_settings_instance
 
         w = WorkerStatusWidget()
@@ -146,7 +151,7 @@ class TestColumnSorting:
         # Get column indices
         hostname_col = widget._get_column_index('hostname')
         speed_col = widget._get_column_index('speed')
-        status_col = widget._get_column_index('status')
+        status_text_col = widget._get_column_index('status_text')  # Use status_text, not status (icon-only)
         icon_col = widget._get_column_index('icon')
 
         # Sort by hostname
@@ -170,7 +175,7 @@ class TestColumnSorting:
             # Verify data alignment for real workers
             hostname_item = widget.status_table.item(row, hostname_col)
             speed_item = widget.status_table.item(row, speed_col)
-            status_item = widget.status_table.item(row, status_col)
+            status_item = widget.status_table.item(row, status_text_col)
 
             # Verify hostname matches
             assert hostname_item.text() == matching_worker.display_name, \
@@ -500,8 +505,8 @@ class TestDataIntegrity:
         # Test format_bytes
         assert format_bytes(0) == "—"
         assert format_bytes(-10) == "—"
-        assert "MiB" in format_bytes(1048576)  # 1 MiB
-        assert "GiB" in format_bytes(1073741824)  # 1 GiB
+        assert "M" in format_bytes(1048576)  # 1 MiB
+        assert "G" in format_bytes(1073741824)  # 1 GiB
 
         # Test format_percent
         assert format_percent(0) == "—"

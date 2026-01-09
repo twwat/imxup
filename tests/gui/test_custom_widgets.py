@@ -27,7 +27,7 @@ class TestTableProgressWidget:
         widget = TableProgressWidget()
         qtbot.addWidget(widget)
 
-        widget.setValue(50)
+        widget.set_progress(50)
         qtbot.wait(100)
 
         assert widget.progress == 50
@@ -37,7 +37,7 @@ class TestTableProgressWidget:
         widget = TableProgressWidget()
         qtbot.addWidget(widget)
 
-        widget.setText("Uploading...")
+        widget.set_progress(25, "Uploading...")
         qtbot.wait(100)
 
         assert "Uploading" in widget.status_text

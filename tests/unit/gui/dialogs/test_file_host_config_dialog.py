@@ -14,6 +14,7 @@ from PyQt6.QtWidgets import (
     QSpinBox, QProgressBar, QLabel, QListWidget, QMessageBox
 )
 from PyQt6.QtCore import QSettings, Qt, pyqtSignal, QObject
+from PyQt6.QtGui import QIcon
 from PyQt6.QtTest import QTest
 
 from src.gui.dialogs.file_host_config_dialog import FileHostConfigDialog
@@ -35,6 +36,8 @@ def mock_host_config():
     config.storage_left_path = ["data", "storage", "left"]
     config.storage_regex = None
     config.referral_url = "https://testhost.com/ref"
+    config.inactivity_timeout = 300
+    config.upload_timeout = None
     return config
 
 
@@ -49,36 +52,65 @@ def mock_host_config_no_auth():
     config.storage_left_path = None
     config.storage_regex = None
     config.referral_url = None
+    config.inactivity_timeout = 300
+    config.upload_timeout = None
     return config
 
 
-@pytest.fixture
-def mock_worker():
-    """Create a mock file host worker"""
-    worker = Mock()
-    worker.log_message = MagicMock()
-    worker.test_completed = MagicMock()
-    worker.storage_updated = MagicMock()
-    worker.credentials_update_requested = MagicMock()
+def create_mock_worker():
+    """Factory function to create a mock file host worker with proper signal mocking.
 
-    # Add signal-like behavior
-    worker.log_message.__getitem__ = Mock(return_value=MagicMock())
-    worker.test_completed.connect = Mock()
-    worker.test_completed.disconnect = Mock()
-    worker.storage_updated.connect = Mock()
-    worker.storage_updated.disconnect = Mock()
-    worker.log_message.connect = Mock()
-    worker.log_message.disconnect = Mock()
-    worker.credentials_update_requested.emit = Mock()
+    Returns a fresh mock worker instance with all signals properly configured
+    to support subscripting (for overloaded PyQt signals like log_message[str, str]).
+    """
+    worker = Mock()
+
+    # Create mock signal objects that support subscripting
+    log_message_signal = MagicMock()
+    # Support subscript access like log_message[str, str] - return the signal itself
+    log_message_signal.__getitem__ = Mock(return_value=log_message_signal)
+    log_message_signal.connect = Mock()
+    log_message_signal.disconnect = Mock()
+    worker.log_message = log_message_signal
+
+    test_completed_signal = MagicMock()
+    test_completed_signal.connect = Mock()
+    test_completed_signal.disconnect = Mock()
+    worker.test_completed = test_completed_signal
+
+    storage_updated_signal = MagicMock()
+    storage_updated_signal.connect = Mock()
+    storage_updated_signal.disconnect = Mock()
+    worker.storage_updated = storage_updated_signal
+
+    credentials_update_requested_signal = MagicMock()
+    credentials_update_requested_signal.emit = Mock()
+    worker.credentials_update_requested = credentials_update_requested_signal
+
+    # Add queue_test_request method for connection testing
+    worker.queue_test_request = Mock()
 
     return worker
 
 
 @pytest.fixture
+def mock_worker():
+    """Create a mock file host worker"""
+    return create_mock_worker()
+
+
+@pytest.fixture
 def mock_worker_manager(mock_worker):
-    """Create a mock FileHostWorkerManager"""
+    """Create a mock FileHostWorkerManager.
+
+    By default, get_worker returns None (host not enabled).
+    Individual tests can override get_worker.return_value with the mock_worker fixture
+    or create_mock_worker() to simulate an enabled host.
+    """
     manager = Mock()
-    manager.get_worker = Mock(return_value=mock_worker)
+    # By default, return None for get_worker (host not enabled)
+    # Individual tests can override this behavior
+    manager.get_worker = Mock(return_value=None)
     manager.is_enabled = Mock(return_value=False)
     manager.enable_host = Mock()
     manager.disable_host = Mock()
@@ -147,25 +179,29 @@ def dialog_patches(mock_qsettings, monkeypatch):
     monkeypatch.setattr('imxup.get_project_root', Mock(return_value="/tmp/imxup"))
     monkeypatch.setattr('imxup.get_central_store_base_path', Mock(return_value="/tmp/.imxup"))
 
-    # Mock file_host_config functions
-    with patch('src.core.file_host_config.get_file_host_setting') as mock_get:
-        mock_get.side_effect = lambda host_id, key, type_hint: {
-            'enabled': False,
-            'trigger': 'disabled',
-            'auto_retry': True,
-            'max_retries': 3,
-            'max_connections': 5,
-            'max_file_size_mb': 0,
-        }.get(key, None)
+    # Mock icon_manager
+    mock_icon_manager = Mock()
+    mock_icon_manager.get_icon = Mock(return_value=QIcon())  # Return QIcon instead of Mock
+    with patch('src.gui.icon_manager.get_icon_manager', return_value=mock_icon_manager):
+        # Mock file_host_config functions
+        with patch('src.core.file_host_config.get_file_host_setting') as mock_get:
+            mock_get.side_effect = lambda host_id, key, type_hint: {
+                'enabled': False,
+                'trigger': 'disabled',
+                'auto_retry': True,
+                'max_retries': 3,
+                'max_connections': 5,
+                'max_file_size_mb': 0,
+            }.get(key, None)
 
-        with patch('src.core.file_host_config.save_file_host_setting'):
-            # Mock logger functions
-            with patch('src.utils.logger.log'):
-                with patch('src.utils.logging.get_logger') as mock_logger:
-                    mock_logger_instance = Mock()
-                    mock_logger_instance.read_current_log = Mock(return_value="")
-                    mock_logger.return_value = mock_logger_instance
-                    yield
+            with patch('src.core.file_host_config.save_file_host_setting'):
+                # Mock logger functions
+                with patch('src.utils.logger.log'):
+                    with patch('src.utils.logging.get_logger') as mock_logger:
+                        mock_logger_instance = Mock()
+                        mock_logger_instance.read_current_log = Mock(return_value="")
+                        mock_logger.return_value = mock_logger_instance
+                        yield
 
 
 # ============================================================================
@@ -200,7 +236,10 @@ class TestFileHostConfigDialogInit:
         qtbot.addWidget(dialog)
 
         assert dialog is not None
-        assert dialog.creds_input is None  # No credentials input for no-auth hosts
+        # No credentials input for no-auth hosts
+        assert dialog.creds_api_key_input is None
+        assert dialog.creds_username_input is None
+        assert dialog.creds_password_input is None
 
     def test_dialog_window_properties(self, qtbot, mock_host_config, mock_worker_manager,
                                        mock_main_widgets, dialog_patches):
@@ -226,9 +265,12 @@ class TestFileHostConfigDialogInit:
         )
         qtbot.addWidget(dialog)
 
-        assert dialog.creds_input is not None
-        assert isinstance(dialog.creds_input, QLineEdit)
-        assert dialog.creds_input.echoMode() == QLineEdit.EchoMode.Password
+        # For token_login auth type, username and password inputs should be created
+        assert dialog.creds_username_input is not None
+        assert isinstance(dialog.creds_username_input, QLineEdit)
+        assert dialog.creds_password_input is not None
+        # Password input is AsteriskPasswordEdit, which is a QLineEdit subclass
+        assert isinstance(dialog.creds_password_input, QLineEdit)
 
     def test_trigger_combo_initialized(self, qtbot, mock_host_config, mock_worker_manager,
                                        mock_main_widgets, dialog_patches):
@@ -337,8 +379,11 @@ class TestFormValidation:
         )
         qtbot.addWidget(dialog)
 
-        dialog.creds_input.setText("username:password")
-        assert dialog.creds_input.text() == "username:password"
+        # For token_login, set username and password separately
+        dialog.creds_username_input.setText("username")
+        dialog.creds_password_input.setText("password")
+        assert dialog.creds_username_input.text() == "username"
+        assert dialog.creds_password_input.text() == "password"
 
     def test_credentials_show_hide_toggle(self, qtbot, mock_host_config, mock_worker_manager,
                                           mock_main_widgets, dialog_patches):
@@ -349,8 +394,11 @@ class TestFormValidation:
         )
         qtbot.addWidget(dialog)
 
-        # Initially password mode
-        assert dialog.creds_input.echoMode() == QLineEdit.EchoMode.Password
+        # Password input uses AsteriskPasswordEdit which is a custom QLineEdit
+        # Verify it's present and is the correct type
+        assert dialog.creds_password_input is not None
+        from src.gui.dialogs.file_host_config_dialog import AsteriskPasswordEdit
+        assert isinstance(dialog.creds_password_input, AsteriskPasswordEdit)
 
     def test_trigger_combo_values(self, qtbot, mock_host_config, mock_worker_manager,
                                    mock_main_widgets, dialog_patches):
@@ -432,7 +480,8 @@ class TestDirtyStateTracking:
 
         assert not dialog.has_unsaved_changes
 
-        dialog.creds_input.setText("new:credentials")
+        # Change username (for token_login auth type)
+        dialog.creds_username_input.setText("newuser")
 
         assert dialog.has_unsaved_changes
         assert dialog.apply_btn.isEnabled()
@@ -527,20 +576,63 @@ class TestSaveApplyActions:
 
     @patch('src.core.file_host_config.save_file_host_setting')
     def test_apply_saves_credentials(self, mock_save, qtbot, mock_host_config,
-                                     mock_worker_manager, mock_main_widgets, dialog_patches):
+                                     mock_worker_manager, mock_main_widgets, monkeypatch):
         """Test Apply button saves credentials"""
-        with patch('imxup.set_credential') as mock_set_cred:
-            dialog = FileHostConfigDialog(
-                None, "testhost", mock_host_config,
-                mock_main_widgets, mock_worker_manager
-            )
-            qtbot.addWidget(dialog)
+        # Track set_credential calls
+        set_cred_calls = []
 
-            dialog.creds_input.setText("user:pass")
-            dialog._on_apply_clicked()
+        def mock_set_cred(key, value):
+            set_cred_calls.append((key, value))
+            return True
 
-            # Should encrypt and save credentials
-            assert mock_set_cred.called
+        # Apply all necessary patches via monkeypatch (avoids conflict with dialog_patches)
+        monkeypatch.setattr('imxup.get_credential', Mock(return_value=None))
+        monkeypatch.setattr('imxup.set_credential', mock_set_cred)
+        monkeypatch.setattr('imxup.encrypt_password', lambda x: f"encrypted_{x}")
+        monkeypatch.setattr('imxup.decrypt_password', lambda x: x.replace("encrypted_", ""))
+        monkeypatch.setattr('imxup.get_project_root', Mock(return_value="/tmp/imxup"))
+        monkeypatch.setattr('imxup.get_central_store_base_path', Mock(return_value="/tmp/.imxup"))
+
+        # Mock icon_manager
+        mock_icon_manager = Mock()
+        mock_icon_manager.get_icon = Mock(return_value=QIcon())
+        monkeypatch.setattr('src.gui.icon_manager.get_icon_manager', lambda: mock_icon_manager)
+
+        # Mock file_host_config functions
+        monkeypatch.setattr('src.core.file_host_config.get_file_host_setting',
+                          lambda host_id, key, type_hint: {
+                              'enabled': False,
+                              'trigger': 'disabled',
+                              'auto_retry': True,
+                              'max_retries': 3,
+                              'max_connections': 5,
+                              'max_file_size_mb': 0,
+                          }.get(key, None))
+
+        # Mock logger functions
+        monkeypatch.setattr('src.utils.logger.log', Mock())
+        mock_logger_instance = Mock()
+        mock_logger_instance.read_current_log = Mock(return_value="")
+        monkeypatch.setattr('src.utils.logging.get_logger', lambda: mock_logger_instance)
+
+        dialog = FileHostConfigDialog(
+            None, "testhost", mock_host_config,
+            mock_main_widgets, mock_worker_manager
+        )
+        qtbot.addWidget(dialog)
+
+        # For token_login, set username and password separately
+        dialog.creds_username_input.setText("user")
+        dialog.creds_password_input.setText("pass")
+        # Clear saved_credentials so get_credentials() reads from widgets
+        dialog.saved_credentials = None
+
+        dialog._on_apply_clicked()
+
+        # Should encrypt and save credentials
+        assert len(set_cred_calls) > 0
+        # Verify the key matches the expected pattern
+        assert any("file_host_testhost_credentials" in call[0] for call in set_cred_calls)
 
     @patch('src.core.file_host_config.save_file_host_setting')
     def test_apply_saves_trigger_settings(self, mock_save, qtbot, mock_host_config,
@@ -611,9 +703,12 @@ class TestSaveApplyActions:
         )
         qtbot.addWidget(dialog)
 
-        dialog.creds_input.setText("newuser:newpass")
+        # For token_login, set username and password separately
+        dialog.creds_username_input.setText("newuser")
+        dialog.creds_password_input.setText("newpass")
         dialog._on_apply_clicked()
 
+        # Cached credentials should be in "username:password" format
         assert dialog.saved_credentials == "newuser:newpass"
 
     @patch('src.core.file_host_config.save_file_host_setting')
@@ -725,7 +820,9 @@ class TestEnableDisableActions:
                                                        dialog_patches):
         """Test connection button is enabled when host is enabled"""
         mock_worker_manager.is_enabled.return_value = True
-        mock_worker_manager.get_worker.return_value = Mock()
+        # Use factory to create properly mocked worker with subscriptable signals
+        worker = create_mock_worker()
+        mock_worker_manager.get_worker.return_value = worker
 
         dialog = FileHostConfigDialog(
             None, "testhost", mock_host_config,
@@ -739,7 +836,9 @@ class TestEnableDisableActions:
                                         mock_main_widgets, dialog_patches):
         """Test clicking disable calls worker manager disable_host"""
         mock_worker_manager.is_enabled.return_value = True
-        mock_worker_manager.get_worker.return_value = Mock()
+        # Use factory to create properly mocked worker with subscriptable signals
+        worker = create_mock_worker()
+        mock_worker_manager.get_worker.return_value = worker
 
         dialog = FileHostConfigDialog(
             None, "testhost", mock_host_config,
@@ -816,8 +915,9 @@ class TestConnectionTesting:
                                                    dialog_patches):
         """Test connection test requires credentials to be entered"""
         mock_worker_manager.is_enabled.return_value = True
-        mock_worker = Mock()
-        mock_worker_manager.get_worker.return_value = mock_worker
+        # Use factory to create properly mocked worker with subscriptable signals
+        worker = create_mock_worker()
+        mock_worker_manager.get_worker.return_value = worker
 
         dialog = FileHostConfigDialog(
             None, "testhost", mock_host_config,
@@ -825,8 +925,11 @@ class TestConnectionTesting:
         )
         qtbot.addWidget(dialog)
 
-        # Empty credentials
-        dialog.creds_input.setText("")
+        # Empty credentials - for token_login, both should be empty
+        dialog.creds_username_input.setText("")
+        dialog.creds_password_input.setText("")
+        # Clear saved_credentials to ensure widget values are checked
+        dialog.saved_credentials = None
 
         # Mock the unsaved changes check
         with patch.object(dialog, '_check_unsaved_changes', return_value=True):
@@ -847,7 +950,9 @@ class TestConnectionTesting:
         qtbot.addWidget(dialog)
         dialog.worker = None  # Simulate no worker
 
-        dialog.creds_input.setText("user:pass")
+        # For token_login, set username and password
+        dialog.creds_username_input.setText("user")
+        dialog.creds_password_input.setText("pass")
 
         # Mock the unsaved changes check
         with patch.object(dialog, '_check_unsaved_changes', return_value=True):
@@ -860,42 +965,51 @@ class TestConnectionTesting:
                                                   dialog_patches):
         """Test connection test queues test request to worker"""
         mock_worker_manager.is_enabled.return_value = True
-        mock_worker = Mock()
-        mock_worker.queue_test_request = Mock()
-        mock_worker_manager.get_worker.return_value = mock_worker
+        # Use factory to create properly mocked worker with subscriptable signals
+        worker = create_mock_worker()
+        mock_worker_manager.get_worker.return_value = worker
 
         dialog = FileHostConfigDialog(
             None, "testhost", mock_host_config,
             mock_main_widgets, mock_worker_manager
         )
         qtbot.addWidget(dialog)
-        dialog.worker = mock_worker
+        dialog.worker = worker
 
-        dialog.creds_input.setText("user:pass")
+        # For token_login, set username and password
+        dialog.creds_username_input.setText("user")
+        dialog.creds_password_input.setText("pass")
+        # Clear saved_credentials so get_credentials() reads from widgets
+        dialog.saved_credentials = None
 
         # Mock the unsaved changes check
         with patch.object(dialog, '_check_unsaved_changes', return_value=True):
             dialog.run_full_test()
 
-        mock_worker.queue_test_request.assert_called_once_with("user:pass")
+        # Credentials should be combined as "username:password"
+        worker.queue_test_request.assert_called_once_with("user:pass")
 
     def test_test_connection_updates_ui_during_test(self, qtbot, mock_host_config,
                                                      mock_worker_manager, mock_main_widgets,
                                                      dialog_patches):
         """Test connection test updates UI to show testing state"""
         mock_worker_manager.is_enabled.return_value = True
-        mock_worker = Mock()
-        mock_worker.queue_test_request = Mock()
-        mock_worker_manager.get_worker.return_value = mock_worker
+        # Use factory to create properly mocked worker with subscriptable signals
+        worker = create_mock_worker()
+        mock_worker_manager.get_worker.return_value = worker
 
         dialog = FileHostConfigDialog(
             None, "testhost", mock_host_config,
             mock_main_widgets, mock_worker_manager
         )
         qtbot.addWidget(dialog)
-        dialog.worker = mock_worker
+        dialog.worker = worker
 
-        dialog.creds_input.setText("user:pass")
+        # For token_login, set username and password
+        dialog.creds_username_input.setText("user")
+        dialog.creds_password_input.setText("pass")
+        # Clear saved_credentials so get_credentials() reads from widgets
+        dialog.saved_credentials = None
 
         # Mock the unsaved changes check
         with patch.object(dialog, '_check_unsaved_changes', return_value=True):
@@ -1007,8 +1121,16 @@ class TestGetterMethods:
         )
         qtbot.addWidget(dialog)
 
-        dialog.saved_credentials = None
-        dialog.creds_input.setText("widget:credentials")
+        # Delete saved_credentials attribute to force reading from widgets
+        # Note: Setting to None is not enough because hasattr() still returns True
+        del dialog.saved_credentials
+        # For token_login, set username and password separately
+        dialog.creds_username_input.setText("widget")
+        # For AsteriskPasswordEdit, unmask first to set text properly
+        dialog.creds_password_input.set_masked(False)
+        dialog.creds_password_input.setText("credentials")
+        dialog.creds_password_input.set_masked(True)
+        # get_credentials() should combine them as "username:password"
         assert dialog.get_credentials() == "widget:credentials"
 
     def test_get_trigger_settings_returns_cached_value(self, qtbot, mock_host_config,

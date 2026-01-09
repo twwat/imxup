@@ -71,12 +71,21 @@ def queue_manager(mock_store):
         with patch('src.storage.queue_manager.QSettings'):
             manager = QueueManager()
             yield manager
-            # Cleanup
+            # Cleanup - use proper shutdown to avoid Windows file locking issues
+            # The scan worker thread must be stopped AND joined before temp files can be deleted
             manager._scan_worker_running = False
             try:
                 manager._scan_queue.put(None, timeout=0.1)
             except (queue.Full, AttributeError):
                 pass
+            # CRITICAL: Wait for scan worker thread to finish to release file handles
+            if manager._scan_worker and manager._scan_worker.is_alive():
+                manager._scan_worker.join(timeout=3.0)
+            # Force garbage collection to release any lingering PIL file handles
+            import gc
+            gc.collect()
+            # Small delay to ensure OS releases file handles on Windows
+            time.sleep(0.1)
 
 
 @pytest.fixture

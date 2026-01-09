@@ -169,13 +169,17 @@ class TestDisableHostBasic:
 
     @patch('src.processing.file_host_worker_manager.FileHostWorkerManager._persist_enabled_state')
     def test_disable_host_stops_worker(self, mock_persist, manager, mock_worker):
-        """Test disabling host stops and waits for worker."""
+        """Test disabling host stops worker (non-blocking).
+
+        Note: disable_host() calls stop() but NOT wait() - cleanup happens in background.
+        See disable_host() implementation: "Don't wait() - let it finish in background"
+        """
         manager.workers['rapidgator'] = mock_worker
 
         manager.disable_host('rapidgator')
 
         mock_worker.stop.assert_called_once()
-        mock_worker.wait.assert_called_once()
+        # Note: wait() is NOT called in disable_host() - only in shutdown_all()
         assert 'rapidgator' not in manager.workers
 
     @patch('src.processing.file_host_worker_manager.FileHostWorkerManager._persist_enabled_state')
@@ -653,49 +657,70 @@ class TestPersistEnabledState:
 class TestInitEnabledHosts:
     """Test initializing enabled hosts at startup."""
 
-    @patch('src.core.file_host_config.get_config_manager')
-    @patch('src.core.file_host_config.get_file_host_setting')
+    @patch('src.processing.file_host_worker_manager.get_config_manager')
     @patch('imxup.get_config_path')
     def test_init_enabled_hosts_calls_enable_for_enabled(self, mock_config_path,
-                                                         mock_get_setting, mock_config_mgr,
+                                                         mock_config_mgr,
                                                          manager):
-        """Test init enables hosts marked as enabled."""
+        """Test init enables hosts marked as enabled in INI file."""
         mock_config_path.return_value = '/config.ini'
 
         mock_host_config = Mock()
         mock_config_mgr.return_value.hosts = {'rapidgator': mock_host_config}
 
-        # Mock get_file_host_setting to return enabled=True for rapidgator
-        mock_get_setting.return_value = True
+        # Mock INI file reading to return enabled=True for rapidgator
+        ini_content = {
+            'FILE_HOSTS': {
+                'rapidgator_enabled': 'True'
+            }
+        }
 
         with patch.object(manager, 'enable_host') as mock_enable, \
-             patch('os.path.exists', return_value=True):
+             patch('os.path.exists', return_value=True), \
+             patch('configparser.ConfigParser') as mock_config_parser:
+
+            mock_parser_instance = Mock()
+            mock_config_parser.return_value = mock_parser_instance
+
+            # Mock ConfigParser methods
+            mock_parser_instance.has_section.return_value = True
+            mock_parser_instance.has_option.return_value = True
+            mock_parser_instance.getboolean.return_value = True
+
             manager.init_enabled_hosts()
 
-            mock_enable.assert_called_with('rapidgator')
+            # enable_host should be called with host_id and persist=False (during startup)
+            mock_enable.assert_called_once_with('rapidgator', persist=False)
 
-    @patch('src.core.file_host_config.get_config_manager')
-    @patch('src.core.file_host_config.get_file_host_setting')
+    @patch('src.processing.file_host_worker_manager.get_config_manager')
     @patch('imxup.get_config_path')
     def test_init_enabled_hosts_skips_disabled(self, mock_config_path,
-                                              mock_get_setting, mock_config_mgr,
+                                              mock_config_mgr,
                                               manager):
-        """Test init skips hosts marked as disabled."""
+        """Test init skips hosts marked as disabled in INI file."""
         mock_config_path.return_value = '/config.ini'
 
         mock_host_config = Mock()
         mock_config_mgr.return_value.hosts = {'rapidgator': mock_host_config}
 
-        # Mock get_file_host_setting to return enabled=False
-        mock_get_setting.return_value = False
-
+        # Mock INI file reading to return enabled=False for rapidgator
         with patch.object(manager, 'enable_host') as mock_enable, \
-             patch('os.path.exists', return_value=True):
+             patch('os.path.exists', return_value=True), \
+             patch('configparser.ConfigParser') as mock_config_parser:
+
+            mock_parser_instance = Mock()
+            mock_config_parser.return_value = mock_parser_instance
+
+            # Mock ConfigParser methods - enabled is False
+            mock_parser_instance.has_section.return_value = True
+            mock_parser_instance.has_option.return_value = True
+            mock_parser_instance.getboolean.return_value = False
+
             manager.init_enabled_hosts()
 
             mock_enable.assert_not_called()
 
-    @patch('src.core.file_host_config.get_config_manager')
+    @patch('src.processing.file_host_worker_manager.get_config_manager')
     @patch('imxup.get_config_path')
     def test_init_enabled_hosts_empty_config(self, mock_config_path, mock_config_mgr, manager):
         """Test init with no hosts in config."""
@@ -707,11 +732,10 @@ class TestInitEnabledHosts:
 
         assert len(manager.workers) == 0
 
-    @patch('src.core.file_host_config.get_config_manager')
-    @patch('src.core.file_host_config.get_file_host_setting')
+    @patch('src.processing.file_host_worker_manager.get_config_manager')
     @patch('imxup.get_config_path')
     def test_init_enabled_hosts_multiple_mixed(self, mock_config_path,
-                                              mock_get_setting, mock_config_mgr,
+                                              mock_config_mgr,
                                               manager):
         """Test init with multiple hosts, mixed enabled/disabled."""
         mock_config_path.return_value = '/config.ini'
@@ -724,18 +748,31 @@ class TestInitEnabledHosts:
         mock_config_mgr.return_value.hosts = hosts_config
 
         # Only first two are enabled
-        def setting_side_effect(host_id, *args):
-            return host_id in ['rapidgator', 'mega']
-
-        mock_get_setting.side_effect = setting_side_effect
+        def getboolean_side_effect(*args, **kwargs):
+            # getboolean is called with ('FILE_HOSTS', key_name)
+            if len(args) >= 2:
+                key_name = args[1]
+                return key_name in ['rapidgator_enabled', 'mega_enabled']
+            return False
 
         with patch.object(manager, 'enable_host') as mock_enable, \
-             patch('os.path.exists', return_value=True):
+             patch('os.path.exists', return_value=True), \
+             patch('configparser.ConfigParser') as mock_config_parser:
+
+            mock_parser_instance = Mock()
+            mock_config_parser.return_value = mock_parser_instance
+
+            # Mock ConfigParser methods
+            mock_parser_instance.has_section.return_value = True
+            mock_parser_instance.has_option.return_value = True
+            mock_parser_instance.getboolean.side_effect = getboolean_side_effect
+
             manager.init_enabled_hosts()
 
+            # Should call enable_host for rapidgator and mega, both with persist=False
             assert mock_enable.call_count == 2
-            mock_enable.assert_any_call('rapidgator')
-            mock_enable.assert_any_call('mega')
+            mock_enable.assert_any_call('rapidgator', persist=False)
+            mock_enable.assert_any_call('mega', persist=False)
 
 
 # ============================================================================

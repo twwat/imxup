@@ -17,7 +17,7 @@ from unittest.mock import Mock, MagicMock, patch
 
 import pytest
 from PyQt6.QtWidgets import QApplication
-from PyQt6.QtCore import QSettings, Qt
+from PyQt6.QtCore import QSettings, Qt, QThread
 from PyQt6.QtGui import QIcon
 
 # Add src to path for imports
@@ -41,6 +41,134 @@ def qapp() -> QApplication:
 def qapp_args() -> list:
     """Command-line arguments for QApplication"""
     return []
+
+
+@pytest.fixture(autouse=True)
+def mock_qmessagebox_for_tests(monkeypatch):
+    """
+    CRITICAL: Mock QMessageBox to prevent modal dialogs from blocking test teardown.
+
+    Many dialogs show confirmation messages in closeEvent, which blocks pytest-qt's
+    internal _close_widgets() function during teardown.
+
+    This fixture auto-returns Discard for all warning/question dialogs.
+    """
+    from PyQt6.QtWidgets import QMessageBox
+
+    # Store original methods
+    original_warning = QMessageBox.warning
+    original_question = QMessageBox.question
+    original_information = QMessageBox.information
+    original_critical = QMessageBox.critical
+
+    # Create mock that returns Discard (to skip saving) or Yes (to proceed)
+    def mock_warning(*args, **kwargs):
+        return QMessageBox.StandardButton.Discard
+
+    def mock_question(*args, **kwargs):
+        return QMessageBox.StandardButton.Yes
+
+    def mock_information(*args, **kwargs):
+        return QMessageBox.StandardButton.Ok
+
+    def mock_critical(*args, **kwargs):
+        return QMessageBox.StandardButton.Ok
+
+    # Patch all static dialog methods
+    monkeypatch.setattr(QMessageBox, 'warning', mock_warning)
+    monkeypatch.setattr(QMessageBox, 'question', mock_question)
+    monkeypatch.setattr(QMessageBox, 'information', mock_information)
+    monkeypatch.setattr(QMessageBox, 'critical', mock_critical)
+
+    yield
+
+    # monkeypatch auto-restores on teardown
+
+
+@pytest.fixture(autouse=True)
+def cleanup_qthreads():
+    """
+    Automatically cleanup any running QThreads after each test.
+    This prevents "QThread: Destroyed while thread is still running" warnings
+    and fixes pytest hanging issues.
+
+    This is a critical fixture that runs after EVERY test to ensure no threads
+    are left running.
+
+    NOTE: This is a GUI-specific fixture. The main conftest.py also has
+    cleanup_qt_resources which does more comprehensive cleanup.
+    """
+    # Before test: nothing to do, just yield
+    yield
+
+    # After test: Cleanup GUI-specific resources
+
+    # 1. Close all open dialogs and windows
+    app = QApplication.instance()
+    if app is None:
+        return
+
+    # Close all dialogs first (they may have timers/threads)
+    from PyQt6.QtWidgets import QDialog, QWidget
+    for dialog in app.topLevelWidgets():
+        if isinstance(dialog, QDialog) and dialog.isVisible():
+            # Stop any timers in the dialog
+            from PyQt6.QtCore import QTimer
+            for timer in dialog.findChildren(QTimer):
+                if timer.isActive():
+                    timer.stop()
+
+            # CRITICAL: Clear unsaved changes flag to prevent QMessageBox during close
+            # This prevents modal dialogs from blocking test teardown
+            if hasattr(dialog, 'has_unsaved_changes'):
+                dialog.has_unsaved_changes = False
+
+            # Close the dialog
+            try:
+                dialog.close()
+                dialog.deleteLater()
+            except Exception:
+                pass
+
+    # Process events to let dialogs close
+    app.processEvents()
+
+    # 2. Stop all QTimers
+    from PyQt6.QtCore import QTimer
+    for timer in app.findChildren(QTimer):
+        if timer.isActive():
+            timer.stop()
+
+    app.processEvents()
+
+    # 3. Get all QThread instances
+    threads_to_cleanup = []
+    for obj in app.findChildren(QThread):
+        if obj.isRunning():
+            threads_to_cleanup.append(obj)
+
+    # 4. Stop each thread properly
+    for thread in threads_to_cleanup:
+        # Request stop if thread has stop method
+        if hasattr(thread, 'stop') and callable(thread.stop):
+            try:
+                thread.stop()
+            except Exception:
+                pass  # Ignore errors during stop
+
+        # Try to quit the thread event loop
+        thread.quit()
+
+        # Wait briefly for thread to finish (100ms max to avoid hanging)
+        if not thread.wait(100):
+            # If it didn't finish quickly, terminate it immediately
+            thread.terminate()
+            thread.wait(50)  # Short wait after terminate
+
+    # 5. Process all pending deleteLater() calls
+    app.sendPostedEvents(None, 0)  # 0 = QEvent.DeferredDelete
+    app.processEvents()
+    app.processEvents()  # Second pass
 
 
 @pytest.fixture
@@ -94,16 +222,33 @@ def mock_qsettings(monkeypatch) -> Generator[Mock, None, None]:
     """
     Mock QSettings to avoid writing to actual system settings.
     Returns a mock that simulates QSettings behavior.
+    Each test gets a fresh isolated dictionary to prevent pollution between tests.
+    All instances within the same test share the same backing store (class variable).
     """
-    settings_dict = {}
+    # Create a fresh storage dict for this test
+    # Use a list as a mutable container so we can swap the dict without losing reference
+    shared_storage = [{}]
 
     class MockQSettings:
         def __init__(self, *args, **kwargs):
-            self.data = settings_dict
+            # All instances within a test share the same dictionary
+            # Expose it as .data so the test fixture can access it
+            self.data = shared_storage[0]
 
         def value(self, key, default=None, type=None):
-            val = self.data.get(key, default)
-            if type is not None and val is not None:
+            val = shared_storage[0].get(key, default)
+            if type is not None:
+                if val is None:
+                    # QSettings returns default type instances for None values
+                    if type == list:
+                        return []
+                    elif type == str:
+                        return ""
+                    elif type == int:
+                        return 0
+                    elif type == bool:
+                        return False
+                    return default
                 try:
                     return type(val)
                 except (ValueError, TypeError):
@@ -111,16 +256,16 @@ def mock_qsettings(monkeypatch) -> Generator[Mock, None, None]:
             return val
 
         def setValue(self, key, value):
-            self.data[key] = value
+            shared_storage[0][key] = value
 
         def remove(self, key):
-            self.data.pop(key, None)
+            shared_storage[0].pop(key, None)
 
         def contains(self, key):
-            return key in self.data
+            return key in shared_storage[0]
 
         def clear(self):
-            self.data.clear()
+            shared_storage[0].clear()
 
         def sync(self):
             pass
@@ -132,9 +277,24 @@ def mock_qsettings(monkeypatch) -> Generator[Mock, None, None]:
             pass
 
     mock_settings = MockQSettings
+    # Patch QSettings in PyQt6.QtCore AND in all modules that import it
     monkeypatch.setattr('PyQt6.QtCore.QSettings', mock_settings)
+    monkeypatch.setattr('src.gui.widgets.worker_status_widget.QSettings', mock_settings)
+    monkeypatch.setattr('src.gui.widgets.file_hosts_settings_widget.QSettings', mock_settings)
+    monkeypatch.setattr('src.gui.widgets.tabbed_gallery.QSettings', mock_settings)
+    # CRITICAL: Also patch in test modules that have already imported QSettings
+    # Check sys.modules for already-loaded test modules
+    import sys
+    for module_name, module in list(sys.modules.items()):
+        if module and 'test_' in module_name and hasattr(module, 'QSettings'):
+            try:
+                monkeypatch.setattr(f'{module_name}.QSettings', mock_settings)
+            except (AttributeError, ModuleNotFoundError):
+                pass  # Module structure doesn't allow patching
     yield mock_settings
-    settings_dict.clear()
+
+    # Clear after test to prevent pollution (clearing the dict in-place)
+    shared_storage[0].clear()
 
 
 @pytest.fixture
@@ -168,12 +328,10 @@ def mock_queue_store() -> Mock:
         {'id': 1, 'name': 'Main', 'tab_type': 'system', 'display_order': 0,
          'color_hint': None, 'created_ts': 0, 'updated_ts': 0, 'is_active': True}
     ]
-    queue_store.get_tab_by_name.return_value = {
-        'id': 1, 'name': 'Main', 'tab_type': 'system', 'display_order': 0
-    }
+    # Note: get_tab_by_name doesn't exist on QueueStore - use get_all_tabs and filter
     queue_store.create_tab.return_value = 2
     queue_store.delete_tab.return_value = True
-    queue_store.get_galleries_by_tab.return_value = []
+    queue_store.load_items_by_tab.return_value = []  # Correct method name
 
     return queue_store
 
@@ -186,11 +344,13 @@ def mock_queue_manager() -> Mock:
     """
     from src.storage.queue_manager import QueueManager
 
-    queue_manager = Mock(spec=QueueManager)
-    queue_manager.get_all_galleries.return_value = []
-    queue_manager.add_gallery.return_value = "test-gallery-id"
-    queue_manager.update_gallery_status.return_value = True
-    queue_manager.remove_gallery.return_value = True
+    # Use Mock without spec to allow any attribute access
+    queue_manager = Mock()
+    queue_manager.get_all_items.return_value = []
+    queue_manager.get_item.return_value = None
+    queue_manager.add_item.return_value = True
+    queue_manager.update_item_status.return_value = True
+    queue_manager.remove_item.return_value = True
 
     return queue_manager
 

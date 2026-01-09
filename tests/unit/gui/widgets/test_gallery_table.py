@@ -15,7 +15,7 @@ from unittest.mock import Mock, MagicMock, patch, call
 import pytest
 from PyQt6.QtWidgets import (
     QTableWidget, QTableWidgetItem, QApplication, QMenu,
-    QHeaderView, QMessageBox, QInputDialog, QDialog
+    QHeaderView, QMessageBox, QInputDialog, QDialog, QMainWindow
 )
 from PyQt6.QtCore import Qt, QPoint, QUrl, QMimeData, QTimer
 from PyQt6.QtGui import QIcon, QFont, QDragEnterEvent, QDropEvent, QKeyEvent
@@ -373,7 +373,7 @@ class TestCellEditing:
     def test_delete_key_calls_handler(self, gallery_table, mock_queue_manager):
         """Test Delete key triggers deletion"""
         # Create a parent mock with delete method
-        parent_mock = Mock()
+        parent_mock = Mock(spec=QMainWindow)
         parent_mock.delete_selected_items = Mock()
         parent_mock.queue_manager = mock_queue_manager
 
@@ -443,7 +443,7 @@ class TestContextMenu:
         gallery_table.context_menu_helper = helper
 
         # Find parent window
-        parent_mock = Mock()
+        parent_mock = Mock(spec=QMainWindow)
         parent_mock.queue_manager = gallery_table.queue_manager
 
         with patch.object(gallery_table, 'parent', return_value=parent_mock):
@@ -474,7 +474,7 @@ class TestGalleryManagementActions:
         """Test opening file manager dialog"""
         path = "/tmp/test_gallery"
 
-        parent_mock = Mock()
+        parent_mock = Mock(spec=QMainWindow)
         parent_mock.queue_manager = mock_queue_manager
 
         with patch.object(gallery_table, 'parent', return_value=parent_mock):
@@ -492,7 +492,7 @@ class TestGalleryManagementActions:
         path = "/tmp/test_gallery"
         mock_queue_manager.get_item.return_value = sample_gallery_item
 
-        parent_mock = Mock()
+        parent_mock = Mock(spec=QMainWindow)
         parent_mock.queue_manager = mock_queue_manager
         parent_mock._update_specific_gallery_display = Mock()
         parent_mock.regenerate_bbcode_for_gallery = Mock()
@@ -517,7 +517,7 @@ class TestGalleryManagementActions:
         path = "/tmp/test_gallery"
         mock_queue_manager.get_item.return_value = sample_gallery_item
 
-        parent_mock = Mock()
+        parent_mock = Mock(spec=QMainWindow)
         parent_mock.queue_manager = mock_queue_manager
 
         # Mock QInputDialog
@@ -536,7 +536,7 @@ class TestGalleryManagementActions:
 
     def test_start_selected_via_menu(self, gallery_table, mock_queue_manager):
         """Test starting selected items"""
-        parent_mock = Mock()
+        parent_mock = Mock(spec=QMainWindow)
         parent_mock.queue_manager = mock_queue_manager
         parent_mock._update_specific_gallery_display = Mock()
 
@@ -558,7 +558,7 @@ class TestGalleryManagementActions:
 
     def test_delete_selected_via_menu(self, gallery_table):
         """Test delete selected delegates to parent"""
-        parent_mock = Mock()
+        parent_mock = Mock(spec=QMainWindow)
         parent_mock.delete_selected_items = Mock()
 
         with patch.object(gallery_table, 'parent', return_value=parent_mock):
@@ -585,7 +585,7 @@ class TestUploadStatusOperations:
 
     def test_cancel_selected_via_menu_single(self, gallery_table, mock_queue_manager):
         """Test cancelling single upload"""
-        parent_mock = Mock()
+        parent_mock = Mock(spec=QMainWindow)
         parent_mock.queue_manager = mock_queue_manager
         parent_mock.cancel_single_item = Mock()
 
@@ -595,7 +595,7 @@ class TestUploadStatusOperations:
 
     def test_cancel_selected_via_menu_multiple(self, gallery_table, mock_queue_manager):
         """Test cancelling multiple uploads"""
-        parent_mock = Mock()
+        parent_mock = Mock(spec=QMainWindow)
         parent_mock.queue_manager = mock_queue_manager
         parent_mock.cancel_multiple_items = Mock()
 
@@ -610,7 +610,7 @@ class TestUploadStatusOperations:
         paths = ["/tmp/gallery1", "/tmp/gallery2"]
         mock_queue_manager.get_item.return_value = sample_gallery_item
 
-        parent_mock = Mock()
+        parent_mock = Mock(spec=QMainWindow)
         parent_mock.queue_manager = mock_queue_manager
 
         with patch.object(gallery_table, 'parent', return_value=parent_mock):
@@ -623,7 +623,7 @@ class TestUploadStatusOperations:
         paths = ["/tmp/gallery1"]
         mock_queue_manager.get_item.return_value = sample_gallery_item
 
-        parent_mock = Mock()
+        parent_mock = Mock(spec=QMainWindow)
         parent_mock.queue_manager = mock_queue_manager
 
         with patch.object(gallery_table, 'parent', return_value=parent_mock):
@@ -636,7 +636,7 @@ class TestUploadStatusOperations:
         paths = ["/tmp/gallery1"]
         mock_queue_manager.get_item.return_value = sample_gallery_item
 
-        parent_mock = Mock()
+        parent_mock = Mock(spec=QMainWindow)
         parent_mock.queue_manager = mock_queue_manager
 
         with patch.object(gallery_table, 'parent', return_value=parent_mock):
@@ -649,7 +649,7 @@ class TestUploadStatusOperations:
         paths = ["/tmp/gallery1"]
         mock_queue_manager.get_item.return_value = sample_gallery_item
 
-        parent_mock = Mock()
+        parent_mock = Mock(spec=QMainWindow)
         parent_mock.queue_manager = mock_queue_manager
         parent_mock.refresh_filter = Mock()
 
@@ -669,7 +669,7 @@ class TestUploadStatusOperations:
         """Test gallery reset cancellation"""
         paths = ["/tmp/gallery1"]
 
-        parent_mock = Mock()
+        parent_mock = Mock(spec=QMainWindow)
         parent_mock.queue_manager = mock_queue_manager
 
         # Mock QMessageBox to reject
@@ -704,7 +704,7 @@ class TestBBCodeOperations:
         sample_item.name = "Test"
         mock_queue_manager.get_item.return_value = sample_item
 
-        parent_mock = Mock()
+        parent_mock = Mock(spec=QMainWindow)
         parent_mock.queue_manager = mock_queue_manager
         parent_mock._get_central_storage_path = Mock(return_value=str(tmp_path))
         parent_mock._build_gallery_filenames = Mock(return_value=("", "", str(bbcode_file.name)))
@@ -734,7 +734,7 @@ class TestBBCodeOperations:
 
         mock_queue_manager.get_item.side_effect = items
 
-        parent_mock = Mock()
+        parent_mock = Mock(spec=QMainWindow)
         parent_mock.queue_manager = mock_queue_manager
         parent_mock._get_central_storage_path = Mock(return_value=str(tmp_path))
         parent_mock.statusBar = Mock(return_value=Mock(showMessage=Mock()))
@@ -759,7 +759,7 @@ class TestBBCodeOperations:
 
         mock_queue_manager.get_item.return_value = sample_item
 
-        parent_mock = Mock()
+        parent_mock = Mock(spec=QMainWindow)
         parent_mock.queue_manager = mock_queue_manager
         parent_mock.statusBar = Mock(return_value=Mock(showMessage=Mock()))
 
@@ -821,7 +821,7 @@ class TestDragAndDrop:
         event.position.return_value = Mock(toPoint=Mock(return_value=QPoint(10, 10)))
         event.acceptProposedAction = Mock()
 
-        parent_mock = Mock()
+        parent_mock = Mock(spec=QMainWindow)
         parent_mock.queue_manager = mock_queue_manager
         sample_item = Mock()
         sample_item.status = "ready"
@@ -846,7 +846,7 @@ class TestDragAndDrop:
         sample_item.status = "ready"
         mock_queue_manager.get_item.return_value = sample_item
 
-        parent_mock = Mock()
+        parent_mock = Mock(spec=QMainWindow)
         parent_mock.queue_manager = mock_queue_manager
         parent_mock.refresh_filter = Mock()
 
@@ -907,7 +907,7 @@ class TestMouseKeyboardEvents:
         gallery_table.setItem(0, GalleryTableWidget.COL_NAME, name_item)
         gallery_table.setCurrentCell(0, GalleryTableWidget.COL_NAME)
 
-        parent_mock = Mock()
+        parent_mock = Mock(spec=QMainWindow)
         parent_mock.handle_view_button = Mock()
         parent_mock.queue_manager = mock_queue_manager
 
@@ -930,7 +930,7 @@ class TestTabManagement:
 
         mock_queue_manager.get_item.return_value = sample_gallery_item
 
-        parent_mock = Mock()
+        parent_mock = Mock(spec=QMainWindow)
         parent_mock.tab_manager = mock_tab_manager
         parent_mock.queue_manager = mock_queue_manager
         parent_mock.refresh_filter = Mock()
@@ -954,7 +954,7 @@ class TestScrollingAndIconRefresh:
         """Test scrolling triggers icon refresh when needed"""
         gallery_table._needs_full_icon_refresh = True
 
-        parent_mock = Mock()
+        parent_mock = Mock(spec=QMainWindow)
         parent_mock.refresh_all_status_icons = Mock()
         parent_mock._refresh_button_icons = Mock()
 
@@ -968,7 +968,7 @@ class TestScrollingAndIconRefresh:
         """Test scrolling doesn't refresh when flag is False"""
         gallery_table._needs_full_icon_refresh = False
 
-        parent_mock = Mock()
+        parent_mock = Mock(spec=QMainWindow)
         parent_mock.refresh_all_status_icons = Mock()
 
         with patch.object(gallery_table, 'parent', return_value=parent_mock):

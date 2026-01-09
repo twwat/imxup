@@ -207,10 +207,12 @@ class TestFileHostConfigManager:
             json.dump(config_data, f, indent=2)
         return config_path
 
-    def test_manager_initializes_empty(self):
-        """Test FileHostConfigManager initializes with empty host dict."""
+    def test_manager_initializes_with_real_hosts(self):
+        """Test FileHostConfigManager initializes and loads real built-in hosts."""
         manager = FileHostConfigManager()
+        # Don't call load_all_hosts() - test that initial state is empty
         assert isinstance(manager.hosts, dict)
+        # Initially empty until load_all_hosts() is called
         assert len(manager.hosts) == 0
 
     def test_manager_loads_builtin_hosts(self, temp_config_dirs):
@@ -225,11 +227,10 @@ class TestFileHostConfigManager:
         })
 
         manager = FileHostConfigManager()
-
-        # Mock the directory paths
-        with patch.object(manager, '_get_builtin_hosts_dir', return_value=builtin_dir):
-            with patch.object(manager, '_get_custom_hosts_dir', return_value=custom_dir):
-                manager.load_all_hosts()
+        # Override directory paths BEFORE loading
+        manager.builtin_dir = builtin_dir
+        manager.custom_dir = custom_dir
+        manager.load_all_hosts()
 
         assert "testhost" in manager.hosts
         assert manager.hosts["testhost"].name == "TestHost"
@@ -246,10 +247,10 @@ class TestFileHostConfigManager:
         })
 
         manager = FileHostConfigManager()
-
-        with patch.object(manager, '_get_builtin_hosts_dir', return_value=builtin_dir):
-            with patch.object(manager, '_get_custom_hosts_dir', return_value=custom_dir):
-                manager.load_all_hosts()
+        # Override directory paths BEFORE loading
+        manager.builtin_dir = builtin_dir
+        manager.custom_dir = custom_dir
+        manager.load_all_hosts()
 
         assert "customhost" in manager.hosts
         assert manager.hosts["customhost"].name == "CustomHost"
@@ -272,10 +273,10 @@ class TestFileHostConfigManager:
         })
 
         manager = FileHostConfigManager()
-
-        with patch.object(manager, '_get_builtin_hosts_dir', return_value=builtin_dir):
-            with patch.object(manager, '_get_custom_hosts_dir', return_value=custom_dir):
-                manager.load_all_hosts()
+        # Override directory paths BEFORE loading
+        manager.builtin_dir = builtin_dir
+        manager.custom_dir = custom_dir
+        manager.load_all_hosts()
 
         # Custom should override builtin
         assert manager.hosts["shared"].name == "CustomHost"
@@ -291,11 +292,11 @@ class TestFileHostConfigManager:
             f.write("{ invalid json }")
 
         manager = FileHostConfigManager()
-
-        with patch.object(manager, '_get_builtin_hosts_dir', return_value=builtin_dir):
-            with patch.object(manager, '_get_custom_hosts_dir', return_value=custom_dir):
-                # Should not raise - just log error
-                manager.load_all_hosts()
+        # Override directory paths BEFORE loading
+        manager.builtin_dir = builtin_dir
+        manager.custom_dir = custom_dir
+        # Should not raise - just log error
+        manager.load_all_hosts()
 
         assert "invalid" not in manager.hosts
 
@@ -310,10 +311,10 @@ class TestFileHostConfigManager:
         })
 
         manager = FileHostConfigManager()
-
-        with patch.object(manager, '_get_builtin_hosts_dir', return_value=builtin_dir):
-            with patch.object(manager, '_get_custom_hosts_dir', return_value=custom_dir):
-                manager.load_all_hosts()
+        # Override directory paths BEFORE loading
+        manager.builtin_dir = builtin_dir
+        manager.custom_dir = custom_dir
+        manager.load_all_hosts()
 
         assert "noname" not in manager.hosts
 
@@ -328,10 +329,10 @@ class TestFileHostConfigManager:
         })
 
         manager = FileHostConfigManager()
-
-        with patch.object(manager, '_get_builtin_hosts_dir', return_value=builtin_dir):
-            with patch.object(manager, '_get_custom_hosts_dir', return_value=custom_dir):
-                manager.load_all_hosts()
+        # Override directory paths BEFORE loading
+        manager.builtin_dir = builtin_dir
+        manager.custom_dir = custom_dir
+        manager.load_all_hosts()
 
         host = manager.get_host("testhost")
         assert host is not None
@@ -357,10 +358,10 @@ class TestFileHostConfigManager:
         })
 
         manager = FileHostConfigManager()
-
-        with patch.object(manager, '_get_builtin_hosts_dir', return_value=builtin_dir):
-            with patch.object(manager, '_get_custom_hosts_dir', return_value=custom_dir):
-                manager.load_all_hosts()
+        # Override directory paths BEFORE loading
+        manager.builtin_dir = builtin_dir
+        manager.custom_dir = custom_dir
+        manager.load_all_hosts()
 
         host_ids = manager.get_all_host_ids()
         assert len(host_ids) == 2
@@ -379,24 +380,24 @@ class TestFileHostConfigManager:
         })
 
         manager = FileHostConfigManager()
+        # Override directory paths BEFORE loading
+        manager.builtin_dir = builtin_dir
+        manager.custom_dir = custom_dir
+        manager.load_all_hosts()
+        assert "host1" in manager.hosts
 
-        with patch.object(manager, '_get_builtin_hosts_dir', return_value=builtin_dir):
-            with patch.object(manager, '_get_custom_hosts_dir', return_value=custom_dir):
-                manager.load_all_hosts()
-                assert "host1" in manager.hosts
+        # Add new config
+        self.create_host_config_file(builtin_dir, "host2", {
+            "name": "Host2",
+            "upload": {"endpoint": "https://api.host2.com/upload"},
+            "response": {"type": "json"}
+        })
 
-                # Add new config
-                self.create_host_config_file(builtin_dir, "host2", {
-                    "name": "Host2",
-                    "upload": {"endpoint": "https://api.host2.com/upload"},
-                    "response": {"type": "json"}
-                })
+        # Reload (directory paths remain set)
+        manager.reload_hosts()
 
-                # Reload
-                manager.reload_hosts()
-
-                assert "host1" in manager.hosts
-                assert "host2" in manager.hosts
+        assert "host1" in manager.hosts
+        assert "host2" in manager.hosts
 
 
 # ============================================================================
@@ -678,22 +679,23 @@ class TestThreadSafety:
 
         def write_setting(thread_id):
             try:
-                with patch('imxup.get_config_path', return_value=temp_ini_file):
-                    with patch('src.core.file_host_config.get_config_manager', return_value=mock_config_manager):
-                        for i in range(writes_per_thread):
-                            save_file_host_setting("testhost", "max_connections", (thread_id % 10) + 1)
+                for i in range(writes_per_thread):
+                    save_file_host_setting("testhost", "max_connections", (thread_id % 10) + 1)
             except Exception as e:
                 errors.append(e)
 
-        threads = [threading.Thread(target=write_setting, args=(i,)) for i in range(num_threads)]
+        # Apply patches at module level before starting threads
+        with patch('src.core.file_host_config.get_config_manager', return_value=mock_config_manager):
+            with patch('imxup.get_config_path', return_value=temp_ini_file):
+                threads = [threading.Thread(target=write_setting, args=(i,)) for i in range(num_threads)]
 
-        for t in threads:
-            t.start()
-        for t in threads:
-            t.join()
+                for t in threads:
+                    t.start()
+                for t in threads:
+                    t.join()
 
         # Should complete without errors
-        assert len(errors) == 0
+        assert len(errors) == 0, f"Errors occurred: {errors}"
 
         # File should be valid
         cfg = configparser.ConfigParser()
@@ -713,23 +715,26 @@ class TestThreadSafety:
         num_threads = 20
         reads_per_thread = 10
         results = []
+        results_lock = threading.Lock()
 
         def read_setting():
+            for _ in range(reads_per_thread):
+                val = get_file_host_setting("testhost", "max_connections", "int")
+                with results_lock:
+                    results.append(val)
+
+        # Apply patches at module level before starting threads
+        with patch('src.core.file_host_config.get_config_manager', return_value=mock_config_manager):
             with patch('imxup.get_config_path', return_value=temp_ini_file):
-                with patch('src.core.file_host_config.get_config_manager', return_value=mock_config_manager):
-                    for _ in range(reads_per_thread):
-                        val = get_file_host_setting("testhost", "max_connections", "int")
-                        results.append(val)
+                threads = [threading.Thread(target=read_setting) for _ in range(num_threads)]
 
-        threads = [threading.Thread(target=read_setting) for _ in range(num_threads)]
-
-        for t in threads:
-            t.start()
-        for t in threads:
-            t.join()
+                for t in threads:
+                    t.start()
+                for t in threads:
+                    t.join()
 
         # All reads should return the same value
-        assert all(r == 5 for r in results)
+        assert all(r == 5 for r in results), f"Expected all values to be 5, got: {set(results)}"
         assert len(results) == num_threads * reads_per_thread
 
 

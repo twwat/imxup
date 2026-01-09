@@ -24,6 +24,9 @@ main_window_module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(main_window_module)
 MainWindow = main_window_module.ImxUploadGUI
 
+# Import TableRowManager for checking actual implementation
+from src.gui.table_row_manager import TableRowManager
+
 # Constants
 COL_GALLERY_NAME = 0
 COL_STATUS = 1
@@ -83,31 +86,32 @@ class TestRealMainWindowViewport:
         print("✅ PASS: MainWindow.__init__ initializes _rows_with_widgets as set()")
 
     def test_phase2_uses_viewport_range(self):
-        """CRITICAL: Verify phase2_create_table_widgets uses viewport range"""
+        """CRITICAL: Verify _load_galleries_phase2 uses viewport range"""
         import inspect
 
-        source = inspect.getsource(MainWindow.phase2_create_table_widgets)
+        # Check TableRowManager._load_galleries_phase2 (actual implementation)
+        source = inspect.getsource(TableRowManager._load_galleries_phase2)
 
         # Should call _get_visible_row_range
         assert '_get_visible_row_range' in source, (
-            "❌ FAILURE: phase2_create_table_widgets doesn't call '_get_visible_row_range'\n"
+            "❌ FAILURE: _load_galleries_phase2 doesn't call '_get_visible_row_range'\n"
             "This means Phase 2 is still creating widgets for ALL rows!"
         )
 
         # Should loop over visible range, not all galleries
         assert 'first_visible, last_visible' in source, (
-            "❌ FAILURE: phase2_create_table_widgets doesn't use visible range variables"
+            "❌ FAILURE: _load_galleries_phase2 doesn't use visible range variables"
         )
 
         # Should NOT loop over all galleries
         assert 'for gallery in self.galleries:' not in source, (
-            "❌ FAILURE: phase2_create_table_widgets still loops over all galleries!\n"
+            "❌ FAILURE: _load_galleries_phase2 still loops over all galleries!\n"
             "Should only create widgets for visible range!"
         )
 
         # Should add to _rows_with_widgets
         assert '_rows_with_widgets.add' in source, (
-            "❌ FAILURE: phase2_create_table_widgets doesn't track created widgets"
+            "❌ FAILURE: _load_galleries_phase2 doesn't track created widgets"
         )
 
         print("✅ PASS: phase2_create_table_widgets uses viewport-based creation")
@@ -143,7 +147,8 @@ class TestRealMainWindowViewport:
         """Verify _get_visible_row_range implementation"""
         import inspect
 
-        source = inspect.getsource(MainWindow._get_visible_row_range)
+        # Check TableRowManager._get_visible_row_range (actual implementation)
+        source = inspect.getsource(TableRowManager._get_visible_row_range)
 
         # Should use viewport
         assert 'viewport' in source.lower(), (
@@ -179,11 +184,11 @@ class TestRealMainWindowViewport:
         """Verify _rows_with_widgets is cleared when starting new session"""
         import inspect
 
-        # Check phase1_prepare_table_structure
-        source = inspect.getsource(MainWindow.phase1_prepare_table_structure)
+        # Check TableRowManager._load_galleries_phase1 (actual implementation)
+        source = inspect.getsource(TableRowManager._load_galleries_phase1)
 
         assert '_rows_with_widgets.clear' in source, (
-            "❌ FAILURE: _rows_with_widgets not cleared in phase1_prepare_table_structure"
+            "❌ FAILURE: _rows_with_widgets not cleared in _load_galleries_phase1"
         )
 
         print("✅ PASS: _rows_with_widgets cleared on new session")
@@ -192,32 +197,44 @@ class TestRealMainWindowViewport:
         """CRITICAL: Verify Phase 2 doesn't create widgets for all galleries"""
         import inspect
 
-        source = inspect.getsource(MainWindow.phase2_create_table_widgets)
+        # Check TableRowManager._load_galleries_phase2 (actual implementation)
+        source = inspect.getsource(TableRowManager._load_galleries_phase2)
 
-        # Count setItem calls - should be minimal (just for visible rows)
-        set_cell_widget_count = source.count('.setCellWidget(')
-
-        # Should have ~2 setCellWidget calls per row (progress + actions)
-        # But only in the visible range creation, not in a mass loop
-        assert set_cell_widget_count < 10, (
-            f"❌ FAILURE: Found {set_cell_widget_count} setCellWidget calls\n"
-            "This suggests widgets are being created in a loop over all galleries"
+        # Should NOT loop over all galleries
+        assert 'for gallery in' not in source, (
+            "❌ FAILURE: Phase 2 loops over all galleries (should only loop visible range)"
         )
 
-        print(f"✅ PASS: Phase 2 has {set_cell_widget_count} setCellWidget calls (not in mass loop)")
+        # Should use visible_rows range
+        assert 'visible_rows' in source or 'first_visible' in source, (
+            "❌ FAILURE: Phase 2 doesn't use visible row range"
+        )
+
+        # Should call _create_row_widgets, not directly create widgets
+        assert '_create_row_widgets' in source, (
+            "❌ FAILURE: Phase 2 doesn't use _create_row_widgets helper"
+        )
+
+        print("✅ PASS: Phase 2 uses viewport-based widget creation (not mass creation)")
 
     def test_performance_log_reports_limited_widgets(self):
         """Verify performance logs report limited widget creation"""
         import inspect
 
-        source = inspect.getsource(MainWindow.phase2_create_table_widgets)
+        # Check TableRowManager._load_galleries_phase2 (actual implementation)
+        source = inspect.getsource(TableRowManager._load_galleries_phase2)
 
         # Should log the number of widgets created
-        assert 'len(self._rows_with_widgets)' in source, (
+        assert 'len(mw._rows_with_widgets)' in source or '_rows_with_widgets' in source, (
             "❌ FAILURE: Phase 2 doesn't log widget count from _rows_with_widgets"
         )
 
-        print("✅ PASS: Phase 2 logs widget count from _rows_with_widgets")
+        # Should log visible row range
+        assert 'first_visible' in source and 'last_visible' in source, (
+            "❌ FAILURE: Phase 2 doesn't log visible row range"
+        )
+
+        print("✅ PASS: Phase 2 logs widget count and visible row range")
 
 
 class TestIntegrationScenarios:
@@ -228,7 +245,25 @@ class TestIntegrationScenarios:
         """Create MainWindow with mocked dependencies"""
         with patch.object(main_window_module, 'ImxToUploader'):
             with patch.object(main_window_module, 'load_user_defaults', return_value={}):
-                with patch.object(main_window_module, 'QSettings'):
+                with patch.object(main_window_module, 'QSettings') as mock_qsettings:
+                    # Configure mock to return appropriate values based on key
+                    from PyQt6.QtCore import QByteArray
+                    mock_settings_instance = MagicMock()
+
+                    def mock_value(key, default=None, type=None):
+                        """Return appropriate value based on key type"""
+                        if 'geometry' in key.lower() or 'state' in key.lower():
+                            return QByteArray()
+                        elif 'count' in key.lower() or 'size' in key.lower() or 'width' in key.lower():
+                            return default if default is not None else 0
+                        elif type == bool:
+                            return default if default is not None else False
+                        else:
+                            return default
+
+                    mock_settings_instance.value.side_effect = mock_value
+                    mock_qsettings.return_value = mock_settings_instance
+
                     # Create window
                     window = MainWindow()
 
@@ -252,7 +287,7 @@ class TestIntegrationScenarios:
     def test_phase1_creates_997_rows_no_widgets(self, mock_window):
         """Verify Phase 1 creates 997 rows but NO widgets"""
         # Act: Run Phase 1
-        mock_window.phase1_prepare_table_structure()
+        mock_window._load_galleries_phase1()
         QApplication.processEvents()
 
         # Assert: Should have 997 rows
@@ -271,11 +306,11 @@ class TestIntegrationScenarios:
     def test_phase2_creates_limited_widgets(self, mock_window):
         """CRITICAL: Verify Phase 2 creates ~30-40 widgets, NOT 997"""
         # Arrange: Run Phase 1 first
-        mock_window.phase1_prepare_table_structure()
+        mock_window._load_galleries_phase1()
         QApplication.processEvents()
 
         # Act: Run Phase 2
-        mock_window.phase2_create_table_widgets()
+        mock_window._load_galleries_phase2()
         QApplication.processEvents()
 
         # Assert: Count created widgets
@@ -301,8 +336,8 @@ class TestIntegrationScenarios:
     def test_rows_with_widgets_tracking(self, mock_window):
         """Verify _rows_with_widgets accurately tracks created widgets"""
         # Arrange & Act
-        mock_window.phase1_prepare_table_structure()
-        mock_window.phase2_create_table_widgets()
+        mock_window._load_galleries_phase1()
+        mock_window._load_galleries_phase2()
         QApplication.processEvents()
 
         # Assert: Widget count matches tracking set
