@@ -101,7 +101,9 @@ def mock_metrics_store():
     with patch('src.utils.metrics_store.get_metrics_store') as mock_get:
         mock_store = MagicMock()
         mock_get.return_value = mock_store
-        mock_store.get_hosts_with_history.return_value = {
+
+        # Default data for all_time period (used by get_hosts_for_period)
+        all_time_data = {
             'rapidgator': {
                 'files_uploaded': 100,
                 'files_failed': 5,
@@ -119,6 +121,36 @@ def mock_metrics_store():
                 'success_rate': 96.2,
             },
         }
+
+        # Session data (less uploads than all_time)
+        session_data = {
+            'rapidgator': {
+                'files_uploaded': 10,
+                'files_failed': 1,
+                'bytes_uploaded': 107374182,  # ~100 MiB
+                'peak_speed': 5242880,
+                'avg_speed': 2621440,
+                'success_rate': 90.9,
+            },
+        }
+
+        # Configure get_hosts_for_period to return different data per period
+        def mock_get_hosts_for_period(period):
+            if period == 'session':
+                return session_data
+            elif period == 'all_time':
+                return all_time_data
+            elif period == 'today':
+                return {'rapidgator': {**session_data['rapidgator'], 'files_uploaded': 5}}
+            elif period == 'week':
+                return {'rapidgator': {**all_time_data['rapidgator'], 'files_uploaded': 30}}
+            elif period == 'month':
+                return {'rapidgator': {**all_time_data['rapidgator'], 'files_uploaded': 80}}
+            return {}
+
+        mock_store.get_hosts_for_period.side_effect = mock_get_hosts_for_period
+        mock_store.get_hosts_with_history.return_value = all_time_data
+
         yield mock_get, mock_store
 
 
@@ -399,3 +431,136 @@ class TestCenterOnParent:
             dialog_center_x = dialog.x() + dialog.width() // 2
             # Should be roughly centered on screen
             assert abs(screen_center_x - dialog_center_x) < 100
+
+
+class TestCurrentSessionDisplay:
+    """Test current session length display."""
+
+    def test_current_session_label_exists(self, dialog):
+        """Test current session label is present."""
+        assert hasattr(dialog, '_current_session_label')
+        assert dialog._current_session_label is not None
+
+    def test_current_session_shows_duration(self, dialog):
+        """Test current session label shows formatted duration."""
+        text = dialog._current_session_label.text()
+        # Dialog was created with session_start 5 minutes ago
+        # Should show something like "5m 0s" or similar
+        assert text != "0s"
+        assert "m" in text or "s" in text
+
+    def test_current_session_is_separate_from_total(self, dialog):
+        """Test current session is shown separately from total time."""
+        current = dialog._current_session_label.text()
+        total = dialog._total_time_label.text()
+        # Current should be shorter than total (which includes stored time)
+        assert current != total
+
+
+class TestTimeframeFilter:
+    """Test timeframe filter dropdown functionality."""
+
+    def test_timeframe_combo_exists(self, dialog):
+        """Test timeframe combo box is present."""
+        assert hasattr(dialog, '_timeframe_combo')
+        assert dialog._timeframe_combo is not None
+
+    def test_timeframe_combo_has_all_options(self, dialog):
+        """Test all timeframe options are available."""
+        combo = dialog._timeframe_combo
+        assert combo.count() == 5
+
+        # Check option labels
+        labels = [combo.itemText(i) for i in range(combo.count())]
+        assert "All Time" in labels
+        assert "This Session" in labels
+        assert "Today" in labels
+        assert "Last 7 Days" in labels
+        assert "Last 30 Days" in labels
+
+    def test_timeframe_combo_has_correct_data(self, dialog):
+        """Test combo box items have correct userData values."""
+        combo = dialog._timeframe_combo
+        data_values = [combo.itemData(i) for i in range(combo.count())]
+        assert "all_time" in data_values
+        assert "session" in data_values
+        assert "today" in data_values
+        assert "week" in data_values
+        assert "month" in data_values
+
+    def test_timeframe_default_is_all_time(self, dialog):
+        """Test default selection is All Time."""
+        combo = dialog._timeframe_combo
+        assert combo.currentData() == "all_time"
+        assert combo.currentText() == "All Time"
+
+    def test_timeframe_change_refreshes_table(self, dialog, mock_metrics_store):
+        """Test changing timeframe refreshes the table."""
+        mock_get, mock_store = mock_metrics_store
+        table = dialog._file_hosts_table
+
+        # Get initial row count with all_time data
+        initial_row_count = table.rowCount()
+        assert initial_row_count == 2  # rapidgator + filedot
+
+        # Change to session which only has rapidgator
+        dialog._timeframe_combo.setCurrentIndex(1)  # "This Session"
+
+        # Table should now only have 1 row
+        assert table.rowCount() == 1
+
+    def test_session_filter_shows_session_data(self, dialog, mock_metrics_store):
+        """Test session filter shows session-specific data."""
+        # Change to session filter
+        dialog._timeframe_combo.setCurrentIndex(1)  # "This Session"
+
+        table = dialog._file_hosts_table
+        # Session data has 10 files for rapidgator
+        files_item = table.item(0, 1)
+        assert files_item.text() == "10"
+
+    def test_empty_period_shows_message(self, qtbot, mock_qsettings):
+        """Test empty period shows appropriate message."""
+        with patch('src.utils.metrics_store.get_metrics_store') as mock_get:
+            mock_store = MagicMock()
+            mock_get.return_value = mock_store
+            mock_store.get_hosts_for_period.return_value = {}
+
+            from src.gui.dialogs.statistics_dialog import StatisticsDialog
+            dlg = StatisticsDialog()
+            qtbot.addWidget(dlg)
+
+            table = dlg._file_hosts_table
+            assert table.rowCount() == 1
+            item = table.item(0, 0)
+            assert "No file host uploads" in item.text()
+
+
+class TestOnTimeframeChanged:
+    """Test _on_timeframe_changed handler."""
+
+    def test_handler_calls_load_stats(self, dialog, mock_metrics_store):
+        """Test handler triggers stats reload."""
+        mock_get, mock_store = mock_metrics_store
+
+        # Reset call count
+        mock_store.get_hosts_for_period.reset_mock()
+
+        # Trigger change
+        dialog._on_timeframe_changed(1)
+
+        # Should have called get_hosts_for_period
+        assert mock_store.get_hosts_for_period.called
+
+    def test_handler_uses_selected_period(self, dialog, mock_metrics_store):
+        """Test handler uses the currently selected period."""
+        mock_get, mock_store = mock_metrics_store
+
+        # Set to "Today"
+        dialog._timeframe_combo.setCurrentIndex(2)
+        mock_store.get_hosts_for_period.reset_mock()
+
+        dialog._on_timeframe_changed(2)
+
+        # Should have called with 'today'
+        mock_store.get_hosts_for_period.assert_called_with('today')
