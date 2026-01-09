@@ -4,7 +4,66 @@ All notable changes to IMXuploader will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
-## [Unreleased]
+## [0.7.1] - 2026-01-07
+
+v0.7.1: Statistics dialog, IMX status scanner performance, comprehensive tests
+
+### Added:
+- Statistics dialog (Tools > Statistics) with session/upload/scanner metrics
+  - Two-tab interface: General stats and File Hosts breakdown
+  - Tracks app startups, first startup timestamp, total time open
+  - Shows upload totals, fastest speed record with timestamp
+  - Displays per-host file upload statistics from MetricsStore
+- Add Statistics button to adaptive quick settings panel
+- Add session time tracking (accumulated across app launches)
+- Add format_duration() support for days (e.g., "2d 5h 30m")
+
+### Performance:
+- Fix massive UI freeze in ImageStatusDialog (50+ seconds → instant)
+  - Disable ResizeToContents during batch table updates
+  - Block signals and suspend sorting during bulk operations
+- Optimize ImageStatusChecker with batch preprocessing
+  - Single batch query replaces O(n) per-path queries
+  - O(1) path-to-row lookup via pre-built index
+  - Batch database writes via bulk_update_gallery_imx_status()
+- Add quick count feature showing "Found: X images" within 2-3 seconds
+
+### Thread Safety:
+- Add threading.Lock to ImageStatusChecker for shared state protection
+- Fix race condition with _cancelled flag preventing stale results
+- Improve dialog cleanup timing (signals remain connected during checks)
+
+### UI/UX:
+- Add animated spinner to ImageStatusDialog (4-state dot animation)
+- Add theme-aware status colors (green/amber/red) for online status
+- Add NumericTableItem for proper numeric sorting in tables
+- Add StatusColorDelegate preserving colors on row selection
+- Simplify status display to single word (Online/Partial/Offline)
+- Remove detailed offline URL tree view (cleaner presentation)
+- Update worker status widget with clickable icon buttons
+- Optimize host logos (reduced file sizes)
+
+### Other Fixes:
+- Fix is_dark_mode() using correct QSettings organization name
+- Fix fastest_kbps_timestamp not being saved when record set
+- Fix QSettings namespace consistency (ImxUploader/Stats)
+- Fix test expectations for non-breaking space in format functions
+
+### Tests:
+- Add test_statistics_dialog.py (29 tests, 99% coverage)
+- Add test_image_status_checker.py (956 lines)
+- Add test_image_status_dialog.py (717 lines)
+- Add test_rename_worker_status_check.py (1,358 lines)
+- Update test_format_utils.py with NBSP constant and days tests
+- Total: ~3,400 new lines of test code
+
+### Refactoring:
+- Extract format_duration() to format_utils.py (DRY principle)
+- Reorganize rename_worker.py structure
+- Standardize button labels in adaptive settings panel
+- Apply code formatting pass to custom_widgets.py
+
+## [00.6.15] - 2025-12-29~
 
 ### Changed
 - Extracted ThemeManager from main_window.py
@@ -311,6 +370,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 | Version | Date | Highlights |
 |---------|------|------------|
+| 0.7.1  | 2026-01-07 | Statistics, thread safety, performance | 
 | 0.6.13 | 2025-12-26 | Help dialog, emoji PNG support, quick settings |
 | 0.6.12 | 2025-12-25 | Worker table refactor, ArtifactHandler, worker logos |
 | 0.6.11 | 2025-12-24 | Thread-safety fixes, worker lifecycle improvements |
