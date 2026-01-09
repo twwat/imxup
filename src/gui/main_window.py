@@ -1145,15 +1145,27 @@ class ImxUploadGUI(QMainWindow):
         self.table_row_manager._set_status_text_cell(row, status)
 
     def _on_selection_changed(self, selected, deselected):
-        """Handle gallery table selection changes to refresh icons"""
+        """Handle gallery table selection changes to refresh icons.
+
+        Only updates rows that actually changed selection state (from selected
+        and deselected parameters) instead of all rows, avoiding O(N²) complexity
+        when using Ctrl+A or other bulk selection operations.
+        """
         try:
             # For tabbed gallery system, use the inner table
             inner_table = getattr(self.gallery_table, 'table', None)
             if not inner_table or not hasattr(inner_table, 'rowCount'):
                 return
-                
-            # Refresh icons for all visible rows (selection state might have changed)
-            for row in range(inner_table.rowCount()):
+
+            # Collect unique rows that changed selection state
+            changed_rows = set()
+            for index in selected.indexes():
+                changed_rows.add(index.row())
+            for index in deselected.indexes():
+                changed_rows.add(index.row())
+
+            # Only refresh icons for rows that actually changed
+            for row in changed_rows:
                 # Get status from the queue item
                 name_item = inner_table.item(row, GalleryTableWidget.COL_NAME)
                 if name_item:
@@ -1161,7 +1173,6 @@ class ImxUploadGUI(QMainWindow):
                     if path and path in self.queue_manager.items:
                         item = self.queue_manager.items[path]
                         self._set_status_cell_icon(row, item.status)
-                        self._set_status_text_cell(row, item.status)
 
         except Exception as e:
             log(f"Error in selection change handler: {e}", level="warning", category="ui")
