@@ -350,6 +350,8 @@ class TestUploadWorkerProcessResults:
         mock_item.path = "/path/to/gallery"
         mock_item.name = "Test Gallery"
         mock_item.total_images = 50
+        mock_item.start_time = time.time()  # Set numeric timestamp
+        mock_item.uploaded_bytes = 1024 * 1024  # Set numeric value
 
         results = {
             'successful_count': 50,
@@ -375,6 +377,8 @@ class TestUploadWorkerProcessResults:
         mock_item.path = "/path/to/gallery"
         mock_item.name = "Test Gallery"
         mock_item.total_images = 50
+        mock_item.start_time = time.time()  # Set numeric timestamp
+        mock_item.uploaded_bytes = 1024 * 900  # 45 files of ~20KB each
 
         results = {
             'successful_count': 45,
@@ -415,6 +419,8 @@ class TestUploadWorkerProcessResults:
         mock_item.path = "/path/to/gallery"
         mock_item.name = "Test Gallery"
         mock_item.total_images = 50
+        mock_item.start_time = time.time()  # Set numeric timestamp
+        mock_item.uploaded_bytes = 1024 * 600  # 30 files worth of data
 
         worker._soft_stop_requested_for = mock_item.path
 

@@ -37,20 +37,24 @@ def qapp():
 
 
 @pytest.fixture
-def widget(qapp):
-    """Create a WorkerStatusWidget for testing."""
-    widget = WorkerStatusWidget()
-    return widget
-
-
-@pytest.fixture
 def mock_settings(monkeypatch):
     """Mock QSettings to avoid writing to real settings."""
     mock_qs = MagicMock(spec=QSettings)
-    mock_qs.value.return_value = None
+    # Configure value() to return the default parameter value
+    # This is important for settings access with defaults like .value("key", 0, type=int)
+    def mock_value(key, default=None, **kwargs):
+        return default
+    mock_qs.value.side_effect = mock_value
     monkeypatch.setattr("src.gui.widgets.worker_status_widget.QSettings",
                        lambda *args, **kwargs: mock_qs)
     return mock_qs
+
+
+@pytest.fixture
+def widget(qapp, mock_settings):
+    """Create a WorkerStatusWidget for testing with mocked settings."""
+    widget = WorkerStatusWidget()
+    return widget
 
 
 # ============================================================================
@@ -70,10 +74,10 @@ class TestColumnHeaderAlignment:
         assert host_col.alignment & Qt.AlignmentFlag.AlignLeft
 
     def test_status_column_alignment(self, widget):
-        """Verify 'Status' column header is left-aligned."""
-        # Status column should use left alignment
-        status_col = next((c for c in widget._active_columns if c.id == 'status'), None)
-        assert status_col is not None, "Status column not found"
+        """Verify 'Status Text' column header is left-aligned."""
+        # Status text column should use left alignment
+        status_col = next((c for c in widget._active_columns if c.id == 'status_text'), None)
+        assert status_col is not None, "Status text column not found"
 
         # Check alignment flags
         assert status_col.alignment & Qt.AlignmentFlag.AlignLeft
@@ -125,7 +129,7 @@ class TestEmDashFormatting:
         """Test format_bytes returns formatted value for positive."""
         result = format_bytes(1024)
         assert result != "—"
-        assert "KiB" in result
+        assert "K" in result
 
     def test_format_count_zero_returns_emdash(self):
         """Test format_count returns em-dash for zero."""
@@ -156,17 +160,17 @@ class TestEmDashFormatting:
         assert "75.5" in result
 
     def test_format_speed_always_shows_value(self, widget):
-        """Test _format_speed shows value (em-dash for 0, MiB/s for non-zero)."""
+        """Test _format_speed shows value (em-dash for 0, M/s for non-zero)."""
         result = widget._format_speed(0.0)
         # Actually, it appears 0.0 shows em-dash
         # This is acceptable behavior - zero speed shows em-dash
-        # Non-zero speeds show MiB/s
-        assert result in ["—", "0.00 MiB/s"]
+        # Non-zero speeds show M/s
+        assert result in ["—", "0.00 M/s"]
 
     def test_format_speed_nonzero(self, widget):
         """Test _format_speed formats non-zero speeds."""
         result = widget._format_speed(1024 * 1024)  # 1 MiB/s
-        assert "MiB/s" in result
+        assert "M/s" in result
         assert "1.00" in result
 
 
@@ -284,16 +288,16 @@ class TestRegressionMetricsIntegration:
         speeds = [0.0, 100, 1024 * 1024, 5 * 1024 * 1024]
         results = [widget._format_speed(s) for s in speeds]
 
-        # Results can be em-dash or MiB/s format
-        # All should be either em-dash or contain MiB/s
-        assert all((r == "—" or "MiB/s" in r) for r in results)
+        # Results can be em-dash or M/s format
+        # All should be either em-dash or contain M/s
+        assert all((r == "—" or "M/s" in r) for r in results)
 
-        # Check non-zero speeds have MiB/s
+        # Check non-zero speeds have M/s
         for speed, result in zip(speeds[1:], results[1:]):
-            assert "MiB/s" in result
+            assert "M/s" in result
             parts = result.split(" ")
             assert len(parts) == 2
-            assert parts[1] == "MiB/s"
+            assert parts[1] == "M/s"
 
 
 # ============================================================================
@@ -314,14 +318,14 @@ class TestEdgeCases:
         # 1 PiB (Pebibyte)
         petabyte = 1024 ** 5
         result = format_bytes(petabyte)
-        assert "PiB" in result
+        assert "P" in result
         assert "—" not in result
 
     def test_boundary_1024(self):
         """Test formatting at 1024 boundary."""
         result = format_bytes(1024)
-        assert "KiB" in result
-        assert "1.0 KiB" in result
+        assert "K" in result
+        assert "1.0 K" in result
 
     def test_format_count_large_number(self):
         """Test format_count with large numbers."""

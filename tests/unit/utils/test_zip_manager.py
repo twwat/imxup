@@ -62,7 +62,7 @@ class TestCreateOrReuseZip:
         """Test creating a new ZIP file"""
         manager = ZIPManager(temp_dir=tmp_path)
         zip_path = manager.create_or_reuse_zip(
-            gallery_id=1,
+            db_id=1,
             folder_path=gallery_folder,
             gallery_name="Test Gallery"
         )
@@ -99,7 +99,7 @@ class TestCreateOrReuseZip:
         """Test ZIP filename includes gallery name"""
         manager = ZIPManager(temp_dir=tmp_path)
         zip_path = manager.create_or_reuse_zip(
-            gallery_id=42,
+            db_id=42,
             folder_path=gallery_folder,
             gallery_name="My Test Gallery"
         )
@@ -111,7 +111,7 @@ class TestCreateOrReuseZip:
         """Test ZIP filename without gallery name"""
         manager = ZIPManager(temp_dir=tmp_path)
         zip_path = manager.create_or_reuse_zip(
-            gallery_id=42,
+            db_id=42,
             folder_path=gallery_folder
         )
 

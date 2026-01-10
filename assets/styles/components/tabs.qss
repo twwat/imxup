@@ -1,0 +1,41 @@
+/* ============================================================================
+   ImxUp GUI Stylesheet - TAB COMPONENT
+   ============================================================================
+
+   Tab bar and tab widget styling.
+
+   ============================================================================ */
+
+/* ==========================================================================
+   BASE TAB STYLING (Theme-Independent)
+   ========================================================================== */
+
+QTabBar::tab { padding: 4px 10px; margin-right: 2px; min-width: 60px; border-top-left-radius: 6px; border-top-right-radius: 6px; font-weight: bold; }
+
+/* ==========================================================================
+   LIGHT THEME
+   ========================================================================== */
+
+/* LIGHT_THEME_START */
+
+QTabBar::tab                 { background-color: $colors.light.tab.inactive_bg; border: 1px solid $colors.light.button.border; border-bottom: none; color: $colors.light.tab.inactive_text; font-weight: 600; }
+QTabBar::tab:selected        { background-color: $colors.light.tab.active_bg; border-bottom: 3px solid $colors.light.tab.border; border-left: 1px solid #999; border-right: 1px solid #999; border-top: 1px solid #999; color: $colors.light.tab.active_text; font-weight: 600; }
+QTabBar::tab:hover:!selected { background-color:#5a7ac1f1; color: #9cc4df; border: 1px solid $colors.light.accent.primary; }
+QTabBar::tab:!selected:hover { color: #212529; }
+QTabWidget::pane             { background-color: #fff; border: 1px solid #999999; }
+
+/* LIGHT_THEME_END */
+
+/* ==========================================================================
+   DARK THEME
+   ========================================================================== */
+
+/* DARK_THEME_START */
+
+QTabBar::tab                 { background-color: $colors.dark.tab.inactive_bg; border: 1px solid $colors.dark.border.light; border-bottom: none; color: $colors.dark.tab.inactive_text; font-weight: 600; }
+QTabBar::tab:selected        { background-color: $colors.dark.tab.active_bg; border-bottom: 3px solid $colors.dark.tab.border; color: $colors.dark.tab.active_text; font-weight: 600; }
+QTabBar::tab:hover:!selected { background-color: #a8164d79; border: 1px solid #d93498db; border-radius: 3px; }
+QTabBar::tab:!selected:hover { color: #f0f0f0; }
+QTabWidget::pane             { background-color: $colors.dark.background.primary; border: 1px solid $colors.dark.border.light; }
+
+/* DARK_THEME_END */

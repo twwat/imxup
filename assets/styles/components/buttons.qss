@@ -1,0 +1,108 @@
+/* ============================================================================
+   ImxUp GUI Stylesheet - BUTTON COMPONENT
+   ============================================================================
+
+   All button styling including quick settings, action buttons, and icon buttons.
+
+   ============================================================================ */
+
+/* ==========================================================================
+   BASE BUTTON STYLING (Theme-Independent)
+   ========================================================================== */
+
+QTableWidget QPushButton { border: none; }
+
+QPushButton[class="icon-btn"]        { background-color: transparent; border: none; padding: 2px; }
+QPushButton[class="icon-btn"]:hover  { border: 1px solid #999999; background-color: #33999999; border-radius: 3px; }
+
+/* Quick settings buttons - compact mode (icon-only) */
+QPushButton[class="quick-settings-btn"] { min-height: 28px; max-height: 28px; margin: 1px; min-width: 32px; font-weight: 600; font-size: 12px; }
+QPushButton[class="theme-toggle-btn"]   { min-height: 30px; max-height: 32px; margin: 1px; }
+QPushButton[class="log-viewer-btn"]     { min-height: 28px; max-height: 28px; margin: 1px; }
+
+QPushButton[class="comprehensive-settings"] { min-height: 30px; max-height: 32px; min-width: 34px; font-weight: 700; margin: 1px; }
+
+/* Action buttons at bottom: Start all, Pause All, Clear Completed, Browse */
+QPushButton[class="main-action-btn"] { min-height: 22px; max-height: 28px; font-weight: 700; margin: 1px 6px; font-size: 13px; vertical-align: middle; padding: 2px; }
+
+QPushButton[class="host-enable-btn"],
+QPushButton[class="host-disable-btn"] { min-height: 24px; max-height: 24px; }
+
+/* Shutdown dialog buttons - forced light theme (theme-independent) */
+QPushButton[class="btn-shutdown-danger"] {
+    min-width: 100px;
+    background-color: $colors.light.status.error_light;
+    color: white;
+    font-weight: bold;
+    padding: 6px 12px;
+}
+QPushButton[class="btn-shutdown-danger"]:hover { background-color: $colors.light.status.error; }
+
+QPushButton[class="btn-shutdown-success"] {
+    min-width: 80px;
+    background-color: $colors.light.status.success;
+    color: white;
+    font-weight: bold;
+    padding: 6px 12px;
+}
+QPushButton[class="btn-shutdown-success"]:hover { background-color: #229954; }
+
+QPushButton[class="btn-shutdown-default"] {
+    min-width: 120px;
+    padding: 6px 12px;
+}
+
+/* ==========================================================================
+   LIGHT THEME
+   ========================================================================== */
+
+/* LIGHT_THEME_START */
+
+QPushButton:hover        { background-color: $colors.light.accent.hover; border: 1px solid $colors.light.border.hover; border-radius: 3px; color: #101010; }
+QPushButton:disabled     { color: $colors.light.text.disabled; font-weight: normal; font-style: italic; }
+
+QPushButton[class="new-tab-button"]               { background-color: $colors.light.button.background; border: 1px solid $colors.light.button.border; border-radius: 4px; color: $colors.light.button.text; font-weight: bold; font-size: 18px; vertical-align:middle; padding: 2px; }
+QPushButton[class="new-tab-button"]:hover         { background-color: $colors.light.button.hover_bg; border-color: $colors.light.button.hover_border; color: $colors.light.accent.primary; }
+
+QPushButton[class="quick-settings-btn"]           { color: #222; border: 1px solid #ccc; border-radius: 3px; }
+QPushButton[class="quick-settings-btn"]:hover     { color: #111; background-color: $colors.light.accent.hover; border: 1px solid $colors.light.border.hover; border-radius: 3px; }
+
+QPushButton[class="theme-toggle-btn"]             { background-color: #805d46; border: 1px solid #dadada; border-radius: 3px; }
+QPushButton[class="theme-toggle-btn"]:hover       { border: 1px solid $colors.light.border.default; border-radius: 3px; background-color: #543d2d; }
+
+QPushButton[class="log-viewer-btn"]               { border: 1px solid #dadada; border-radius: 3px; }
+QPushButton[class="log-viewer-btn"]:hover         { border: 1px solid $colors.light.border.hover; border-radius: 3px; }
+
+QPushButton[class="main-action-btn"]              { color: $colors.light.text.secondary; }
+QPushButton[class="main-action-btn"]:hover        { color: #101010; background-color: $colors.light.accent.hover; border: 1px solid $colors.light.border.hover; border-radius: 3px; }
+QPushButton[class="main-action-btn"]:disabled     { opacity: 0.5; font-weight: normal; font-style: italic; color: $colors.light.text.muted; border: 1px solid $colors.light.border.default; border-radius: 3px; background-color: $colors.light.background.disabled; }
+
+/* LIGHT_THEME_END */
+
+/* ==========================================================================
+   DARK THEME
+   ========================================================================== */
+
+/* DARK_THEME_START */
+
+QPushButton                                          { color: $colors.dark.button.text; }
+QPushButton:hover                                    { color: $colors.dark.button.text; background-color: $colors.dark.accent.hover; border: 1px solid $colors.dark.accent.primary; border-radius: 3px; }
+QPushButton:disabled                                 { font-weight: normal; color: #777; background-color: $colors.dark.background.disabled; font-style: italic; }
+
+QPushButton[class="new-tab-button"]                  { background-color: $colors.dark.tab.inactive_bg; border: 1px solid $colors.dark.border.light; border-radius: 4px; color: $colors.dark.accent.primary; font-weight: bold; font-size: 18px; padding: 2px; vertical-align: middle; }
+QPushButton[class="new-tab-button"]:hover            { background-color: #a8164d79; border: 1px solid #d93498db; color: $colors.dark.text.primary; font-weight:bold; vertical-align: middle;}
+
+QPushButton[class="comprehensive-settings"]          { background-color: #113b5d; color: #b1d9f9; border: 1px solid #006ecd; border-radius: 4px; font-weight: bold; }
+QPushButton[class="comprehensive-settings"]:hover    { background-color: #1066ac; color: #eeeeee; border: 1px solid $colors.dark.accent.primary; border-radius: 4px; }
+
+QPushButton[class="quick-settings-btn"]             { color: #ddd; border: 1px solid #494949; border-radius: 3px; background-color: #333; }
+QPushButton[class="quick-settings-btn"]:hover       { background-color: $colors.dark.accent.hover; border: 1px solid $colors.dark.accent.primary; border-radius: 3px; }
+
+QPushButton[class="theme-toggle-btn"]             { border: 1px solid $colors.dark.border.default; border-radius: 3px; background-color: #444400; }
+QPushButton[class="theme-toggle-btn"]:hover       { border: 1px solid #aaaa00; border-radius: 3px; background-color: #555500; }
+
+QPushButton[class="main-action-btn"]                 { color: $colors.dark.button.text; }
+QPushButton[class="main-action-btn"]:hover           { background-color: $colors.dark.accent.hover; border: 1px solid $colors.dark.accent.primary; border-radius: 3px; }
+QPushButton[class="main-action-btn"]:disabled        { font-weight: normal; color: #76c5c5c5; border: 1px solid #88666666; border-radius: 3px; font-style: italic; background-color: #33333333; }
+
+/* DARK_THEME_END */

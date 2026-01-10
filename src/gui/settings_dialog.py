@@ -189,18 +189,22 @@ class HostTestDialog(QDialog):
 
         item = self.test_items[test_id]
 
+        status_label = item['status_label']
         if status == 'running':
-            item['status_label'].setText("⏳")
-            item['status_label'].setStyleSheet("color: blue;")
+            status_label.setText("⏳")
+            status_label.setProperty("status", "running")
         elif status == 'success':
-            item['status_label'].setText("✓")
-            item['status_label'].setStyleSheet("color: green; font-weight: bold;")
+            status_label.setText("✓")
+            status_label.setProperty("status", "success")
         elif status == 'failure':
-            item['status_label'].setText("✗")
-            item['status_label'].setStyleSheet("color: red; font-weight: bold;")
+            status_label.setText("✗")
+            status_label.setProperty("status", "failure")
         elif status == 'skipped':
-            item['status_label'].setText("○")
-            item['status_label'].setStyleSheet("color: gray;")
+            status_label.setText("○")
+            status_label.setProperty("status", "skipped")
+        # Reapply stylesheet to pick up property change
+        status_label.style().unpolish(status_label)
+        status_label.style().polish(status_label)
 
         if message:
             item['name_label'].setText(message)
@@ -3933,13 +3937,19 @@ class ComprehensiveSettingsDialog(QDialog):
             # Determine configuration type and update label
             if isinstance(icon_config, str):
                 self.config_type_label.setText("Configuration: Single icon (auto-adapts)")
-                self.config_type_label.setStyleSheet("font-weight: bold; font-size: 10px; color: #0066cc; padding: 5px;")
+                self.config_type_label.setProperty("icon-config", "single")
+                self.config_type_label.style().unpolish(self.config_type_label)
+                self.config_type_label.style().polish(self.config_type_label)
             elif isinstance(icon_config, list):
                 self.config_type_label.setText("Configuration: Light/Dark pair (manual control)")
-                self.config_type_label.setStyleSheet("font-weight: bold; font-size: 10px; color: #cc6600; padding: 5px;")
+                self.config_type_label.setProperty("icon-config", "pair")
+                self.config_type_label.style().unpolish(self.config_type_label)
+                self.config_type_label.style().polish(self.config_type_label)
             else:
                 self.config_type_label.setText("Configuration: Invalid")
-                self.config_type_label.setStyleSheet("font-weight: bold; font-size: 10px; color: #cc0000; padding: 5px;")
+                self.config_type_label.setProperty("icon-config", "invalid")
+                self.config_type_label.style().unpolish(self.config_type_label)
+                self.config_type_label.style().polish(self.config_type_label)
             
             # Update light theme preview (unselected light theme)
             light_icon = icon_manager.get_icon(icon_key, theme_mode='light', is_selected=False, requested_size=96)
@@ -3951,14 +3961,20 @@ class ComprehensiveSettingsDialog(QDialog):
                 if isinstance(icon_config, str):
                     # Single icon - check if this would be inverted
                     self.light_status_label.setText("Original")
-                    self.light_status_label.setStyleSheet("font-size: 9px; color: #006600;")
+                    self.light_status_label.setProperty("icon-status", "available")
+                    self.light_status_label.style().unpolish(self.light_status_label)
+                    self.light_status_label.style().polish(self.light_status_label)
                 else:
                     self.light_status_label.setText("Light variant")
-                    self.light_status_label.setStyleSheet("font-size: 9px; color: #006600;")
+                    self.light_status_label.setProperty("icon-status", "available")
+                    self.light_status_label.style().unpolish(self.light_status_label)
+                    self.light_status_label.style().polish(self.light_status_label)
             else:
                 self.light_icon_label.setText("Missing")
                 self.light_status_label.setText("Qt fallback")
-                self.light_status_label.setStyleSheet("font-size: 9px; color: #cc0000;")
+                self.light_status_label.setProperty("icon-status", "fallback")
+                self.light_status_label.style().unpolish(self.light_status_label)
+                self.light_status_label.style().polish(self.light_status_label)
             
             # Update dark theme preview (unselected dark theme) 
             dark_icon = icon_manager.get_icon(icon_key, theme_mode='dark', is_selected=False, requested_size=96)
@@ -3970,14 +3986,20 @@ class ComprehensiveSettingsDialog(QDialog):
                 if isinstance(icon_config, str):
                     # Single icon - original file used directly
                     self.dark_status_label.setText("Original")
-                    self.dark_status_label.setStyleSheet("font-size: 9px; color: #006600;")
+                    self.dark_status_label.setProperty("icon-status", "available")
+                    self.dark_status_label.style().unpolish(self.dark_status_label)
+                    self.dark_status_label.style().polish(self.dark_status_label)
                 else:
                     self.dark_status_label.setText("Dark variant")
-                    self.dark_status_label.setStyleSheet("font-size: 9px; color: #006600;")
+                    self.dark_status_label.setProperty("icon-status", "available")
+                    self.dark_status_label.style().unpolish(self.dark_status_label)
+                    self.dark_status_label.style().polish(self.dark_status_label)
             else:
                 self.dark_icon_label.setText("Missing")
                 self.dark_status_label.setText("Qt fallback")
-                self.dark_status_label.setStyleSheet("font-size: 9px; color: #cc0000;")
+                self.dark_status_label.setProperty("icon-status", "fallback")
+                self.dark_status_label.style().unpolish(self.dark_status_label)
+                self.dark_status_label.style().polish(self.dark_status_label)
             
             # Update reset button states based on whether icons are default
             self._update_reset_button_states(icon_key, icon_config)

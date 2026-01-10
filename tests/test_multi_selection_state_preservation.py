@@ -20,7 +20,7 @@ import sys
 from pathlib import Path
 from unittest.mock import Mock, MagicMock, patch
 from PyQt6.QtWidgets import QApplication, QTableWidgetItem
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QItemSelectionModel
 
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -43,11 +43,17 @@ def tabbed_widget(qapp):
     """Create TabbedGalleryWidget instance"""
     widget = TabbedGalleryWidget()
 
-    # Mock tab manager
+    # Mock tab manager with side_effect to return tab-specific galleries
+    def load_tab_galleries_mock(tab_name):
+        """Return all test galleries for any tab (simulate all galleries in each tab)"""
+        # Return all 10 test gallery paths for each tab
+        # This allows multi-selection tests to work properly
+        return [{'path': f"/path/to/gallery{i+1}"} for i in range(10)]
+
     mock_tab_manager = Mock()
     mock_tab_manager.get_visible_tab_names.return_value = ["Main", "Tab A", "Tab B"]
     mock_tab_manager.last_active_tab = "Main"
-    mock_tab_manager.load_tab_galleries.return_value = []
+    mock_tab_manager.load_tab_galleries.side_effect = load_tab_galleries_mock
 
     widget.set_tab_manager(mock_tab_manager)
 
@@ -79,6 +85,18 @@ def _populate_test_data(widget):
         widget.table.setItem(row, GalleryTableWidget.COL_PROGRESS, progress_item)
 
 
+def _select_multiple_rows(table, rows):
+    """Helper function to correctly select multiple rows using QItemSelectionModel"""
+    table.clearSelection()
+    selection_model = table.selectionModel()
+    for row in rows:
+        index = table.model().index(row, 0)
+        selection_model.select(
+            index,
+            QItemSelectionModel.SelectionFlag.Select | QItemSelectionModel.SelectionFlag.Rows
+        )
+
+
 class TestMultiSelectionBasic:
     """Test basic multi-selection preservation"""
 
@@ -89,9 +107,7 @@ class TestMultiSelectionBasic:
         assert tabbed_widget.current_tab == "Tab A"
 
         # Select rows 0, 2, 4 (simulating Ctrl+Click)
-        tabbed_widget.table.clearSelection()
-        for row in [0, 2, 4]:
-            tabbed_widget.table.selectRow(row)
+        _select_multiple_rows(tabbed_widget.table, [0, 2, 4])
 
         # Verify selection
         selected_rows = {item.row() for item in tabbed_widget.table.selectedItems()}
@@ -115,9 +131,7 @@ class TestMultiSelectionBasic:
         tabbed_widget.switch_to_tab("Tab A")
 
         # Select range 2-7 (simulating click row 2, Shift+Click row 7)
-        tabbed_widget.table.clearSelection()
-        for row in range(2, 8):
-            tabbed_widget.table.selectRow(row)
+        _select_multiple_rows(tabbed_widget.table, range(2, 8))
 
         # Verify selection
         selected_rows = {item.row() for item in tabbed_widget.table.selectedItems()}
@@ -144,18 +158,14 @@ class TestMultiSelectionMixedTabs:
         """Test Scenario 3: Independent selections per tab"""
         # Tab A: Select rows 1, 2, 3
         tabbed_widget.switch_to_tab("Tab A")
-        tabbed_widget.table.clearSelection()
-        for row in [1, 2, 3]:
-            tabbed_widget.table.selectRow(row)
+        _select_multiple_rows(tabbed_widget.table, [1, 2, 3])
 
         tab_a_selection = {item.row() for item in tabbed_widget.table.selectedItems()}
         assert tab_a_selection == {1, 2, 3}
 
         # Tab B: Select rows 4, 5
         tabbed_widget.switch_to_tab("Tab B")
-        tabbed_widget.table.clearSelection()
-        for row in [4, 5]:
-            tabbed_widget.table.selectRow(row)
+        _select_multiple_rows(tabbed_widget.table, [4, 5])
 
         tab_b_selection = {item.row() for item in tabbed_widget.table.selectedItems()}
         assert tab_b_selection == {4, 5}
@@ -176,14 +186,10 @@ class TestMultiSelectionMixedTabs:
         """Test rapid switching between tabs preserves all selections"""
         # Setup selections in Tab A and Tab B
         tabbed_widget.switch_to_tab("Tab A")
-        tabbed_widget.table.clearSelection()
-        for row in [0, 1]:
-            tabbed_widget.table.selectRow(row)
+        _select_multiple_rows(tabbed_widget.table, [0, 1])
 
         tabbed_widget.switch_to_tab("Tab B")
-        tabbed_widget.table.clearSelection()
-        for row in [8, 9]:
-            tabbed_widget.table.selectRow(row)
+        _select_multiple_rows(tabbed_widget.table, [8, 9])
 
         # Rapidly switch between tabs 5 times
         for _ in range(5):
@@ -213,9 +219,7 @@ class TestScrollAndSelectionPreservation:
         tabbed_widget.switch_to_tab("Tab A")
 
         # Select rows and set scroll position
-        tabbed_widget.table.clearSelection()
-        for row in [5, 6, 7]:
-            tabbed_widget.table.selectRow(row)
+        _select_multiple_rows(tabbed_widget.table, [5, 6, 7])
 
         # Set specific scroll position
         test_scroll_position = 150
@@ -250,9 +254,7 @@ class TestSelectionAfterOperations:
         """Test Scenario 5: Selection preserved after Start operation begins"""
         # Switch to Tab A and select items
         tabbed_widget.switch_to_tab("Tab A")
-        tabbed_widget.table.clearSelection()
-        for row in [0, 1, 2]:
-            tabbed_widget.table.selectRow(row)
+        _select_multiple_rows(tabbed_widget.table, [0, 1, 2])
 
         initial_selection = {item.row() for item in tabbed_widget.table.selectedItems()}
         assert initial_selection == {0, 1, 2}
@@ -317,11 +319,9 @@ class TestEdgeCases:
     def test_all_items_selected_preserved(self, tabbed_widget):
         """Test selecting all items is preserved"""
         tabbed_widget.switch_to_tab("Tab A")
-        tabbed_widget.table.clearSelection()
 
         # Select all rows
-        for row in range(tabbed_widget.table.rowCount()):
-            tabbed_widget.table.selectRow(row)
+        _select_multiple_rows(tabbed_widget.table, range(tabbed_widget.table.rowCount()))
 
         initial = {item.row() for item in tabbed_widget.table.selectedItems()}
         expected = set(range(tabbed_widget.table.rowCount()))
@@ -341,23 +341,17 @@ def test_state_isolation_between_tabs(tabbed_widget):
 
     # Tab A: Select rows 1, 3, 5, scroll to 100
     tabbed_widget.switch_to_tab("Tab A")
-    tabbed_widget.table.clearSelection()
-    for row in [1, 3, 5]:
-        tabbed_widget.table.selectRow(row)
+    _select_multiple_rows(tabbed_widget.table, [1, 3, 5])
     tabbed_widget.table.verticalScrollBar().setValue(100)
 
     # Tab B: Select rows 2, 4, 6, scroll to 200
     tabbed_widget.switch_to_tab("Tab B")
-    tabbed_widget.table.clearSelection()
-    for row in [2, 4, 6]:
-        tabbed_widget.table.selectRow(row)
+    _select_multiple_rows(tabbed_widget.table, [2, 4, 6])
     tabbed_widget.table.verticalScrollBar().setValue(200)
 
     # Main: Select rows 0, 9, scroll to 50
     tabbed_widget.switch_to_tab("Main")
-    tabbed_widget.table.clearSelection()
-    for row in [0, 9]:
-        tabbed_widget.table.selectRow(row)
+    _select_multiple_rows(tabbed_widget.table, [0, 9])
     tabbed_widget.table.verticalScrollBar().setValue(50)
 
     # Verify each tab maintains its state independently

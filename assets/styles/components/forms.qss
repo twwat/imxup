@@ -1,0 +1,120 @@
+/* ============================================================================
+   ImxUp GUI Stylesheet - FORM CONTROLS COMPONENT
+   ============================================================================
+
+   Input, checkbox, radio, combobox, and spinbox styling.
+
+   ============================================================================ */
+
+/* ==========================================================================
+   BASE FORM STYLING (Theme-Independent)
+   ========================================================================== */
+
+QComboBox, QSpinBox, QDoubleSpinBox { padding-left: 24px; font-family: 'Courier New', monospace; font-weight: bold; font-size:1.1em; height: 22px; border-radius: 3px; }
+
+/* Combobox dropdown arrow styling */
+QComboBox::drop-down { width: 20px; border: none; background: transparent; }
+
+/* SpinBox/DoubleSpinBox up/down buttons */
+QSpinBox::up-button, QDoubleSpinBox::up-button { width: 16px; border: none; background: transparent; }
+QSpinBox::down-button, QDoubleSpinBox::down-button { width: 16px; border: none; background: transparent; }
+
+/* Checkbox and Radio sizing */
+QCheckBox::indicator { height: 12px; width: 12px; padding: 1px; }
+QCheckBox::indicator:disabled { opacity: 0.2; }
+QRadioButton::indicator { height: 12px; width: 12px; padding: 1px; }
+QRadioButton::indicator:disabled { opacity: 0.2; }
+QRadioButton[class="scanning-radio"]::indicator { margin-left: 8px; }
+
+QCheckBox { font-weight: 600; }
+
+/* ==========================================================================
+   LIGHT THEME
+   ========================================================================== */
+
+/* LIGHT_THEME_START */
+
+/* Combobox and Spinbox */
+QComboBox, QSpinBox, QDoubleSpinBox { background-color: $colors.light.background.input; border: 1px solid #ccc; border-radius: 3px; }
+QComboBox::item:selected, QSpinBox:focus, QDoubleSpinBox:focus { background-color: #bdf; border-radius: 1px; border: 1px solid #1e82c5; }
+QComboBox:hover, QSpinBox:hover, QDoubleSpinBox:hover { background-color: #bdf; border: 1px solid $colors.light.accent.primary; border-radius: 3px; }
+
+QComboBox::down-arrow { image: url(assets:arrow-down-light.png); width: 10px; height: 10px; }
+QSpinBox::up-arrow, QDoubleSpinBox::up-arrow { image: url(assets:arrow-up-light.png); width: 10px; height: 10px; }
+QSpinBox::down-arrow, QDoubleSpinBox::down-arrow { image: url(assets:arrow-down-light.png); width: 10px; height: 10px; }
+
+QComboBox QAbstractItemView {
+    background-color: $colors.light.background.primary;
+    border: 1px solid $colors.light.accent.primary;
+    border-radius: 3px;
+    padding: 2px;
+    outline: none;
+}
+
+QSpinBox:disabled, QComboBox:disabled, QDoubleSpinBox:disabled { opacity: 0.5; font-weight: normal; color: #aaaaaa; border: 1px solid $colors.light.border.default; border-radius: 3px; background-color: $colors.light.background.disabled; }
+
+/* Checkbox */
+QCheckBox::indicator { border: 2px solid #bbb; border-radius: 2px; background-color: $colors.light.background.input; }
+QCheckBox::indicator:checked { background-color: #f1faff; border: 2px solid #68c1fc; image: url(assets:checkbox_check-light.png); }
+QCheckBox::indicator:hover { border: 2px solid #2a71a0; background-color: $colors.light.background.input; }
+QCheckBox::indicator:checked:hover { background-color: #f1faff; border: 2px solid #2a71a0; image: url(assets:checkbox_check-light.png); }
+QCheckBox::indicator:disabled { background-color: $colors.light.table.header; border: 2px solid #ccc; }
+
+/* Radio Button */
+QRadioButton::indicator { border: 2px solid #bbb; border-radius: 8px; background-color: $colors.light.background.input; }
+QRadioButton::indicator:checked { background-color: #f1faff; border: 2px solid #68c1fc; border-radius: 8px; image: url(assets:radio_check-light.png); }
+QRadioButton::indicator:hover { border: 2px solid #2a71a0; background-color: $colors.light.background.input; border-radius: 8px; }
+QRadioButton::indicator:checked:hover { background-color: #f1faff; border: 2px solid #2a71a0; border-radius: 8px; image: url(assets:radio_check-light.png); }
+QRadioButton::indicator:disabled { background-color: $colors.light.table.header; border: 2px solid #ccc; border-radius: 8px; }
+
+/* Command preview in External Apps */
+QLineEdit#commandPreview {
+    padding: 10px;
+    border: 2px solid #4a90e2;
+    border-radius: 4px;
+    background-color: #f0f8ff;
+    color: #333;
+}
+
+/* LIGHT_THEME_END */
+
+/* ==========================================================================
+   DARK THEME
+   ========================================================================== */
+
+/* DARK_THEME_START */
+
+/* Combobox and Spinbox */
+QComboBox, QSpinBox, QDoubleSpinBox { background-color: $colors.dark.background.input; border: 1px solid $colors.dark.border.input; }
+QComboBox::item:selected, QSpinBox:focus, QDoubleSpinBox:focus { background-color: $colors.dark.accent.hover; border: 1px solid $colors.dark.accent.primary; }
+QComboBox:hover, QSpinBox:hover, QDoubleSpinBox:hover { background-color: $colors.dark.accent.hover; border: 1px solid $colors.dark.accent.primary; }
+
+QComboBox::down-arrow { image: url(assets:arrow-down-dark.png); width: 10px; height: 10px; }
+QSpinBox::up-arrow, QDoubleSpinBox::up-arrow { image: url(assets:arrow-up-dark.png); width: 10px; height: 10px; }
+QSpinBox::down-arrow, QDoubleSpinBox::down-arrow { image: url(assets:arrow-down-dark.png); width: 10px; height: 10px; }
+QSpinBox:disabled, QComboBox:disabled, QDoubleSpinBox:disabled { font-weight: normal; color: #76c5c5c5; border: 1px solid #88666666; border-radius: 3px; font-style: italic; background-color: #33333333; }
+
+/* Checkbox */
+QCheckBox::indicator { border: 2px solid #666; border-radius: 2px; background-color: #252525; }
+QCheckBox::indicator:checked { border: 2px solid #1d6ea3; background-color: #18222b; image: url(assets:checkbox_check-dark.png); }
+QCheckBox::indicator:hover { border: 2px solid $colors.dark.accent.primary; background-color: #292929; }
+QCheckBox::indicator:checked:hover { border: 2px solid $colors.dark.accent.primary; background-color: #18222b; image: url(assets:checkbox_check-dark.png); }
+QCheckBox::indicator:disabled { background-color: #1a1a1a; border: 2px solid #222; }
+
+/* Radio Button */
+QRadioButton::indicator { border: 2px solid #666; border-radius: 8px; background-color: #252525; }
+QRadioButton::indicator:checked { border: 2px solid #1d6ea3; background-color: #18222b; border-radius: 8px; image: url(assets:radio_check-dark.png); }
+QRadioButton::indicator:hover { border: 2px solid $colors.dark.accent.primary; background-color: #292929; border-radius: 8px; }
+QRadioButton::indicator:checked:hover { border: 2px solid $colors.dark.accent.primary; background-color: #18222b; border-radius: 8px; image: url(assets:radio_check-dark.png); }
+QRadioButton::indicator:disabled { background-color: #1a1a1a; border: 2px solid #222; border-radius: 8px; }
+
+/* Command preview in External Apps */
+QLineEdit#commandPreview {
+    padding: 10px;
+    border: 2px solid $colors.dark.scrollbar.handle_hover;
+    border-radius: 4px;
+    background-color: $colors.dark.background.primary;
+    color: #e0e0e0;
+}
+
+/* DARK_THEME_END */

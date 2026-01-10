@@ -1,0 +1,69 @@
+/* ============================================================================
+   ImxUp GUI Stylesheet - TABLE COMPONENT
+   ============================================================================
+
+   Table, header, and cell styling for QTableWidget and QHeaderView.
+
+   ============================================================================ */
+
+/* ==========================================================================
+   BASE TABLE STYLING (Theme-Independent)
+   ========================================================================== */
+
+QTableWidget::item          { padding: 0px 2px; }
+QTableWidget::item:selected { border: none; }
+
+QTableWidget QHeaderView::section { text-align: left; letter-spacing: -0.5px; font-size: 9px; font-weight: bold; }
+QHeaderView::section              { padding: 1px 3px; }
+
+/* ==========================================================================
+   LIGHT THEME
+   ========================================================================== */
+
+/* LIGHT_THEME_START */
+
+QTableWidget                      { background-color: $colors.light.background.primary; color: #222222; gridline-color: $colors.light.table.gridline; border-radius: 4px; alternate-background-color: $colors.light.table.alternate; }
+QTableWidget::item                { background-color: $colors.light.background.primary; border: none; }
+QTableWidget::item:hover          { background-color: $colors.light.background.hover; color: #000000; gridline-color: #000; }
+QTableWidget::item:selected       { background-color: $colors.light.background.selected; color: #000000; gridline-color: #82bbe1; }
+
+QHeaderView::section              { background-color: $colors.light.table.header; color: $colors.light.text.primary; border: none; border-bottom: 2px solid $colors.light.accent.primary; font-weight: bold; }
+QHeaderView::section:hover        { background-color: #e0e0e0; }
+QTableWidget QHeaderView::section { background-color: $colors.light.table.header; color: $colors.light.text.primary; border: none; border-bottom: 2px solid $colors.light.accent.primary; }
+
+/* Log Viewer table styling - Light */
+QTableWidget[class="log-viewer"] { show-decoration-selected: 1; }
+
+/* Multi-line header styling - Light Theme */
+MultiLineHeaderView {
+    qproperty-primaryColor: #1a1a1a;
+    qproperty-secondaryColor: $colors.light.text.secondary;
+}
+
+/* LIGHT_THEME_END */
+
+/* ==========================================================================
+   DARK THEME
+   ========================================================================== */
+
+/* DARK_THEME_START */
+
+QTableWidget                      { background-color: $colors.dark.background.primary; color: $colors.dark.text.primary; gridline-color: $colors.dark.table.gridline; border: 1px solid #666666; border-radius: 4px; alternate-background-color: $colors.dark.table.alternate; }
+QTableWidget::item                { background-color: $colors.dark.background.primary; border: none; }
+QTableWidget::item:selected       { background-color: $colors.dark.background.selected; color: $colors.dark.tab.active_text; }
+
+QHeaderView::section              { background-color: $colors.dark.table.header; color: $colors.dark.text.primary; border: none; border-bottom: 2px solid $colors.dark.accent.secondary; font-weight: bold; }
+QHeaderView::section:hover        { background-color: #3a3a3a; }
+QTableWidget QHeaderView::section { background-color: $colors.dark.table.header; color: $colors.dark.text.primary; border: none; border-bottom: 2px solid $colors.dark.accent.secondary; }
+
+/* Log Viewer table styling - Dark */
+QTableWidget[class="log-viewer"] { gridline-color: rgba(13, 52, 84, 0.5); }
+QTableWidget[class="log-viewer"]::item { border-bottom: 1px solid rgba(102, 102, 102, 0.5); }
+
+/* Multi-line header styling - Dark Theme */
+MultiLineHeaderView {
+    qproperty-primaryColor: #e0e0e0;
+    qproperty-secondaryColor: $colors.dark.text.muted;
+}
+
+/* DARK_THEME_END */

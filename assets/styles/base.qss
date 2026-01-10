@@ -1,0 +1,59 @@
+/* ============================================================================
+   ImxUp GUI Stylesheet - BASE STYLES
+   ============================================================================
+
+   Theme-independent base styles including sizing, fonts, and structure.
+   These styles apply to both light and dark themes.
+
+   ============================================================================ */
+
+/* ==========================================================================
+   WIDGET SIZING
+   ========================================================================== */
+
+QTabWidget[class="gallery-tabs"]       { min-height: 26px; max-height:30px; min-width: 60px; }
+QTableWidget[class="gallery-table"]    { min-height: 400px; }
+QProgressBar[class="overall-progress"] { max-height: 25px; font-size: 12px; font-weight: bold; border-radius: 4px; }
+QProgressBar[class="table-progress"]   { min-height: 15px; max-height: 15px; border-radius: 4px; }
+QGroupBox[class="progress-group"], QGroupBox[class="stats-group"], QGroupBox[class="speed-group"] { max-height: 80px; }
+QGroupBox[class="settings-group"]      { min-height: 220px; }
+
+QWidget[class="status-row"]            { min-height: 24px; }
+
+/* ==========================================================================
+   FONT STYLING
+   ========================================================================== */
+
+QLabel { font-size: 0.95em; }
+QTextEdit[class="console"], QPlainTextEdit[class="console"] { font-family: "Consolas"; font-size: 10pt; }
+QLabel[class="console"]                                     { font-family: "Consolas"; font-size: 10pt; }
+QLabel[class="console-large"]                               { font-family: "Consolas"; font-size: 11pt; }
+QLabel[class="small-text"]                                  { font-size: 9px; }
+QLabel[class="tiny-text"]                                   { font-size: 10px; }
+QLabel[class="tab-description"]                             { font-size: 11px; padding: 5px; margin-bottom: 8px; }
+QTextEdit[class="template-editor"]                          { font-family: "Consolas"; font-size: 10pt; }
+QLabel[class="about-title"]                                 { font-size: 24px; font-weight: bold; }
+QLabel[class="about-subtitle"]                              { font-size: 14px; }
+QLabel[class="about-version"]                               { font-size: 12px; font-weight: bold; }
+
+/* ==========================================================================
+   GROUP BOX STYLING
+   ========================================================================== */
+
+QGroupBox        { font-weight: bold; font-size: 9pt; margin-top: 10px; margin-left: 5px; margin-right: 5px; padding: 3px; }
+QGroupBox::title { subcontrol-origin: margin; subcontrol-position: top left; left: 25px; padding: 2px 5px; }
+
+/* ==========================================================================
+   LOG VIEWER BASE
+   ========================================================================== */
+
+QTableWidget[class="log-viewer"] { show-decoration-selected: 1; }
+QTableWidget[class="log-viewer"]::item { padding: 1px 4px; }
+QTableWidget[class="log-viewer"] QHeaderView::section { padding: 2px 4px; }
+
+/* ==========================================================================
+   INFO PANEL BASE
+   ========================================================================== */
+
+QTextEdit[class="info-panel"] { padding: 10px; }
+QTextEdit[class="about-info"] { max-height: 200px; background: transparent; border: none; font-size: 10px; }

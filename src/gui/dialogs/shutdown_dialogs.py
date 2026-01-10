@@ -137,31 +137,42 @@ class ExitConfirmationDialog(QDialog):
             uploading_header = QLabel(
                 f"Currently Uploading ({len(self.uploading_galleries)}):"
             )
-            uploading_header.setStyleSheet(f"font-weight: bold; color: {uploading_color};")
+            uploading_header.setProperty("section", "uploading")
+            uploading_header.style().unpolish(uploading_header)
+            uploading_header.style().polish(uploading_header)
             details_layout.addWidget(uploading_header)
 
             for gallery in self.uploading_galleries[:5]:  # Show max 5
                 name = gallery.name or gallery.path.split('/')[-1].split('\\')[-1]
                 gallery_label = QLabel(f"  - {name}")
-                gallery_label.setStyleSheet(f"color: {muted_color}; margin-left: 10px;")
+                gallery_label.setProperty("class", "status-muted")
+                gallery_label.setContentsMargins(10, 0, 0, 0)  # Left margin
+                gallery_label.style().unpolish(gallery_label)
+                gallery_label.style().polish(gallery_label)
                 details_layout.addWidget(gallery_label)
 
             if len(self.uploading_galleries) > 5:
                 more_label = QLabel(
                     f"  ... and {len(self.uploading_galleries) - 5} more"
                 )
-                more_label.setStyleSheet(f"color: {muted_color}; font-style: italic;")
+                more_label.setProperty("class", "status-muted")
+                more_label.style().unpolish(more_label)
+                more_label.style().polish(more_label)
                 details_layout.addWidget(more_label)
 
         # File host uploads section
         if self.file_host_uploads:
             host_header = QLabel("File Host Uploads:")
-            host_header.setStyleSheet(f"font-weight: bold; color: {file_host_color};")
+            host_header.setProperty("section", "file-host")
+            host_header.style().unpolish(host_header)
+            host_header.style().polish(host_header)
             details_layout.addWidget(host_header)
 
             for host_id, count in self.file_host_uploads.items():
                 host_label = QLabel(f"  - {host_id}: {count} pending")
-                host_label.setStyleSheet(f"color: {muted_color};")
+                host_label.setProperty("class", "status-muted")
+                host_label.style().unpolish(host_label)
+                host_label.style().polish(host_label)
                 details_layout.addWidget(host_label)
 
         # Queued galleries section
@@ -169,13 +180,17 @@ class ExitConfirmationDialog(QDialog):
             queued_header = QLabel(
                 f"Queued for Upload ({len(self.queued_galleries)}):"
             )
-            queued_header.setStyleSheet(f"font-weight: bold; color: {queued_color};")
+            queued_header.setProperty("section", "queued")
+            queued_header.style().unpolish(queued_header)
+            queued_header.style().polish(queued_header)
             details_layout.addWidget(queued_header)
 
             queued_summary = QLabel(
                 f"  {len(self.queued_galleries)} galleries waiting to start"
             )
-            queued_summary.setStyleSheet(f"color: {muted_color};")
+            queued_summary.setProperty("class", "status-muted")
+            queued_summary.style().unpolish(queued_summary)
+            queued_summary.style().polish(queued_summary)
             details_layout.addWidget(queued_summary)
 
         details_layout.addStretch()
@@ -217,31 +232,21 @@ class ExitConfirmationDialog(QDialog):
         button_layout = QHBoxLayout()
         button_layout.addStretch()
 
-        # Exit Anyway button (warning color)
+        # Exit Anyway button (danger color)
         exit_btn = QPushButton("Exit Anyway")
-        exit_btn.setStyleSheet(
-            "QPushButton { min-width: 100px; background-color: #e74c3c; "
-            "color: white; font-weight: bold; padding: 6px 12px; }"
-            "QPushButton:hover { background-color: #c0392b; }"
-        )
+        exit_btn.setProperty("class", "btn-shutdown-danger")
         exit_btn.clicked.connect(self._on_exit_clicked)
         button_layout.addWidget(exit_btn)
 
         # Minimize to Tray button
         minimize_btn = QPushButton("Minimize to Tray")
-        minimize_btn.setStyleSheet(
-            "QPushButton { min-width: 120px; padding: 6px 12px; }"
-        )
+        minimize_btn.setProperty("class", "btn-shutdown-default")
         minimize_btn.clicked.connect(self._on_minimize_clicked)
         button_layout.addWidget(minimize_btn)
 
         # Cancel button (default)
         cancel_btn = QPushButton("Cancel")
-        cancel_btn.setStyleSheet(
-            "QPushButton { min-width: 80px; background-color: #27ae60; "
-            "color: white; font-weight: bold; padding: 6px 12px; }"
-            "QPushButton:hover { background-color: #229954; }"
-        )
+        cancel_btn.setProperty("class", "btn-shutdown-success")
         cancel_btn.setDefault(True)
         cancel_btn.clicked.connect(self.reject)
         button_layout.addWidget(cancel_btn)
@@ -340,16 +345,9 @@ class ShutdownDialog(QDialog):
         layout.setSpacing(15)
         layout.setContentsMargins(25, 25, 25, 25)
 
-        # Get theme-aware colors from palette
-        link_color = self.palette().color(self.palette().ColorRole.Link).name()
-        muted_color = self.palette().color(self.palette().ColorRole.PlaceholderText).name()
-        bg_color = self.palette().color(self.palette().ColorRole.AlternateBase).name()
-        border_color = self.palette().color(self.palette().ColorRole.Mid).name()
-        window_bg = self.palette().color(self.palette().ColorRole.Window).name()
-        text_color = self.palette().color(self.palette().ColorRole.WindowText).name()
-
-        # Apply theme-aware background to dialog
-        self.setStyleSheet(f"QDialog {{ background-color: {window_bg}; color: {text_color}; }}")
+        # Force light theme via QSS class - OS overrides dark styling on inner
+        # frame elements, so we use light everywhere for visual consistency
+        self.setProperty("class", "dialog-shutdown")
 
         # Header with spinner
         header_layout = QHBoxLayout()
@@ -357,7 +355,7 @@ class ShutdownDialog(QDialog):
         # Spinner (animated dots)
         self._spinner_label = QLabel("...")
         self._spinner_label.setFixedWidth(30)
-        self._spinner_label.setStyleSheet("font-size: 16pt; font-weight: bold;")
+        self._spinner_label.setProperty("class", "label-shutdown-spinner")
         self._spinner_index = 0
 
         # Animate spinner with timer
@@ -376,17 +374,14 @@ class ShutdownDialog(QDialog):
         header_layout.addStretch()
         layout.addLayout(header_layout)
 
-        # Current step label with theme-aware color
+        # Current step label with link color styling
         self._current_step_label = QLabel("Preparing...")
-        self._current_step_label.setStyleSheet(f"font-size: 10pt; color: {link_color};")
+        self._current_step_label.setProperty("class", "label-shutdown-step-current")
         layout.addWidget(self._current_step_label)
 
-        # Steps list with theme-aware styling
+        # Steps list container frame
         steps_frame = QFrame()
-        steps_frame.setStyleSheet(
-            f"background-color: {bg_color}; border: 1px solid {border_color}; "
-            "border-radius: 4px;"
-        )
+        steps_frame.setProperty("class", "frame-shutdown-steps")
         steps_layout = QVBoxLayout(steps_frame)
         steps_layout.setContentsMargins(12, 12, 12, 12)
         steps_layout.setSpacing(6)
@@ -400,12 +395,12 @@ class ShutdownDialog(QDialog):
             icon_label = QLabel("○")
             icon_label.setFixedWidth(16)
             icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            icon_label.setStyleSheet(f"color: {muted_color};")
+            icon_label.setProperty("class", "label-shutdown-step-icon")
             step_layout.addWidget(icon_label)
 
             # Text label
             text_label = QLabel(description)
-            text_label.setStyleSheet(f"color: {muted_color};")
+            text_label.setProperty("class", "label-shutdown-step-text")
             step_layout.addWidget(text_label)
             step_layout.addStretch()
 
@@ -419,11 +414,7 @@ class ShutdownDialog(QDialog):
 
         # Force Quit button (hidden initially)
         self._force_quit_btn = QPushButton("Force Quit")
-        self._force_quit_btn.setStyleSheet(
-            "QPushButton { min-width: 100px; background-color: #dc3545; "
-            "color: white; font-weight: bold; padding: 6px 12px; }"
-            "QPushButton:hover { background-color: #c82333; }"
-        )
+        self._force_quit_btn.setProperty("class", "btn-shutdown-danger")
         self._force_quit_btn.clicked.connect(self._on_force_quit)
         self._force_quit_btn.hide()
         layout.addWidget(self._force_quit_btn, alignment=Qt.AlignmentFlag.AlignCenter)
@@ -466,10 +457,13 @@ class ShutdownDialog(QDialog):
         if step_id in self._step_labels:
             icon_label, text_label = self._step_labels[step_id]
             icon_label.setText("●")  # Filled circle for in-progress
-            link_color = self.palette().color(self.palette().ColorRole.Link).name()
-            icon_label.setStyleSheet(f"color: {link_color}; font-weight: bold;")
+            icon_label.setProperty("shutdown-step", "in-progress")
+            icon_label.style().unpolish(icon_label)
+            icon_label.style().polish(icon_label)
             text_label.setText(desc)
-            text_label.setStyleSheet(f"color: {link_color}; font-weight: bold;")
+            text_label.setProperty("shutdown-step", "in-progress")
+            text_label.style().unpolish(text_label)
+            text_label.style().polish(text_label)
 
     @pyqtSlot(int)
     def mark_step_complete(self, step_id: int):
@@ -495,11 +489,14 @@ class ShutdownDialog(QDialog):
             else:
                 icon_label.setText("✓")  # Fallback to unicode
 
-            # Green color for completed - use a theme-appropriate green
-            success_color = "#4caf50" if is_dark_mode() else "#27ae60"
-            icon_label.setStyleSheet(f"color: {success_color};")
+            # Green color for completed via QSS property
+            icon_label.setProperty("shutdown-step", "complete")
+            icon_label.style().unpolish(icon_label)
+            icon_label.style().polish(icon_label)
             text_label.setText(desc)
-            text_label.setStyleSheet(f"color: {success_color};")
+            text_label.setProperty("shutdown-step", "complete")
+            text_label.style().unpolish(text_label)
+            text_label.style().polish(text_label)
 
     def closeEvent(self, event):
         """Prevent dialog from being closed."""

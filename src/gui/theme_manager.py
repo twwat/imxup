@@ -7,10 +7,14 @@ Handles:
     - Dark/light theme switching with QPalette and QSS
     - Font size management throughout the application
     - Stylesheet caching for performance
+    - Design token injection from tokens.json
+    - Modular QSS loading from assets/styles/ directory
 """
 
+import json
 import os
-from typing import TYPE_CHECKING
+import re
+from typing import TYPE_CHECKING, Any
 
 from PyQt6.QtCore import QObject, QTimer
 from PyQt6.QtGui import QColor, QFont, QPalette
@@ -20,6 +24,21 @@ from src.utils.logger import log
 
 if TYPE_CHECKING:
     from src.gui.main_window import ImxUploadGUI
+
+
+# Module-level token cache to avoid repeated file reads
+_cached_tokens: dict[str, Any] | None = None
+
+# Component files to load in order (from assets/styles/components/)
+COMPONENT_FILES = [
+    'buttons.qss',
+    'tables.qss',
+    'forms.qss',
+    'progress.qss',
+    'tabs.qss',
+    'menus.qss',
+    'labels.qss',
+]
 
 
 def get_assets_dir() -> str:
@@ -85,12 +104,21 @@ class ThemeManager(QObject):
     - Dark/light theme switching with QPalette and stylesheet
     - Font size management for table and log widgets
     - Stylesheet caching for performance
+    - Modular QSS loading from assets/styles/ directory structure
+    - Design token injection from tokens.json
+
+    The manager supports two QSS loading modes:
+    1. Modular (preferred): Loads base.qss + components/*.qss + themes/{theme}.qss
+    2. Legacy (fallback): Loads monolithic styles.qss with embedded theme markers
 
     Attributes:
         _main_window: Reference to the main ImxUploadGUI window
-        _cached_base_qss: Cached base stylesheet content
-        _cached_dark_qss: Cached dark theme stylesheet content
-        _cached_light_qss: Cached light theme stylesheet content
+        _cached_base_qss: Cached base stylesheet content (legacy mode)
+        _cached_dark_qss: Cached dark theme stylesheet content (legacy mode)
+        _cached_light_qss: Cached light theme stylesheet content (legacy mode)
+        _cached_modular_dark_qss: Cached modular dark stylesheet (modular mode)
+        _cached_modular_light_qss: Cached modular light stylesheet (modular mode)
+        _modular_qss_available: Whether modular QSS structure exists
     """
 
     def __init__(self, main_window: 'ImxUploadGUI'):
@@ -101,10 +129,289 @@ class ThemeManager(QObject):
         """
         super().__init__()
         self._main_window = main_window
-        # Cache for stylesheets
+        # Cache for stylesheets (legacy monolithic styles.qss)
         self._cached_base_qss: str | None = None
         self._cached_dark_qss: str | None = None
         self._cached_light_qss: str | None = None
+        # Cache for modular QSS (new structure)
+        self._cached_modular_dark_qss: str | None = None
+        self._cached_modular_light_qss: str | None = None
+        self._modular_qss_available: bool | None = None
+
+    # =========================================================================
+    # Design Token Methods
+    # =========================================================================
+
+    def _load_tokens(self) -> dict[str, Any]:
+        """Load design tokens from tokens.json.
+
+        Tokens are cached at module level to avoid repeated file reads.
+
+        Returns:
+            dict: Design tokens dictionary, empty dict on error
+        """
+        global _cached_tokens
+
+        if _cached_tokens is not None:
+            return _cached_tokens
+
+        try:
+            tokens_path = os.path.join(get_assets_dir(), "tokens.json")
+            if os.path.exists(tokens_path):
+                with open(tokens_path, 'r', encoding='utf-8') as f:
+                    _cached_tokens = json.load(f)
+                    log("Design tokens loaded successfully", level="debug", category="ui")
+                    return _cached_tokens
+            else:
+                log(f"Design tokens file not found: {tokens_path}",
+                    level="warning", category="ui")
+        except json.JSONDecodeError as e:
+            log(f"Error parsing tokens.json: {e}", level="error", category="ui")
+        except Exception as e:
+            log(f"Error loading tokens.json: {e}", level="error", category="ui")
+
+        _cached_tokens = {}
+        return _cached_tokens
+
+    def _get_nested_value(self, data: dict[str, Any], path: str) -> str | None:
+        """Safely access nested dictionary values using dot notation.
+
+        Args:
+            data: Dictionary to traverse
+            path: Dot-separated path (e.g., 'colors.light.background.primary')
+
+        Returns:
+            str | None: Value at path, or None if not found
+        """
+        keys = path.split('.')
+        current = data
+
+        for key in keys:
+            if isinstance(current, dict) and key in current:
+                current = current[key]
+            else:
+                return None
+
+        # Return value only if it's a string (actual token value)
+        return current if isinstance(current, str) else None
+
+    def _apply_tokens(self, qss: str, theme: str) -> str:
+        """Replace $token.path variables in QSS with actual values.
+
+        Supports token references like:
+        - $colors.light.background.primary
+        - $colors.dark.status.success
+        - $typography.fontSize.base
+        - $spacing.md
+        - $borderRadius.lg
+
+        For colors, the theme parameter determines which color set to use.
+        Token paths starting with 'colors.' without a theme prefix will have
+        the theme automatically inserted.
+
+        Args:
+            qss: QSS stylesheet content with token variables
+            theme: Current theme ('light' or 'dark')
+
+        Returns:
+            str: QSS with all token variables replaced
+        """
+        tokens = self._load_tokens()
+        if not tokens:
+            return qss
+
+        # Pattern to match $token.path variables
+        # Matches: $colors.light.background.primary or $typography.fontSize.base
+        token_pattern = re.compile(r'\$([a-zA-Z][a-zA-Z0-9_.]*)')
+
+        def replace_token(match: re.Match) -> str:
+            """Replace a single token match with its value."""
+            token_path = match.group(1)
+
+            # For color tokens, handle theme-specific lookups
+            # If path starts with 'colors.' but doesn't have theme, insert it
+            if token_path.startswith('colors.'):
+                parts = token_path.split('.', 2)
+                if len(parts) >= 2:
+                    # Check if second part is a theme identifier
+                    if parts[1] not in ('light', 'dark'):
+                        # Insert the current theme after 'colors.'
+                        # e.g., 'colors.background.primary' -> 'colors.dark.background.primary'
+                        token_path = f"colors.{theme}.{'.'.join(parts[1:])}"
+
+            value = self._get_nested_value(tokens, token_path)
+
+            if value is not None:
+                return value
+            else:
+                log(f"Missing design token: ${match.group(1)} (resolved as: {token_path})",
+                    level="warning", category="ui")
+                # Return original token reference so it's visible in output
+                return match.group(0)
+
+        return token_pattern.sub(replace_token, qss)
+
+    # =========================================================================
+    # Modular QSS Loading Methods
+    # =========================================================================
+
+    def _check_modular_qss_available(self) -> bool:
+        """Check if modular QSS structure exists.
+
+        Checks for presence of base.qss and themes/dark.qss to determine
+        if the new modular structure is available.
+
+        Returns:
+            bool: True if modular QSS files exist, False otherwise
+        """
+        if self._modular_qss_available is not None:
+            return self._modular_qss_available
+
+        styles_dir = os.path.join(get_assets_dir(), "styles")
+        base_qss = os.path.join(styles_dir, "base.qss")
+        dark_theme = os.path.join(styles_dir, "themes", "dark.qss")
+
+        self._modular_qss_available = (
+            os.path.exists(base_qss) and os.path.exists(dark_theme)
+        )
+
+        if self._modular_qss_available:
+            log("Modular QSS structure detected", level="debug", category="ui")
+        else:
+            log("Modular QSS not found, using legacy styles.qss",
+                level="debug", category="ui")
+
+        return self._modular_qss_available
+
+    def _extract_base_styles_from_component(self, content: str) -> str:
+        """Extract theme-independent base styles from a component file.
+
+        Component files may contain theme-specific sections marked with
+        LIGHT_THEME_START/END and DARK_THEME_START/END. This method extracts
+        only the theme-independent portion (everything before the first
+        theme marker).
+
+        Args:
+            content: Full component file content
+
+        Returns:
+            str: Theme-independent base styles only
+        """
+        # Find the first theme marker
+        light_start = content.find('/* LIGHT_THEME_START')
+        dark_start = content.find('/* DARK_THEME_START')
+
+        # Determine where base styles end
+        if light_start != -1 and dark_start != -1:
+            # Both markers exist, take the earlier one
+            theme_start = min(light_start, dark_start)
+        elif light_start != -1:
+            theme_start = light_start
+        elif dark_start != -1:
+            theme_start = dark_start
+        else:
+            # No theme markers, entire file is base styles
+            return content
+
+        return content[:theme_start].strip()
+
+    def _load_modular_qss(self, theme: str) -> str:
+        """Load and concatenate modular QSS files.
+
+        Loads QSS in the following order:
+        1. base.qss - Theme-independent base styles
+        2. components/*.qss - Component-specific base styles (theme-independent parts)
+        3. themes/{theme}.qss - Theme-specific color overrides
+
+        All content is concatenated and token substitution is applied.
+
+        Args:
+            theme: Theme to load ('light' or 'dark')
+
+        Returns:
+            str: Complete stylesheet with all modules concatenated and tokens applied
+
+        Raises:
+            FileNotFoundError: If required files don't exist (caller should fallback)
+        """
+        # Check cache first
+        if theme == 'dark' and self._cached_modular_dark_qss is not None:
+            return self._cached_modular_dark_qss
+        if theme == 'light' and self._cached_modular_light_qss is not None:
+            return self._cached_modular_light_qss
+
+        styles_dir = os.path.join(get_assets_dir(), "styles")
+        qss_parts: list[str] = []
+
+        # 1. Load base.qss
+        base_qss_path = os.path.join(styles_dir, "base.qss")
+        if not os.path.exists(base_qss_path):
+            raise FileNotFoundError(f"Base QSS not found: {base_qss_path}")
+
+        with open(base_qss_path, 'r', encoding='utf-8') as f:
+            base_content = f.read()
+            qss_parts.append(f"/* === BASE STYLES === */\n{base_content}")
+            log(f"Loaded base.qss ({len(base_content)} chars)",
+                level="debug", category="ui")
+
+        # 2. Load component files (base styles only, no theme-specific parts)
+        components_dir = os.path.join(styles_dir, "components")
+        loaded_components = []
+
+        for component_file in COMPONENT_FILES:
+            component_path = os.path.join(components_dir, component_file)
+            if os.path.exists(component_path):
+                try:
+                    with open(component_path, 'r', encoding='utf-8') as f:
+                        component_content = f.read()
+                        # Extract only the base (theme-independent) styles
+                        base_styles = self._extract_base_styles_from_component(
+                            component_content
+                        )
+                        if base_styles.strip():
+                            qss_parts.append(
+                                f"\n/* === COMPONENT: {component_file} === */\n{base_styles}"
+                            )
+                            loaded_components.append(component_file)
+                except Exception as e:
+                    log(f"Error loading component {component_file}: {e}",
+                        level="warning", category="ui")
+            else:
+                log(f"Component file not found: {component_file}",
+                    level="debug", category="ui")
+
+        if loaded_components:
+            log(f"Loaded {len(loaded_components)} component files: {', '.join(loaded_components)}",
+                level="debug", category="ui")
+
+        # 3. Load theme-specific file
+        theme_file = f"{theme}.qss"
+        theme_path = os.path.join(styles_dir, "themes", theme_file)
+        if not os.path.exists(theme_path):
+            raise FileNotFoundError(f"Theme QSS not found: {theme_path}")
+
+        with open(theme_path, 'r', encoding='utf-8') as f:
+            theme_content = f.read()
+            qss_parts.append(f"\n/* === THEME: {theme.upper()} === */\n{theme_content}")
+            log(f"Loaded themes/{theme_file} ({len(theme_content)} chars)",
+                level="debug", category="ui")
+
+        # Concatenate all parts
+        combined_qss = "\n".join(qss_parts)
+
+        # Apply token substitution
+        final_qss = self._apply_tokens(combined_qss, theme)
+
+        # Cache the result
+        if theme == 'dark':
+            self._cached_modular_dark_qss = final_qss
+        else:
+            self._cached_modular_light_qss = final_qss
+
+        log(f"Modular QSS loaded for {theme} theme ({len(final_qss)} total chars)",
+            level="info", category="ui")
+
+        return final_qss
 
     # =========================================================================
     # Theme Toggle Methods
@@ -156,11 +463,19 @@ class ThemeManager(QObject):
     # Stylesheet Loading Methods
     # =========================================================================
 
-    def _load_base_stylesheet(self) -> str:
+    def _load_base_stylesheet(self, theme: str = 'dark') -> str:
         """Load the base QSS stylesheet for consistent fonts and styling.
 
+        Loads base QSS content (theme-agnostic styles) and applies design token
+        substitution. For tokens that require a theme context (like colors),
+        the provided theme parameter is used.
+
+        Args:
+            theme: Theme context for token resolution ('dark' or 'light').
+                   Used when base styles contain theme-dependent tokens.
+
         Returns:
-            str: Base QSS stylesheet content
+            str: Base QSS stylesheet content with tokens applied
         """
         # Cache the base stylesheet to avoid repeated disk I/O
         if self._cached_base_qss is not None:
@@ -175,14 +490,18 @@ class ThemeManager(QObject):
                     # Extract base styles (everything before LIGHT_THEME_START)
                     light_start = full_content.find('/* LIGHT_THEME_START')
                     if light_start != -1:
-                        self._cached_base_qss = full_content[:light_start].strip()
+                        raw_content = full_content[:light_start].strip()
+                        # Apply token substitution before caching
+                        self._cached_base_qss = self._apply_tokens(raw_content, theme)
                         return self._cached_base_qss
                     # Fallback: everything before DARK_THEME_START
                     dark_start = full_content.find('/* DARK_THEME_START')
                     if dark_start != -1:
-                        self._cached_base_qss = full_content[:dark_start].strip()
+                        raw_content = full_content[:dark_start].strip()
+                        self._cached_base_qss = self._apply_tokens(raw_content, theme)
                         return self._cached_base_qss
-                    self._cached_base_qss = full_content
+                    # Apply tokens to full content if no markers found
+                    self._cached_base_qss = self._apply_tokens(full_content, theme)
                     return self._cached_base_qss
         except Exception as e:
             log(f"Error loading styles.qss: {e}", level="error", category="ui")
@@ -203,11 +522,15 @@ class ThemeManager(QObject):
     def _load_theme_styles(self, theme_type: str) -> str:
         """Load theme styles from styles.qss file.
 
+        Loads theme-specific QSS content and applies design token substitution
+        before caching. Token variables like $colors.light.background.primary
+        are replaced with actual values from tokens.json.
+
         Args:
             theme_type: Theme type ('dark' or 'light')
 
         Returns:
-            str: Theme-specific QSS stylesheet content
+            str: Theme-specific QSS stylesheet content with tokens applied
         """
         # Cache theme stylesheets to avoid repeated disk I/O
         if theme_type == 'dark' and self._cached_dark_qss is not None:
@@ -230,7 +553,9 @@ class ThemeManager(QObject):
                     if theme_start != -1 and theme_end != -1:
                         theme_content = full_content[theme_start:theme_end]
                         lines = theme_content.split('\n')  # Remove the marker comment line
-                        cached_content = '\n'.join(lines[1:])
+                        raw_content = '\n'.join(lines[1:])
+                        # Apply design token substitution before caching
+                        cached_content = self._apply_tokens(raw_content, theme_type)
                         # Cache the result
                         if theme_type == 'dark':
                             self._cached_dark_qss = cached_content
@@ -279,10 +604,40 @@ class ThemeManager(QObject):
     # Theme Application Methods
     # =========================================================================
 
+    def _get_stylesheet_for_theme(self, theme: str) -> str:
+        """Get the complete stylesheet for a theme.
+
+        Tries to load modular QSS first (base + components + theme file).
+        Falls back to legacy styles.qss if modular files are not available.
+
+        Args:
+            theme: Theme name ('light' or 'dark')
+
+        Returns:
+            str: Complete stylesheet content ready for application
+        """
+        # Try modular QSS first
+        if self._check_modular_qss_available():
+            try:
+                return self._load_modular_qss(theme)
+            except FileNotFoundError as e:
+                log(f"Modular QSS file missing, falling back to legacy: {e}",
+                    level="warning", category="ui")
+            except Exception as e:
+                log(f"Error loading modular QSS, falling back to legacy: {e}",
+                    level="warning", category="ui")
+
+        # Fallback to legacy styles.qss
+        log("Using legacy styles.qss", level="debug", category="ui")
+        base_qss = self._load_base_stylesheet(theme=theme)
+        theme_qss = self._load_theme_styles(theme)
+        return base_qss + "\n" + theme_qss
+
     def apply_theme(self, mode: str):
         """Apply theme. Only 'light' and 'dark' modes supported.
 
         Sets application palette and stylesheet for consistent theming.
+        Uses modular QSS files if available, falls back to legacy styles.qss.
 
         Args:
             mode: Theme mode to apply ('light' or 'dark')
@@ -296,8 +651,8 @@ class ThemeManager(QObject):
             # Disable updates during theme switch to prevent intermediate repaints
             mw.setUpdatesEnabled(False)
             try:
-                # Load base QSS stylesheet
-                base_qss = self._load_base_stylesheet()
+                # Try to load modular QSS first, fallback to legacy
+                stylesheet = self._get_stylesheet_for_theme(mode)
 
                 if mode == 'dark':
                     # Simple dark palette and base stylesheet
@@ -311,15 +666,27 @@ class ThemeManager(QObject):
                         palette.setColor(palette.ColorRole.ButtonText, QColor(230, 230, 230))
                         palette.setColor(palette.ColorRole.Highlight, QColor(47, 106, 160))
                         palette.setColor(palette.ColorRole.HighlightedText, QColor(255, 255, 255))
+                        # Additional ColorRoles for complete theme support
+                        palette.setColor(palette.ColorRole.PlaceholderText, QColor(128, 128, 128))
+                        palette.setColor(palette.ColorRole.Link, QColor(80, 160, 220))
+                        palette.setColor(palette.ColorRole.LinkVisited, QColor(120, 100, 180))
+                        palette.setColor(palette.ColorRole.AlternateBase, QColor(38, 38, 38))  # Slightly different from Button
+                        palette.setColor(palette.ColorRole.ToolTipBase, QColor(51, 51, 51))
+                        palette.setColor(palette.ColorRole.ToolTipText, QColor(230, 230, 230))
+                        # 3D effect and accent colors for complete coverage
+                        palette.setColor(palette.ColorRole.Light, QColor(60, 60, 60))
+                        palette.setColor(palette.ColorRole.Midlight, QColor(50, 50, 50))
+                        palette.setColor(palette.ColorRole.Dark, QColor(20, 20, 20))
+                        palette.setColor(palette.ColorRole.Mid, QColor(35, 35, 35))
+                        palette.setColor(palette.ColorRole.Shadow, QColor(10, 10, 10))
+                        palette.setColor(palette.ColorRole.BrightText, QColor(255, 255, 255))
+                        palette.setColor(palette.ColorRole.Accent, QColor(47, 106, 160))
                     except Exception as e:
                         log(f"Exception in theme_manager apply_theme: {e}",
                             level="error", category="ui")
                         raise
                     qapp.setPalette(palette)
-
-                    # Load dark theme styles from styles.qss
-                    theme_qss = self._load_theme_styles('dark')
-                    qapp.setStyleSheet(base_qss + "\n" + theme_qss)
+                    qapp.setStyleSheet(stylesheet)
                 elif mode == 'light':
                     palette = qapp.palette()
                     try:
@@ -331,15 +698,27 @@ class ThemeManager(QObject):
                         palette.setColor(palette.ColorRole.ButtonText, QColor(33, 33, 33))
                         palette.setColor(palette.ColorRole.Highlight, QColor(41, 128, 185))
                         palette.setColor(palette.ColorRole.HighlightedText, QColor(255, 255, 255))
+                        # Additional ColorRoles for complete theme support
+                        palette.setColor(palette.ColorRole.PlaceholderText, QColor(128, 128, 128))
+                        palette.setColor(palette.ColorRole.Link, QColor(41, 128, 185))
+                        palette.setColor(palette.ColorRole.LinkVisited, QColor(120, 80, 150))
+                        palette.setColor(palette.ColorRole.AlternateBase, QColor(245, 245, 245))
+                        palette.setColor(palette.ColorRole.ToolTipBase, QColor(255, 255, 204))
+                        palette.setColor(palette.ColorRole.ToolTipText, QColor(51, 51, 51))
+                        # 3D effect and accent colors for complete coverage
+                        palette.setColor(palette.ColorRole.Light, QColor(255, 255, 255))
+                        palette.setColor(palette.ColorRole.Midlight, QColor(250, 250, 250))
+                        palette.setColor(palette.ColorRole.Dark, QColor(180, 180, 180))
+                        palette.setColor(palette.ColorRole.Mid, QColor(210, 210, 210))
+                        palette.setColor(palette.ColorRole.Shadow, QColor(120, 120, 120))
+                        palette.setColor(palette.ColorRole.BrightText, QColor(0, 0, 0))
+                        palette.setColor(palette.ColorRole.Accent, QColor(41, 128, 185))
                     except Exception as e:
                         log(f"Exception in theme_manager apply_theme: {e}",
                             level="error", category="ui")
                         raise
                     qapp.setPalette(palette)
-
-                    # Load light theme styles from styles.qss
-                    theme_qss = self._load_theme_styles('light')
-                    qapp.setStyleSheet(base_qss + "\n" + theme_qss)
+                    qapp.setStyleSheet(stylesheet)
                 else:
                     # Default to dark if unknown mode
                     return self.apply_theme('dark')

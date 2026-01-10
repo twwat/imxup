@@ -714,32 +714,117 @@ class TableRowManager(QObject):
             QTimer.singleShot(0, _apply_initial_filter)
 
     def _create_deferred_widgets(self, total_rows: int):
-        """Create deferred widgets (progress bars, action buttons) after initial load.
+        """Create deferred widgets (progress bars) after initial load.
+
+        Optimized for performance with viewport-first loading:
+        - Phase 1: Create widgets for visible rows first (~25 rows, ~50ms)
+        - Phase 2: Create remaining widgets in background
+        - Timer paused during batch operation to prevent _update_scanned_rows interference
+        - setUpdatesEnabled(False) prevents 1144 repaints -> ~11 repaints total
+        - processEvents() every 100 rows instead of 20 for reduced overhead
 
         Args:
             total_rows: Total number of rows in the table
         """
         mw = self._main_window
-        log(f"Creating deferred widgets for {total_rows} items...", level="debug", category="ui")
+        actual_rows = min(total_rows, mw.gallery_table.rowCount())
 
-        for row in range(min(total_rows, mw.gallery_table.rowCount())):
+        if actual_rows == 0:
+            log("No rows to create widgets for", level="debug", category="ui")
+            return
+
+        log(f"Creating deferred widgets for {actual_rows} items...", level="debug", category="ui")
+
+        # Get visible rows first for prioritized creation
+        first_visible, last_visible = self._get_visible_row_range()
+        visible_rows = set(range(first_visible, min(last_visible + 1, actual_rows)))
+
+        log(f"Visible row range: {first_visible}-{last_visible} ({len(visible_rows)} rows)",
+            level="debug", category="ui")
+
+        # PERFORMANCE: Pause update timer during batch operation
+        # This prevents _update_scanned_rows from iterating all items during widget creation
+        timer_was_active = False
+        timer_interval = 500  # default fallback
+        if hasattr(mw, 'update_timer'):
+            timer_was_active = mw.update_timer.isActive()
+            timer_interval = mw.update_timer.interval()
+            if timer_was_active:
+                mw.update_timer.stop()
+                log("Paused update_timer during widget creation", level="debug", category="performance")
+
+        # PERFORMANCE: Disable table updates to prevent 1144 repaints
+        mw.gallery_table.setUpdatesEnabled(False)
+
+        try:
+            # PHASE 1: Create widgets for VISIBLE rows first (user sees these immediately)
+            visible_created = 0
+            for row in range(first_visible, min(last_visible + 1, actual_rows)):
+                self._create_progress_widget_for_row(row)
+                visible_created += 1
+
+            # Re-enable updates and show visible widgets immediately
+            mw.gallery_table.setUpdatesEnabled(True)
+            QApplication.processEvents()
+            log(f"Phase 1 complete: {visible_created} visible widgets (rows {first_visible}-{last_visible})",
+                level="debug", category="ui")
+
+            # Disable updates again for Phase 2
+            mw.gallery_table.setUpdatesEnabled(False)
+
+            # PHASE 2: Create remaining widgets in background
+            remaining_created = 0
+            for row in range(actual_rows):
+                if row not in visible_rows:
+                    self._create_progress_widget_for_row(row)
+                    remaining_created += 1
+
+                    # PERFORMANCE: Process events every 100 rows instead of 20
+                    # This reduces overhead from event processing while keeping UI responsive
+                    if remaining_created % 100 == 0:
+                        mw.gallery_table.setUpdatesEnabled(True)
+                        QApplication.processEvents()
+                        mw.gallery_table.setUpdatesEnabled(False)
+                        log(f"Phase 2 progress: {remaining_created} remaining widgets created...",
+                            level="debug", category="ui")
+
+        finally:
+            # CRITICAL: Always restore table updates and timer
+            # Use nested try/finally to ensure timer is always restored even if setUpdatesEnabled fails
+            try:
+                mw.gallery_table.setUpdatesEnabled(True)
+            except Exception as e:
+                log(f"Warning: Failed to re-enable table updates: {e}", level="warning", category="ui")
+            finally:
+                if timer_was_active:
+                    mw.update_timer.start(timer_interval)
+                    log("Restored update_timer after widget creation", level="debug", category="performance")
+
+        log(f"Finished creating {actual_rows} deferred widgets "
+            f"({visible_created} visible + {remaining_created} background)",
+            level="debug", category="ui")
+
+    def _create_progress_widget_for_row(self, row: int):
+        """Create progress widget for a single row if not already present.
+
+        This is a helper method to avoid code duplication in _create_deferred_widgets.
+
+        Args:
+            row: Table row index to create widget for
+        """
+        mw = self._main_window
+        try:
             path = mw.row_to_path.get(row)
             if path:
                 item = mw.queue_manager.get_item(path)
                 if item:
-                    # Create progress widget
                     progress_widget = mw.gallery_table.cellWidget(row, _Col.PROGRESS)
                     if not isinstance(progress_widget, TableProgressWidget):
                         progress_widget = TableProgressWidget()
                         mw.gallery_table.setCellWidget(row, _Col.PROGRESS, progress_widget)
                         progress_widget.update_progress(item.progress, item.status)
-
-            # Process events every 20 rows to keep UI responsive
-            if row % 20 == 0:
-                QApplication.processEvents()
-            if row % 100 == 0:
-                log(f"{row}/{total_rows} deferred widgets created...", level="debug", category="ui")
-        log(f"Finished creating {total_rows} deferred widgets", level="debug", category="ui")
+        except Exception as e:
+            log(f"Failed to create progress widget for row {row}: {e}", level="warning", category="ui")
 
     def _update_scanned_rows(self):
         """Update only rows where scan completion status has changed."""

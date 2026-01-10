@@ -1,0 +1,113 @@
+/* ============================================================================
+   ImxUp GUI Stylesheet - PROGRESS BAR COMPONENT
+   ============================================================================
+
+   Progress bars and status indicators including storage bars.
+
+   ============================================================================ */
+
+/* ==========================================================================
+   BASE PROGRESS BAR STYLING (Theme-Independent)
+   ========================================================================== */
+
+QProgressBar              { border-radius: 6px; text-align: center; font-size: 9px; font-weight: bold; font-family: Arial; letter-spacing: 0.5px; }
+QTableWidget QProgressBar { text-align: center; font-size: 9px; border-radius: 6px; letter-spacing: 0.5px; font-weight: bold; }
+QProgressBar::chunk       { border-radius: 4px; }
+QProgressBar[class="overall-progress"]   { margin-top: 1px; }
+
+/* Progress bar text label overlay */
+QLabel[class="progress-text"] { background: transparent; font-weight: bold; font-size: 9px; margin-top: -1px; letter-spacing: 1px; }
+QLabel[class="progress-text-large"] { background: transparent; font-weight: bold; font-size: 12px; letter-spacing: 0.5px; }
+
+/* Storage bars font size */
+QProgressBar[class="storage-bar"] { font-size: 11px; font-weight: bold; }
+
+/* ==========================================================================
+   LIGHT THEME
+   ========================================================================== */
+
+/* LIGHT_THEME_START */
+
+/* Base progress bars */
+QTableWidget QProgressBar                { background-color: $colors.light.background.secondary; border: 1px solid $colors.light.border.default; color: $colors.light.text.primary; border-radius: 2px; }
+QTableWidget QProgressBar::chunk         { background-color: $colors.light.border.default; }
+
+/* Status-based progress bars */
+QProgressBar[status="completed"]         { border: 1px solid $colors.light.progress.completed_border; }
+QProgressBar[status="completed"]::chunk  { background-color: $colors.light.progress.completed; }
+QProgressBar[status="failed"]            { border: 1px solid $colors.light.progress.failed_border; }
+QProgressBar[status="failed"]::chunk     { background-color: $colors.light.progress.failed; }
+QProgressBar[status="uploading"]         { border: 1px solid $colors.light.progress.uploading_border; }
+QProgressBar[status="uploading"]::chunk  { background-color: $colors.light.progress.uploading; }
+QProgressBar[status="incomplete"]        { border: 1px solid $colors.light.progress.incomplete_border; }
+QProgressBar[status="incomplete"]::chunk { background-color: $colors.light.progress.incomplete; }
+QProgressBar[status="ready"]             { border: 1px solid $colors.light.progress.ready_border; }
+QProgressBar[status="ready"]::chunk      { background-color: $colors.light.progress.ready; }
+
+/* Storage progress bars - plenty of space (green) */
+QProgressBar[storage_status="plenty"]         { border: 1px solid $colors.light.progress.completed_border; background-color: #ffcccc; }
+QProgressBar[storage_status="plenty"]::chunk  { background-color: $colors.light.progress.completed; }
+
+/* Storage progress bars - medium space (blue) */
+QProgressBar[storage_status="medium"]         { border: 1px solid $colors.light.progress.uploading_border; background-color: #ffb3b3; }
+QProgressBar[storage_status="medium"]::chunk  { background-color: $colors.light.progress.uploading; }
+
+/* Storage progress bars - low space (red) */
+QProgressBar[storage_status="low"]            { border: 1px solid $colors.light.progress.failed_border; background-color: #ff9999; }
+QProgressBar[storage_status="low"]::chunk     { background-color: $colors.light.progress.failed; }
+
+/* Storage progress bars - unknown/unavailable (neutral gray) */
+QProgressBar[storage_status="unknown"]         { border: 1px solid #d0d0d0; background-color: $colors.light.background.secondary; }
+QProgressBar[storage_status="unknown"]::chunk  { background-color: $colors.light.border.default; }
+
+/* Progress text colors */
+QProgressBar[class="overall-progress"]      { color: #222222; }
+QLabel[class="progress-text"]               { color: #222222; }
+QLabel[class="progress-text-large"]         { color: #222222; }
+
+/* LIGHT_THEME_END */
+
+/* ==========================================================================
+   DARK THEME
+   ========================================================================== */
+
+/* DARK_THEME_START */
+
+/* Base progress bars */
+QTableWidget QProgressBar                { background-color: #222222; border: 1px solid $colors.dark.progress.default; color: $colors.dark.text.primary; }
+QTableWidget QProgressBar::chunk         { background-color: $colors.dark.progress.default; }
+
+/* Status-based progress bars */
+QProgressBar[status="completed"]         { border: 1px solid $colors.dark.progress.completed_border; }
+QProgressBar[status="completed"]::chunk  { background-color: $colors.dark.progress.completed; }
+QProgressBar[status="failed"]            { border: 1px solid $colors.dark.progress.failed_border; }
+QProgressBar[status="failed"]::chunk     { background-color: $colors.dark.progress.failed; }
+QProgressBar[status="uploading"]         { border: 1px solid $colors.dark.progress.uploading_border; }
+QProgressBar[status="uploading"]::chunk  { background-color: $colors.dark.progress.uploading; }
+QProgressBar[status="incomplete"]        { border: 1px solid $colors.dark.progress.incomplete_border; }
+QProgressBar[status="incomplete"]::chunk { background-color: $colors.dark.progress.incomplete; }
+QProgressBar[status="ready"]             { border: 1px solid $colors.dark.progress.ready_border; }
+QProgressBar[status="ready"]::chunk      { background-color: $colors.dark.progress.ready; }
+
+/* Storage progress bars - plenty of space (green) */
+QProgressBar[storage_status="plenty"]         { border: 1px solid $colors.dark.progress.completed_border; background-color: #8b3a3a; }
+QProgressBar[storage_status="plenty"]::chunk  { background-color: $colors.dark.progress.completed; }
+
+/* Storage progress bars - medium space (blue) */
+QProgressBar[storage_status="medium"]         { border: 1px solid $colors.dark.progress.uploading_border; background-color: #7a2f2f; }
+QProgressBar[storage_status="medium"]::chunk  { background-color: $colors.dark.progress.uploading; }
+
+/* Storage progress bars - low space (red) */
+QProgressBar[storage_status="low"]            { border: 1px solid $colors.dark.progress.failed_border; background-color: #6b2424; }
+QProgressBar[storage_status="low"]::chunk     { background-color: $colors.dark.progress.failed; }
+
+/* Storage progress bars - unknown/unavailable (neutral gray) */
+QProgressBar[storage_status="unknown"]         { border: 1px solid $colors.dark.border.default; background-color: $colors.dark.scrollbar.background; }
+QProgressBar[storage_status="unknown"]::chunk  { background-color: $colors.dark.progress.default; }
+
+/* Progress text colors */
+QProgressBar[class="overall-progress"]      { color: #eeeeee; }
+QLabel[class="progress-text"]               { color: #eeeeee; }
+QLabel[class="progress-text-large"]         { color: #eeeeee; }
+
+/* DARK_THEME_END */

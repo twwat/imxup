@@ -154,8 +154,8 @@ class TestImageStatusDialogInitialization:
         """Test basic dialog creation."""
         assert dialog.windowTitle() == "Check Image Status - IMX.to"
         assert dialog.isModal()
-        assert dialog.minimumWidth() == 700
-        assert dialog.minimumHeight() == 400
+        assert dialog.minimumWidth() == 750
+        assert dialog.minimumHeight() == 450
 
     def test_table_columns(self, dialog):
         """Test table has correct columns."""
@@ -172,18 +172,33 @@ class TestImageStatusDialogInitialization:
         assert dialog.table.isSortingEnabled()
         assert not dialog.table.verticalHeader().isVisible()
 
-    def test_initial_summary_label(self, dialog):
-        """Test initial summary label text."""
-        expected = "Preparing to check image status..."
-        assert dialog.summary_label.text() == expected
+    def test_proportional_bars_exist(self, dialog):
+        """Test proportional bars are created."""
+        assert hasattr(dialog, 'images_bar')
+        assert hasattr(dialog, 'galleries_bar')
+        assert dialog.images_bar is not None
+        assert dialog.galleries_bar is not None
 
-    def test_progress_bar_initially_hidden(self, dialog):
-        """Test progress bar is hidden initially."""
-        assert not dialog.progress_bar.isVisible()
+    def test_status_labels_exist(self, dialog):
+        """Test status labels are created."""
+        assert hasattr(dialog, 'images_status_label')
+        assert hasattr(dialog, 'galleries_status_label')
+        assert hasattr(dialog, 'spinner_label')
+        assert hasattr(dialog, 'elapsed_label')
 
-    def test_spinner_widget_initially_hidden(self, dialog):
-        """Test spinner widget is hidden initially."""
-        assert not dialog._spinner_widget.isVisible()
+    def test_statistics_widgets_exist(self, dialog):
+        """Test statistics panel widgets are created."""
+        assert hasattr(dialog, 'stat_galleries_scanned')
+        assert hasattr(dialog, 'stat_images_checked')
+        assert hasattr(dialog, 'stat_online_galleries')
+        assert hasattr(dialog, 'stat_partial_galleries')
+        assert hasattr(dialog, 'stat_offline_galleries')
+        assert hasattr(dialog, 'stat_online_images')
+        assert hasattr(dialog, 'stat_offline_images')
+
+    def test_table_initially_hidden(self, dialog):
+        """Test table is hidden initially until scan complete."""
+        assert not dialog.table.isVisible()
 
     def test_cancel_button_initially_hidden(self, dialog):
         """Test cancel button is hidden initially."""
@@ -221,119 +236,142 @@ class TestUIStateManagement:
         assert not dialog.cancel_btn.isVisible()
         assert dialog.close_btn.isVisible()
 
-    def test_spinner_visible_during_progress(self, dialog):
-        """Test spinner shown when progress is visible."""
+    def test_bars_indeterminate_during_progress(self, dialog):
+        """Test proportional bars show indeterminate animation when running."""
         dialog.show_progress(True)
 
-        assert dialog._spinner_widget.isVisible()
-        assert dialog.progress_bar.isVisible()
+        assert dialog.images_bar._indeterminate
+        assert dialog.galleries_bar._indeterminate
 
-    def test_spinner_hidden_when_progress_hidden(self, dialog):
-        """Test spinner hidden when progress is hidden."""
+    def test_bars_stop_indeterminate_when_segments_set(self, dialog):
+        """Test proportional bars stop animation when segments are set."""
+        dialog.show_progress(True)
+        assert dialog.images_bar._animation_timer.isActive()
+
+        # Setting segments stops indeterminate mode
+        colors = get_online_status_colors()
+        dialog.images_bar.set_segments([
+            (10, colors['online']),
+            (5, colors['offline'])
+        ])
+
+        # Animation timer should be stopped
+        assert not dialog.images_bar._animation_timer.isActive()
+        assert not dialog.images_bar._indeterminate
+
+    def test_status_labels_set_when_running(self, dialog):
+        """Test status labels are set when running."""
+        dialog.show_progress(True)
+
+        assert dialog.images_status_label.text() == "Scanning..."
+        assert dialog.galleries_status_label.text() == "Scanning..."
+        assert dialog.spinner_label.text() == "Checking image status..."
+
+    def test_elapsed_timer_starts_when_running(self, dialog):
+        """Test elapsed timer starts when progress shown."""
+        dialog.show_progress(True)
+
+        assert dialog._elapsed_timer.isActive()
+        assert dialog._start_time > 0
+
+    def test_elapsed_timer_stops_when_hidden(self, dialog):
+        """Test elapsed timer stops when progress hidden."""
         dialog.show_progress(True)
         dialog.show_progress(False)
 
-        assert not dialog._spinner_widget.isVisible()
+        assert not dialog._elapsed_timer.isActive()
 
-    def test_progress_bar_indeterminate_when_running(self, dialog):
-        """Test progress bar is in indeterminate mode when running."""
+
+class TestProportionalBarAnimation:
+    """Test proportional bar animation functionality."""
+
+    def test_bars_animation_timers_start_when_indeterminate(self, dialog):
+        """Test animation timers start in indeterminate mode."""
         dialog.show_progress(True)
 
-        # Indeterminate mode has min and max both at 0
-        assert dialog.progress_bar.minimum() == 0
-        assert dialog.progress_bar.maximum() == 0
+        assert dialog.images_bar._animation_timer.isActive()
+        assert dialog.galleries_bar._animation_timer.isActive()
 
-    def test_spinner_status_text_set_when_running(self, dialog):
-        """Test spinner status text is set when running."""
+    def test_bars_animation_timers_stop_when_segments_set(self, dialog):
+        """Test animation timers stop when segments are set."""
         dialog.show_progress(True)
+        assert dialog.images_bar._animation_timer.isActive()
 
-        assert dialog._spinner_status_label.text() == "Checking image status..."
+        # Set segments (non-indeterminate mode)
+        colors = get_online_status_colors()
+        dialog.images_bar.set_segments([
+            (10, colors['online']),
+            (5, colors['offline'])
+        ])
 
+        assert not dialog.images_bar._animation_timer.isActive()
+        assert not dialog.images_bar._indeterminate
 
-class TestSpinnerAnimation:
-    """Test spinner animation functionality."""
-
-    def test_spinner_timer_starts_when_visible(self, dialog):
-        """Test QTimer starts on show."""
+    def test_bar_animation_offset_increments(self, dialog):
+        """Test animation offset increments during animation."""
         dialog.show_progress(True)
+        initial_offset = dialog.images_bar._animation_offset
 
-        assert dialog._spinner_timer.isActive()
+        # Manually trigger animation
+        dialog.images_bar._animate()
 
-    def test_spinner_timer_stops_when_hidden(self, dialog):
-        """Test QTimer stops on hide."""
-        dialog.show_progress(True)
-        assert dialog._spinner_timer.isActive()
+        # Offset should have changed
+        assert dialog.images_bar._animation_offset != initial_offset
 
-        dialog.show_progress(False)
-        assert not dialog._spinner_timer.isActive()
+    def test_spinner_label_updates(self, dialog):
+        """Test spinner label can be updated."""
+        dialog.spinner_label.setText("Custom status text")
 
-    def test_animate_spinner_cycles_dots(self, dialog):
-        """Test animation cycles through '.', '..', '...'."""
-        dialog.show_progress(True)
-
-        # Manually call animate to test cycling
-        dialog._animate_spinner()
-        assert dialog._spinner_label.text() in [".", "..", "..."]
-
-        dialog._animate_spinner()
-        assert dialog._spinner_label.text() in [".", "..", "..."]
-
-        dialog._animate_spinner()
-        assert dialog._spinner_label.text() in [".", "..", "..."]
-
-        # After 3 cycles, should be back to same position
-        dialog._animate_spinner()
-        dialog._animate_spinner()
-        dialog._animate_spinner()
-        # Verify it cycles
-        assert dialog._spinner_index < 3
-
-    def test_set_spinner_status_updates_label(self, dialog):
-        """Test set_spinner_status updates the status label."""
-        dialog.set_spinner_status("Custom status text")
-
-        assert dialog._spinner_status_label.text() == "Custom status text"
+        assert dialog.spinner_label.text() == "Custom status text"
 
 
 class TestTimerCleanup:
     """Test timer cleanup on dialog close."""
 
-    def test_close_event_stops_timer(self, dialog):
-        """Test timer stopped in closeEvent."""
+    def test_close_event_stops_timers(self, dialog):
+        """Test all timers stopped in closeEvent."""
         dialog.show_progress(True)
-        assert dialog._spinner_timer.isActive()
+        assert dialog._elapsed_timer.isActive()
+        assert dialog.images_bar._animation_timer.isActive()
 
         # Close the dialog which triggers closeEvent
         dialog.close()
 
-        assert not dialog._spinner_timer.isActive()
+        assert not dialog._elapsed_timer.isActive()
+        assert not dialog.images_bar._animation_timer.isActive()
+        assert not dialog.galleries_bar._animation_timer.isActive()
 
-    def test_reject_stops_timer(self, dialog):
-        """Test timer stopped in reject (ESC key)."""
+    def test_reject_stops_timers(self, dialog):
+        """Test all timers stopped in reject (ESC key)."""
         dialog.show_progress(True)
-        assert dialog._spinner_timer.isActive()
+        assert dialog._elapsed_timer.isActive()
+        assert dialog.images_bar._animation_timer.isActive()
 
         # Call reject (simulates ESC key)
         dialog.reject()
 
-        assert not dialog._spinner_timer.isActive()
+        assert not dialog._elapsed_timer.isActive()
+        assert not dialog.images_bar._animation_timer.isActive()
+        assert not dialog.galleries_bar._animation_timer.isActive()
 
     def test_timer_stopped_when_already_stopped(self, dialog):
         """Test stopping timer when it's already stopped doesn't raise."""
         # Timer should not be active initially
-        assert not dialog._spinner_timer.isActive()
+        assert not dialog._elapsed_timer.isActive()
 
         # This should not raise an exception
-        dialog._spinner_timer.stop()
+        dialog._elapsed_timer.stop()
+        dialog.images_bar.stop_animation()
+        dialog.galleries_bar.stop_animation()
 
-        assert not dialog._spinner_timer.isActive()
+        assert not dialog._elapsed_timer.isActive()
 
 
 class TestResultsDisplay:
     """Test results display functionality."""
 
-    def test_set_results_updates_summary(self, dialog_with_galleries):
-        """Test summary label updated with stats."""
+    def test_set_results_updates_statistics(self, dialog_with_galleries):
+        """Test statistics panel updated with stats."""
         results = {
             "/path/to/gallery1": {
                 "db_id": 1,
@@ -366,14 +404,17 @@ class TestResultsDisplay:
 
         dialog_with_galleries.set_results(results, elapsed_time=5.0)
 
-        summary = dialog_with_galleries.summary_label.text()
-        assert "3 galleries" in summary
-        assert "35 images" in summary
-        assert "13/35 online" in summary
-        assert "5.0s" in summary
+        # Check statistics widgets were updated
+        assert "3" in dialog_with_galleries.stat_galleries_scanned.value_label.text()
+        assert "35" in dialog_with_galleries.stat_images_checked.value_label.text()
+        assert "13" in dialog_with_galleries.stat_online_images.value_label.text()
+        assert "22" in dialog_with_galleries.stat_offline_images.value_label.text()
+
+        # Check elapsed time
+        assert "5.0s" in dialog_with_galleries.elapsed_label.text()
 
     def test_set_results_shows_gallery_breakdown(self, dialog_with_galleries):
-        """Test tooltip shows online/partial/offline breakdown."""
+        """Test statistics show online/partial/offline breakdown."""
         results = {
             "/path/to/gallery1": {
                 "db_id": 1, "name": "Gallery One",
@@ -394,15 +435,15 @@ class TestResultsDisplay:
 
         dialog_with_galleries.set_results(results)
 
-        tooltip = dialog_with_galleries.summary_label.toolTip()
-        assert "1 online" in tooltip
-        assert "1 partial" in tooltip
-        assert "1 offline" in tooltip
+        # Check gallery breakdown statistics
+        assert "1" in dialog_with_galleries.stat_online_galleries.value_label.text()
+        assert "1" in dialog_with_galleries.stat_partial_galleries.value_label.text()
+        assert "1" in dialog_with_galleries.stat_offline_galleries.value_label.text()
 
-    def test_set_results_hides_spinner(self, dialog_with_galleries):
-        """Test spinner hidden after results."""
+    def test_set_results_stops_timers(self, dialog_with_galleries):
+        """Test timers stopped after results."""
         dialog_with_galleries.show_progress(True)
-        assert dialog_with_galleries._spinner_widget.isVisible()
+        assert dialog_with_galleries._elapsed_timer.isActive()
 
         results = {
             "/path/to/gallery1": {
@@ -414,8 +455,24 @@ class TestResultsDisplay:
 
         dialog_with_galleries.set_results(results)
 
-        assert not dialog_with_galleries._spinner_widget.isVisible()
-        assert not dialog_with_galleries.progress_bar.isVisible()
+        assert not dialog_with_galleries._elapsed_timer.isActive()
+
+    def test_set_results_shows_table(self, dialog_with_galleries):
+        """Test table shown after results."""
+        dialog_with_galleries.show_progress(True)
+        assert not dialog_with_galleries.table.isVisible()
+
+        results = {
+            "/path/to/gallery1": {
+                "db_id": 1, "name": "Gallery One",
+                "total": 10, "online": 10, "offline": 0,
+                "online_urls": [], "offline_urls": []
+            }
+        }
+
+        dialog_with_galleries.set_results(results)
+
+        assert dialog_with_galleries.table.isVisible()
 
     def test_set_results_shows_close_button(self, dialog_with_galleries):
         """Test Close button visible after results."""
@@ -511,24 +568,26 @@ class TestGalleryTable:
         path = id_item.data(Qt.ItemDataRole.UserRole)
         assert path == "/custom/path/gallery"
 
-    def test_update_progress_sets_progress_bar(self, dialog):
-        """Test progress bar value updated."""
+    def test_update_progress_is_noop(self, dialog):
+        """Test update_progress exists for backward compatibility but is a no-op."""
         dialog.show_progress(True)
 
+        # Should not raise (legacy method exists for backward compatibility)
         dialog.update_progress(5, 10)
 
-        assert dialog.progress_bar.value() == 5
-        assert dialog.progress_bar.maximum() == 10
+        # Method exists but doesn't do anything in new UI
 
-    def test_update_progress_with_zero_total(self, dialog):
-        """Test update_progress handles zero total gracefully."""
+    def test_show_quick_count_updates_images_bar(self, dialog):
+        """Test show_quick_count updates images bar with online/offline segments."""
         dialog.show_progress(True)
 
-        # Should not raise
-        dialog.update_progress(0, 0)
+        dialog.show_quick_count(8, 10)
 
-        # Progress bar should remain unchanged
-        assert dialog.progress_bar.isVisible()
+        # Images bar should now have segments (not indeterminate)
+        assert not dialog.images_bar._indeterminate
+        assert len(dialog.images_bar._segments) == 2
+        assert dialog.images_bar._segments[0][0] == 8  # online count
+        assert dialog.images_bar._segments[1][0] == 2  # offline count
 
 
 class TestStatusColors:
@@ -713,5 +772,5 @@ class TestEdgeCases:
         # Should not raise ZeroDivisionError
         dialog_with_galleries.set_results(results, elapsed_time=0.0)
 
-        summary = dialog_with_galleries.summary_label.text()
-        assert "galleries" in summary
+        # Check elapsed label was updated
+        assert "0.0s" in dialog_with_galleries.elapsed_label.text()

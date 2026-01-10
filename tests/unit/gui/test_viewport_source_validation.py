@@ -13,7 +13,14 @@ from pathlib import Path
 def main_window_source():
     """Read the main_window.py source code"""
     source_path = Path(__file__).parent.parent.parent.parent / 'src' / 'gui' / 'main_window.py'
-    return source_path.read_text()
+    return source_path.read_text(encoding='utf-8')
+
+
+@pytest.fixture
+def table_row_manager_source():
+    """Read the table_row_manager.py source code"""
+    source_path = Path(__file__).parent.parent.parent.parent / 'src' / 'gui' / 'table_row_manager.py'
+    return source_path.read_text(encoding='utf-8')
 
 
 class TestViewportImplementationExists:
@@ -52,89 +59,89 @@ class TestViewportImplementationExists:
 class TestPhase2UsesViewportRange:
     """CRITICAL: Verify Phase 2 uses viewport range, NOT mass widget creation"""
 
-    def test_phase2_calls_get_visible_row_range(self, main_window_source):
-        """Verify phase2_create_table_widgets calls _get_visible_row_range"""
-        # Extract phase2_create_table_widgets method
-        start_idx = main_window_source.find('def phase2_create_table_widgets(self)')
-        assert start_idx != -1, "phase2_create_table_widgets method not found"
+    def test_phase2_calls_get_visible_row_range(self, table_row_manager_source):
+        """Verify _load_galleries_phase2 calls _get_visible_row_range"""
+        # Extract _load_galleries_phase2 method from TableRowManager
+        start_idx = table_row_manager_source.find('def _load_galleries_phase2(self)')
+        assert start_idx != -1, "_load_galleries_phase2 method not found in TableRowManager"
 
         # Find the end of the method (next 'def ' or end of class)
-        end_idx = main_window_source.find('\n    def ', start_idx + 1)
+        end_idx = table_row_manager_source.find('\n    def ', start_idx + 1)
         if end_idx == -1:
-            end_idx = len(main_window_source)
+            end_idx = len(table_row_manager_source)
 
-        phase2_source = main_window_source[start_idx:end_idx]
+        phase2_source = table_row_manager_source[start_idx:end_idx]
 
         # Should call _get_visible_row_range
         assert '_get_visible_row_range()' in phase2_source, (
-            "❌ CRITICAL FAILURE: phase2_create_table_widgets does NOT call _get_visible_row_range()\n"
+            "❌ CRITICAL FAILURE: _load_galleries_phase2 does NOT call _get_visible_row_range()\n"
             "This means Phase 2 is still creating widgets for ALL 997 galleries!"
         )
-        print("✅ PASS: phase2_create_table_widgets calls _get_visible_row_range()")
+        print("✅ PASS: _load_galleries_phase2 calls _get_visible_row_range()")
 
-    def test_phase2_uses_first_last_visible_variables(self, main_window_source):
+    def test_phase2_uses_first_last_visible_variables(self, table_row_manager_source):
         """Verify Phase 2 uses first_visible, last_visible range variables"""
-        start_idx = main_window_source.find('def phase2_create_table_widgets(self)')
-        end_idx = main_window_source.find('\n    def ', start_idx + 1)
+        start_idx = table_row_manager_source.find('def _load_galleries_phase2(self)')
+        end_idx = table_row_manager_source.find('\n    def ', start_idx + 1)
         if end_idx == -1:
-            end_idx = len(main_window_source)
+            end_idx = len(table_row_manager_source)
 
-        phase2_source = main_window_source[start_idx:end_idx]
+        phase2_source = table_row_manager_source[start_idx:end_idx]
 
         # Should use first_visible, last_visible
         assert 'first_visible' in phase2_source, (
-            "❌ FAILURE: 'first_visible' variable not used in phase2_create_table_widgets"
+            "❌ FAILURE: 'first_visible' variable not used in _load_galleries_phase2"
         )
         assert 'last_visible' in phase2_source, (
-            "❌ FAILURE: 'last_visible' variable not used in phase2_create_table_widgets"
+            "❌ FAILURE: 'last_visible' variable not used in _load_galleries_phase2"
         )
-        print("✅ PASS: phase2_create_table_widgets uses first_visible, last_visible range")
+        print("✅ PASS: _load_galleries_phase2 uses first_visible, last_visible range")
 
-    def test_phase2_does_not_loop_all_galleries(self, main_window_source):
+    def test_phase2_does_not_loop_all_galleries(self, table_row_manager_source):
         """CRITICAL: Verify Phase 2 does NOT loop over all galleries"""
-        start_idx = main_window_source.find('def phase2_create_table_widgets(self)')
-        end_idx = main_window_source.find('\n    def ', start_idx + 1)
+        start_idx = table_row_manager_source.find('def _load_galleries_phase2(self)')
+        end_idx = table_row_manager_source.find('\n    def ', start_idx + 1)
         if end_idx == -1:
-            end_idx = len(main_window_source)
+            end_idx = len(table_row_manager_source)
 
-        phase2_source = main_window_source[start_idx:end_idx]
+        phase2_source = table_row_manager_source[start_idx:end_idx]
 
         # Should NOT have 'for gallery in self.galleries:'
         assert 'for gallery in self.galleries:' not in phase2_source, (
-            "❌ CRITICAL FAILURE: phase2_create_table_widgets still loops over ALL galleries!\n"
+            "❌ CRITICAL FAILURE: _load_galleries_phase2 still loops over ALL galleries!\n"
             "Viewport lazy loading was NOT implemented - still creating widgets for all 997 galleries!"
         )
-        print("✅ PASS: phase2_create_table_widgets does NOT loop over all galleries")
+        print("✅ PASS: _load_galleries_phase2 does NOT loop over all galleries")
 
-    def test_phase2_tracks_created_widgets(self, main_window_source):
+    def test_phase2_tracks_created_widgets(self, table_row_manager_source):
         """Verify Phase 2 tracks created widgets in _rows_with_widgets"""
-        start_idx = main_window_source.find('def phase2_create_table_widgets(self)')
-        end_idx = main_window_source.find('\n    def ', start_idx + 1)
+        start_idx = table_row_manager_source.find('def _load_galleries_phase2(self)')
+        end_idx = table_row_manager_source.find('\n    def ', start_idx + 1)
         if end_idx == -1:
-            end_idx = len(main_window_source)
+            end_idx = len(table_row_manager_source)
 
-        phase2_source = main_window_source[start_idx:end_idx]
+        phase2_source = table_row_manager_source[start_idx:end_idx]
 
         # Should add to _rows_with_widgets
         assert '_rows_with_widgets.add' in phase2_source, (
-            "❌ FAILURE: phase2_create_table_widgets doesn't track widgets in _rows_with_widgets"
+            "❌ FAILURE: _load_galleries_phase2 doesn't track widgets in _rows_with_widgets"
         )
-        print("✅ PASS: phase2_create_table_widgets tracks widgets in _rows_with_widgets")
+        print("✅ PASS: _load_galleries_phase2 tracks widgets in _rows_with_widgets")
 
-    def test_phase2_logs_widget_count(self, main_window_source):
+    def test_phase2_logs_widget_count(self, table_row_manager_source):
         """Verify Phase 2 logs number of widgets created"""
-        start_idx = main_window_source.find('def phase2_create_table_widgets(self)')
-        end_idx = main_window_source.find('\n    def ', start_idx + 1)
+        start_idx = table_row_manager_source.find('def _load_galleries_phase2(self)')
+        end_idx = table_row_manager_source.find('\n    def ', start_idx + 1)
         if end_idx == -1:
-            end_idx = len(main_window_source)
+            end_idx = len(table_row_manager_source)
 
-        phase2_source = main_window_source[start_idx:end_idx]
+        phase2_source = table_row_manager_source[start_idx:end_idx]
 
-        # Should log len(self._rows_with_widgets)
-        assert 'len(self._rows_with_widgets)' in phase2_source, (
-            "❌ FAILURE: phase2_create_table_widgets doesn't log widget count"
+        # Should log len(mw._rows_with_widgets) or len(self._rows_with_widgets)
+        assert 'len(' in phase2_source and '_rows_with_widgets' in phase2_source, (
+            "❌ FAILURE: _load_galleries_phase2 doesn't log widget count"
         )
-        print("✅ PASS: phase2_create_table_widgets logs widget count")
+        print("✅ PASS: _load_galleries_phase2 logs widget count")
 
 
 class TestScrollHandlerImplementation:
@@ -189,28 +196,28 @@ class TestScrollHandlerImplementation:
 class TestGetVisibleRowRangeImplementation:
     """Verify _get_visible_row_range implementation"""
 
-    def test_uses_viewport(self, main_window_source):
+    def test_uses_viewport(self, table_row_manager_source):
         """Verify _get_visible_row_range uses viewport"""
-        start_idx = main_window_source.find('def _get_visible_row_range(self)')
-        end_idx = main_window_source.find('\n    def ', start_idx + 1)
+        start_idx = table_row_manager_source.find('def _get_visible_row_range(self)')
+        end_idx = table_row_manager_source.find('\n    def ', start_idx + 1)
         if end_idx == -1:
-            end_idx = len(main_window_source)
+            end_idx = len(table_row_manager_source)
 
-        method_source = main_window_source[start_idx:end_idx]
+        method_source = table_row_manager_source[start_idx:end_idx]
 
         assert 'viewport()' in method_source, (
             "❌ FAILURE: _get_visible_row_range doesn't use viewport()"
         )
         print("✅ PASS: _get_visible_row_range uses viewport()")
 
-    def test_returns_tuple(self, main_window_source):
+    def test_returns_tuple(self, table_row_manager_source):
         """Verify _get_visible_row_range returns tuple"""
-        start_idx = main_window_source.find('def _get_visible_row_range(self)')
-        end_idx = main_window_source.find('\n    def ', start_idx + 1)
+        start_idx = table_row_manager_source.find('def _get_visible_row_range(self)')
+        end_idx = table_row_manager_source.find('\n    def ', start_idx + 1)
         if end_idx == -1:
-            end_idx = len(main_window_source)
+            end_idx = len(table_row_manager_source)
 
-        method_source = main_window_source[start_idx:end_idx]
+        method_source = table_row_manager_source[start_idx:end_idx]
 
         # Should have return statement
         assert 'return' in method_source, (
@@ -227,18 +234,18 @@ class TestGetVisibleRowRangeImplementation:
 class TestStateManagement:
     """Verify state tracking and cleanup"""
 
-    def test_rows_with_widgets_cleared_on_new_session(self, main_window_source):
+    def test_rows_with_widgets_cleared_on_new_session(self, table_row_manager_source):
         """Verify _rows_with_widgets is cleared when starting new session"""
-        # Should be cleared in phase1_prepare_table_structure
-        start_idx = main_window_source.find('def phase1_prepare_table_structure(self)')
-        end_idx = main_window_source.find('\n    def ', start_idx + 1)
+        # Should be cleared in _load_galleries_phase1
+        start_idx = table_row_manager_source.find('def _load_galleries_phase1(self)')
+        end_idx = table_row_manager_source.find('\n    def ', start_idx + 1)
         if end_idx == -1:
-            end_idx = len(main_window_source)
+            end_idx = len(table_row_manager_source)
 
-        phase1_source = main_window_source[start_idx:end_idx]
+        phase1_source = table_row_manager_source[start_idx:end_idx]
 
         assert '_rows_with_widgets.clear()' in phase1_source, (
-            "❌ FAILURE: _rows_with_widgets not cleared in phase1_prepare_table_structure"
+            "❌ FAILURE: _rows_with_widgets not cleared in _load_galleries_phase1"
         )
         print("✅ PASS: _rows_with_widgets cleared on new session")
 

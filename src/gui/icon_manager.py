@@ -65,6 +65,7 @@ class IconManager:
         'filehosts':            ['filehosts-light.png',         'filehosts-dark.png'],
         'help':                 ['help-light.png',              'help-dark.png'],
         'hooks':                ['hooks-light.png',             'hooks-dark.png'],
+        'scan':                 ['scan-light.png',              'scan-dark.png'],
         'toggle_theme':         ['toggle_theme-light.png',      'toggle_theme-dark.png'],
         'statistics':           ['statistics-light.png',        'statistics-dark.png'],
         'log_viewer':           ['log_viewer-light.png',        'log_viewer-dark.png'],

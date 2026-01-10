@@ -53,6 +53,34 @@ from src.gui.widgets.worker_status_widget import (
 )
 
 
+@pytest.fixture(autouse=True)
+def clear_settings_before_each_test(mock_qsettings, qapp):
+    """Auto-clear settings before each test to prevent pollution.
+
+    The mock_qsettings fixture creates instances that share a dict,
+    so we need to clear it before AND after each test.
+    This fixture runs with higher priority to ensure cleanup happens
+    after all other fixtures.
+    """
+    # Create an instance and clear the shared dict BEFORE test
+    settings = QSettings()
+    # Clear the data dict directly to ensure complete cleanup
+    if hasattr(settings, 'data'):
+        settings.data.clear()
+    # Also call the clear method
+    settings.clear()
+    # Yield to run the test
+    yield
+    # Process events to ensure any pending operations complete
+    from PyQt6.QtTest import QTest
+    QTest.qWait(20)
+    # Clear again after test to prevent pollution
+    settings = QSettings()
+    if hasattr(settings, 'data'):
+        settings.data.clear()
+    settings.clear()
+
+
 @pytest.fixture
 def widget(qapp, mock_qsettings):
     """Create a WorkerStatusWidget instance for testing."""
@@ -110,18 +138,21 @@ class TestColumnReordering:
     def test_column_order_restored_on_restart(self, mock_qsettings):
         """Verify column order is restored when creating new instance."""
         settings = QSettings()
-        custom_order = ['icon', 'speed', 'hostname', 'status', 'settings']
+        settings.clear()  # Clear any previous settings
+        custom_order = ['icon', 'speed', 'hostname', 'status', 'status_text']
         settings.setValue("worker_status/visible_columns", custom_order)
 
         new_widget = WorkerStatusWidget()
         restored_columns = [col.id for col in new_widget._active_columns]
         assert restored_columns == custom_order
 
+        new_widget.stop_monitoring()
         new_widget.deleteLater()
 
     def test_invalid_column_order_falls_back_to_defaults(self, mock_qsettings):
         """Verify invalid column IDs are filtered out on restore."""
         settings = QSettings()
+        settings.clear()  # Clear any previous settings
         invalid_order = ['icon', 'invalid_column', 'hostname', 'status']
         settings.setValue("worker_status/visible_columns", invalid_order)
 
@@ -131,6 +162,7 @@ class TestColumnReordering:
         assert 'icon' in restored_columns
         assert 'hostname' in restored_columns
 
+        new_widget.stop_monitoring()
         new_widget.deleteLater()
 
 
@@ -174,10 +206,11 @@ class TestColumnResizing:
     def test_column_widths_restored_on_restart(self, mock_qsettings):
         """Verify column widths are restored when creating new instance."""
         settings = QSettings()
+        settings.clear()  # Clear any previous settings
         custom_widths = {'hostname': 250, 'speed': 120, 'status': 100}
         settings.setValue("worker_status/column_widths", custom_widths)
         settings.setValue("worker_status/visible_columns",
-                         ['icon', 'hostname', 'speed', 'status', 'settings'])
+                         ['icon', 'hostname', 'speed', 'status', 'status_text'])
 
         new_widget = WorkerStatusWidget()
         QTest.qWait(50)
@@ -186,6 +219,7 @@ class TestColumnResizing:
         if hostname_idx >= 0:
             assert new_widget.status_table.columnWidth(hostname_idx) > 0
 
+        new_widget.stop_monitoring()
         new_widget.deleteLater()
 
     def test_resize_multiple_columns(self, widget, mock_qsettings):
@@ -274,9 +308,9 @@ class TestColumnVisibility:
         assert icon_col is not None
         assert not icon_col.hideable, "Icon column should not be hideable"
 
-        settings_col = next((col for col in AVAILABLE_COLUMNS.values() if col.id == 'settings'), None)
-        assert settings_col is not None
-        assert not settings_col.hideable, "Settings column should not be hideable"
+        status_col = next((col for col in AVAILABLE_COLUMNS.values() if col.id == 'status'), None)
+        assert status_col is not None
+        assert not status_col.hideable, "Status column should not be hideable"
 
     def test_hidden_column_persists(self, widget, mock_qsettings):
         """Verify hidden column state is saved."""
@@ -289,13 +323,15 @@ class TestColumnVisibility:
     def test_hidden_column_restored_on_restart(self, mock_qsettings):
         """Verify hidden columns remain hidden on restart."""
         settings = QSettings()
-        visible_columns = ['icon', 'hostname', 'status', 'settings']
+        settings.clear()  # Clear any previous settings
+        visible_columns = ['icon', 'hostname', 'status', 'status_text']
         settings.setValue("worker_status/visible_columns", visible_columns)
 
         new_widget = WorkerStatusWidget()
         assert not new_widget._is_column_visible('speed')
         assert new_widget._is_column_visible('hostname')
 
+        new_widget.stop_monitoring()
         new_widget.deleteLater()
 
     def test_show_metric_column(self, widget):
@@ -327,6 +363,7 @@ class TestColumnPersistence:
             widget1.status_table.setColumnWidth(hostname_idx, 250)
             widget1._save_column_settings()
 
+        widget1.stop_monitoring()
         widget1.deleteLater()
         QTest.qWait(50)
 
@@ -336,6 +373,7 @@ class TestColumnPersistence:
         assert widget2._is_column_visible('bytes_session')
         assert not widget2._is_column_visible('speed')
 
+        widget2.stop_monitoring()
         widget2.deleteLater()
 
     def test_reset_to_defaults(self, widget, mock_qsettings):
@@ -366,9 +404,9 @@ class TestColumnPersistence:
     def test_partial_settings_restoration(self, mock_qsettings):
         """Test restoration when only some settings are saved."""
         settings = QSettings()
-        settings.clear()
+        settings.clear()  # Ensure clean state
         settings.setValue("worker_status/visible_columns",
-                         ['icon', 'hostname', 'status', 'settings'])
+                         ['icon', 'hostname', 'status', 'status_text'])
 
         widget = WorkerStatusWidget()
         assert widget._is_column_visible('hostname')
@@ -378,19 +416,22 @@ class TestColumnPersistence:
         if hostname_idx >= 0:
             assert widget.status_table.columnWidth(hostname_idx) > 0
 
+        widget.stop_monitoring()
         widget.deleteLater()
 
     def test_empty_settings_uses_defaults(self, mock_qsettings):
         """Test that empty settings result in default configuration."""
         settings = QSettings()
-        settings.clear()
+        settings.clear()  # Ensure truly empty settings
 
         widget = WorkerStatusWidget()
+        # Default visible columns: icon, hostname, speed, status, status_text, files_remaining, bytes_remaining, storage
         default_visible = [col.id for col in CORE_COLUMNS + METRIC_COLUMNS if col.default_visible]
 
         for col_id in default_visible:
-            assert widget._is_column_visible(col_id)
+            assert widget._is_column_visible(col_id), f"Column {col_id} should be visible by default"
 
+        widget.stop_monitoring()
         widget.deleteLater()
 
 
@@ -470,7 +511,7 @@ class TestEdgeCases:
 
         assert len(widget._active_columns) > 0
         assert widget._is_column_visible('icon')
-        assert widget._is_column_visible('settings')
+        assert widget._is_column_visible('status')
 
     def test_invalid_column_id_toggle(self, widget):
         """Test toggling invalid column ID."""

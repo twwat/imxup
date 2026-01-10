@@ -30,25 +30,6 @@ class CredentialSetupDialog(QDialog):
         
         layout = QVBoxLayout(self)
 
-        # Theme-aware colors - get from parent if available
-        is_dark = False
-        if hasattr(parent, '_current_theme_mode'):
-            is_dark = parent._current_theme_mode == 'dark'
-        elif hasattr(parent, '_get_cached_theme'):
-            is_dark = parent._get_cached_theme()
-
-        # Status label colors for inline styling
-        #self.success_color = "#1e7e34" if is_dark else "#27ae60"
-        self.success_color = "#0fd66b" if is_dark else "#0ba653"
-        self.error_color = "#c0392b" if is_dark else "#c0392b"
-        self.muted_color = "#dddddd" if is_dark else "#444444"
-
-        # Legacy colors (keep for backward compatibility)
-        self._muted_color = "#dddddd" if is_dark else "#444444"
-        self._text_color = "#dddddd" if is_dark else "#333333"
-        self._panel_bg = "#2e2e2e" if is_dark else "#f0f8ff"
-        self._panel_border = "#444444" if is_dark else "#cccccc"
-
         # ========== API KEY SECTION ==========
         api_key_group = QGroupBox("API Key")
         api_key_layout = QVBoxLayout(api_key_group)
@@ -66,7 +47,6 @@ class CredentialSetupDialog(QDialog):
         api_key_status_layout.addWidget(QLabel("<b>API Key</b>: "))
         self.api_key_status_label = QLabel("NOT SET")
         self.api_key_status_label.setProperty("class", "status-muted")
-        #self.api_key_status_label.setStyleSheet(f"color: {self.muted_color}; font-style: italic;")
         api_key_status_layout.addWidget(self.api_key_status_label)
         api_key_status_layout.addStretch()
         self.api_key_change_btn = QPushButton("Set")
@@ -105,7 +85,6 @@ class CredentialSetupDialog(QDialog):
         username_status_layout.addWidget(QLabel("<b>Username</b>: "))
         self.username_status_label = QLabel("NOT SET")
         self.username_status_label.setProperty("class", "status-muted")
-        #self.username_status_label.setStyleSheet(f"color: {self.muted_color}; font-style: italic;")
         username_status_layout.addWidget(self.username_status_label)
         username_status_layout.addStretch()
         self.username_change_btn = QPushButton("Set")
@@ -125,7 +104,6 @@ class CredentialSetupDialog(QDialog):
         password_status_layout.addWidget(QLabel("<b>Password</b>: "))
         self.password_status_label = QLabel("NOT SET")
         self.password_status_label.setProperty("class", "status-muted")
-        #self.password_status_label.setStyleSheet(f"color: {self.muted_color}; font-style: italic;")
         password_status_layout.addWidget(self.password_status_label)
         password_status_layout.addStretch()
         self.password_change_btn = QPushButton("Set")
@@ -160,7 +138,6 @@ class CredentialSetupDialog(QDialog):
         cookies_status_layout.addWidget(QLabel("<b>Firefox cookies</b>: "))
         self.cookies_status_label = QLabel("Unknown")
         self.cookies_status_label.setProperty("class", "status-muted")
-        #self.cookies_status_label.setStyleSheet(f"color: {self.muted_color}; font-style: italic;")
         cookies_status_layout.addWidget(self.cookies_status_label)
         cookies_status_layout.addStretch()
         self.cookies_enable_btn = QPushButton("Enable")
@@ -186,7 +163,7 @@ class CredentialSetupDialog(QDialog):
             "<small>API key and password are encrypted via Fernet (AES-128-CBC / PKCS7 padding + HMAC-SHA256) using your system's hostname and stored in the registry.<br><br>This means the encrypted data is protected from other users on this system and won't work on other computers.</small>"
         )
         encryption_note.setWordWrap(True)
-        encryption_note.setStyleSheet(f"margin-top: 8px;")
+        encryption_note.setProperty("class", "label-credential-note")
         layout.addWidget(encryption_note)
 
         # Remove all button at bottom
@@ -240,64 +217,36 @@ class CredentialSetupDialog(QDialog):
         if username:
             self.username_status_label.setText(username)
             self.username_status_label.setProperty("class", "status-success")
-            self.username_status_label.setStyleSheet(f"color: {self.success_color}; font-weight: bold;")
             style = self.username_status_label.style()
             if style:
                 style.polish(self.username_status_label)
             # Buttons: Change/Unset
-            try:
-                txt = " Change"
-                if not txt.startswith(" "):
-                    txt = " " + txt
-                self.username_change_btn.setText(txt)
-            except Exception:
-                self.username_change_btn.setText(" Change")
+            self.username_change_btn.setText(" Change")
             self.username_remove_btn.setEnabled(True)
         else:
             self.username_status_label.setText("NOT SET")
             self.username_status_label.setProperty("class", "status-muted")
-            self.username_status_label.setStyleSheet(f"font-style: italic;")
             style = self.username_status_label.style()
             if style:
                 style.polish(self.username_status_label)
-            try:
-                txt = " Set"
-                if not txt.startswith(" "):
-                    txt = " " + txt
-                self.username_change_btn.setText(txt)
-            except Exception:
-                self.username_change_btn.setText(" Set")
+            self.username_change_btn.setText(" Set")
             self.username_remove_btn.setEnabled(False)
 
         if password:
             self.password_status_label.setText("********************************")
             self.password_status_label.setProperty("class", "status-success")
-            self.password_status_label.setStyleSheet(f"color: {self.success_color}; font-weight: bold;")
             style = self.password_status_label.style()
             if style:
                 style.polish(self.password_status_label)
-            try:
-                txt = " Change"
-                if not txt.startswith(" "):
-                    txt = " " + txt
-                self.password_change_btn.setText(txt)
-            except Exception:
-                self.password_change_btn.setText(" Change")
+            self.password_change_btn.setText(" Change")
             self.password_remove_btn.setEnabled(True)
         else:
             self.password_status_label.setText("NOT SET")
             self.password_status_label.setProperty("class", "status-muted")
-            self.password_status_label.setStyleSheet(f"font-style: italic;")
             style = self.password_status_label.style()
             if style:
                 style.polish(self.password_status_label)
-            try:
-                txt = " Set"
-                if not txt.startswith(" "):
-                    txt = " " + txt
-                self.password_change_btn.setText(txt)
-            except Exception:
-                self.password_change_btn.setText(" Set")
+            self.password_change_btn.setText(" Set")
             self.password_remove_btn.setEnabled(False)
 
         # Check API key
@@ -308,60 +257,30 @@ class CredentialSetupDialog(QDialog):
                 if api_key and len(api_key) > 8:
                     masked_key = api_key[:4] + "*" * 24 + api_key[-4:]
                     self.api_key_status_label.setText(masked_key)
-                    self.api_key_status_label.setProperty("class", "status-success")
-                    self.api_key_status_label.setStyleSheet(f"color: {self.success_color}; font-weight: bold;")
-                    style = self.api_key_status_label.style()
-                    if style:
-                        style.polish(self.api_key_status_label)
-                    try:
-                        txt = " Change"
-                        if not txt.startswith(" "):
-                            txt = " " + txt
-                        self.api_key_change_btn.setText(txt)
-                    except Exception:
-                        self.api_key_change_btn.setText(" Change")
-                    self.api_key_remove_btn.setEnabled(True)
                 else:
                     self.api_key_status_label.setText("SET")
-                    self.api_key_status_label.setProperty("class", "status-success")
-                    self.api_key_status_label.setStyleSheet(f"color: {self.success_color}; font-weight: bold;")
-                    style = self.api_key_status_label.style()
-                    if style:
-                        style.polish(self.api_key_status_label)
-                    try:
-                        txt = " Change"
-                        if not txt.startswith(" "):
-                            txt = " " + txt
-                        self.api_key_change_btn.setText(txt)
-                    except Exception:
-                        self.api_key_change_btn.setText(" Change")
-                    self.api_key_remove_btn.setEnabled(True)
+                self.api_key_status_label.setProperty("class", "status-success")
+                style = self.api_key_status_label.style()
+                if style:
+                    style.polish(self.api_key_status_label)
+                self.api_key_change_btn.setText(" Change")
+                self.api_key_remove_btn.setEnabled(True)
             except (AttributeError, RuntimeError):
                 self.api_key_status_label.setText("SET")
                 self.api_key_status_label.setProperty("class", "status-success")
-                self.api_key_status_label.setStyleSheet(f"color: {self.success_color}; font-weight: bold;")
-                self.api_key_status_label.style().polish(self.api_key_status_label)
-                try:
-                    txt = " Change"
-                    if not txt.startswith(" "):
-                        txt = " " + txt
-                    self.api_key_change_btn.setText(txt)
-                except Exception:
-                    self.api_key_change_btn.setText(" Change")
+                style = self.api_key_status_label.style()
+                if style:
+                    style.polish(self.api_key_status_label)
+                self.api_key_change_btn.setText(" Change")
                 self.api_key_remove_btn.setEnabled(True)
         else:
             self.api_key_status_label.setText("NOT SET")
             self.api_key_status_label.setProperty("class", "status-muted")
-            self.api_key_status_label.setStyleSheet(f"font-style: italic;")
-            self.api_key_status_label.style().polish(self.api_key_status_label)
-             # When not set, offer Set and disable Unset
-            try:
-                txt = " Set"
-                if not txt.startswith(" "):
-                    txt = " " + txt
-                self.api_key_change_btn.setText(txt)
-            except Exception:
-                self.api_key_change_btn.setText(" Set")
+            style = self.api_key_status_label.style()
+            if style:
+                style.polish(self.api_key_status_label)
+            # When not set, offer Set and disable Unset
+            self.api_key_change_btn.setText(" Set")
             self.api_key_remove_btn.setEnabled(False)
 
         # Cookies setting (still stored in INI file as it's a preference, not a credential)
@@ -377,17 +296,12 @@ class CredentialSetupDialog(QDialog):
         if cookies_enabled:
             self.cookies_status_label.setText("Enabled")
             self.cookies_status_label.setProperty("class", "status-success")
-            self.cookies_status_label.setStyleSheet(f"color: {self.success_color}; font-weight: bold;")
-            style = self.cookies_status_label.style()
-            if style:
-                style.polish(self.cookies_status_label)
         else:
             self.cookies_status_label.setText("Disabled")
             self.cookies_status_label.setProperty("class", "status-error")
-            self.cookies_status_label.setStyleSheet(f"color: {self.error_color}; font-weight: bold;")
-            style = self.cookies_status_label.style()
-            if style:
-                style.polish(self.cookies_status_label)
+        style = self.cookies_status_label.style()
+        if style:
+            style.polish(self.cookies_status_label)
         # Toggle button states
         self.cookies_enable_btn.setEnabled(not cookies_enabled)
         self.cookies_disable_btn.setEnabled(cookies_enabled)

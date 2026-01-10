@@ -37,6 +37,7 @@ from src.gui.main_window import (
     LogTextEdit, NumericTableWidgetItem, get_icon,
     check_stored_credentials, api_key_is_set, format_timestamp_for_display
 )
+from src.gui.menu_manager import MenuManager
 
 
 # ============================================================================
@@ -154,7 +155,15 @@ def create_minimal_window(qtbot, comprehensive_mock_dependencies):
     def _create(**kwargs):
         with patch('src.gui.main_window.QSettings') as mock_qsettings:
             mock_settings = Mock()
-            mock_settings.value.return_value = None
+            # Return values for various settings lookups
+            def mock_value_side_effect(key, default=None, type=None):
+                # Return appropriate defaults for specific keys
+                if 'startup_count' in str(key):
+                    return 0
+                elif 'theme' in str(key).lower():
+                    return 'light'
+                return default
+            mock_settings.value.side_effect = mock_value_side_effect
             mock_qsettings.return_value = mock_settings
 
             # Create a custom setup_ui that initializes required attributes
@@ -219,30 +228,29 @@ def create_minimal_window(qtbot, comprehensive_mock_dependencies):
 
             with patch('src.gui.main_window.SingleInstanceServer', return_value=mock_server):
                 with patch.object(ImxUploadGUI, 'setup_ui', mock_setup_ui):
-                    with patch.object(ImxUploadGUI, 'setup_menu_bar'):
+                    with patch.object(MenuManager, 'setup_menu_bar'):
                         with patch.object(ImxUploadGUI, 'setup_system_tray'):
                             with patch.object(ImxUploadGUI, 'restore_settings'):
                                 with patch.object(ImxUploadGUI, 'check_credentials'):
-                                    with patch.object(ImxUploadGUI, 'start_worker'):
-                                        window = ImxUploadGUI(**kwargs)
+                                    window = ImxUploadGUI(**kwargs)
 
-                                        # Immediately stop background threads after creation
-                                        # to prevent cleanup issues
-                                        if hasattr(window, 'completion_worker') and window.completion_worker.isRunning():
-                                            window.completion_worker.stop()
-                                            window.completion_worker.wait(2000)
-                                        if hasattr(window, 'server') and window.server.isRunning():
-                                            window.server.stop()
-                                            window.server.wait(1000)
+                                    # Immediately stop background threads after creation
+                                    # to prevent cleanup issues
+                                    if hasattr(window, 'completion_worker') and window.completion_worker.isRunning():
+                                        window.completion_worker.stop()
+                                        window.completion_worker.wait(2000)
+                                    if hasattr(window, 'server') and window.server.isRunning():
+                                        window.server.stop()
+                                        window.server.wait(1000)
 
-                                        # Prevent closeEvent from trying to save settings
-                                        window.save_settings = Mock()
-                                        window.save_table_settings = Mock()
-                                        window.closeEvent = lambda event: event.accept()
+                                    # Prevent closeEvent from trying to save settings
+                                    window.save_settings = Mock()
+                                    window.save_table_settings = Mock()
+                                    window.closeEvent = lambda event: event.accept()
 
-                                        qtbot.addWidget(window)
-                                        windows.append(window)
-                                        return window
+                                    qtbot.addWidget(window)
+                                    windows.append(window)
+                                    return window
 
     yield _create
 

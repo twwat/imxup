@@ -109,7 +109,8 @@ class TestProgressUpdateBatcher:
         mock_timer_class.return_value = mock_timer
 
         batcher = ProgressUpdateBatcher(mock_callback, batch_interval=1.0)
-        batcher._last_batch_time = time.time() - 2.0  # Force immediate processing
+        # Set _last_batch_time to a recent time to prevent immediate processing
+        batcher._last_batch_time = time.time()
 
         batcher.add_update("/path/test", 50, 100, 50, "image.jpg")
 
@@ -272,13 +273,19 @@ class TestTableUpdateQueue:
         mock_timer.isActive.return_value = False
         mock_timer_class.return_value = mock_timer
 
-        mock_table = Mock()
+        # Create a proper mock that doesn't have gallery_table, so it uses the else path
+        mock_table = Mock(spec=['rowCount', 'isRowHidden', 'item', 'cellWidget', 'setItem', 'parent'])
+        mock_table.rowCount.return_value = 10
+        mock_table.isRowHidden.return_value = False
+
         path_to_row = {'/path/1': 0}
         queue = TableUpdateQueue(mock_table, path_to_row)
 
         mock_item = Mock()
         queue.queue_update('/path/1', mock_item, 'progress')
 
+        # When _tabbed_widget is None (plain table, not TabbedGalleryWidget),
+        # hidden row check is skipped, so the update is queued
         assert '/path/1' in queue._pending_updates
         task = queue._pending_updates['/path/1']
         assert task.row == 0
@@ -443,8 +450,9 @@ class TestTableUpdateQueueEdgeCases:
         mock_timer = Mock()
         mock_timer_class.return_value = mock_timer
 
-        mock_table = Mock()
+        mock_table = Mock(spec=['rowCount', 'isRowHidden', 'item', 'cellWidget', 'setItem', 'parent'])
         mock_table.rowCount.return_value = 5
+        mock_table.isRowHidden.return_value = False
         path_to_row = {'/path/1': 10}  # Row 10 doesn't exist
 
         queue = TableUpdateQueue(mock_table, path_to_row)
@@ -458,8 +466,11 @@ class TestTableUpdateQueueEdgeCases:
         task = TableRowUpdateTask(10, mock_item, 'progress')
         queue._pending_updates['/path/1'] = task
 
-        # Should not raise exception
+        # Should not raise exception - should skip update due to out-of-bounds row
         queue._process_updates()
+
+        # The update should have been processed and removed (skipped due to bounds check)
+        assert '/path/1' not in queue._pending_updates
 
     @patch('src.processing.tasks.QTimer')
     def test_update_transfer_speed(self, mock_timer_class):
@@ -482,7 +493,7 @@ class TestTableUpdateQueueEdgeCases:
         mock_timer = Mock()
         mock_timer_class.return_value = mock_timer
 
-        mock_table = Mock()
+        mock_table = Mock(spec=['rowCount', 'isRowHidden', 'item', 'cellWidget', 'setItem', 'parent'])
         mock_table.rowCount.return_value = 10
         mock_table.isRowHidden.return_value = False
 

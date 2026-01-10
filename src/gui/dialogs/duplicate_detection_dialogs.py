@@ -71,7 +71,7 @@ class PreviouslyUploadedDialog(QDialog):
             "Select which ones you want to upload again:"
         )
         description.setWordWrap(True)
-        description.setStyleSheet("color: #666; margin: 10px 0px;")
+        description.setProperty("class", "dialog-description")
         layout.addWidget(description)
         
         # Scrollable list of duplicates
@@ -117,12 +117,12 @@ class PreviouslyUploadedDialog(QDialog):
         button_layout.addStretch()
         
         no_btn = QPushButton("No, Skip All")
-        no_btn.setStyleSheet("QPushButton { min-width: 100px; }")
+        no_btn.setProperty("class", "dialog-btn-secondary")
         no_btn.clicked.connect(self.reject)
         button_layout.addWidget(no_btn)
-        
+
         yes_btn = QPushButton("Yes, Upload Selected")
-        yes_btn.setStyleSheet("QPushButton { min-width: 120px; background-color: #27ae60; color: white; font-weight: bold; }")
+        yes_btn.setProperty("class", "dialog-btn-primary")
         yes_btn.clicked.connect(self.accept)
         yes_btn.setDefault(True)
         button_layout.addWidget(yes_btn)
@@ -149,29 +149,29 @@ class PreviouslyUploadedDialog(QDialog):
         # Gallery name
         name = duplicate.get('name', os.path.basename(path))
         name_label = QLabel(name)
-        name_label.setStyleSheet("font-weight: bold;")
+        name_label.setProperty("class", "label-bold")
         info_layout.addWidget(name_label)
-        
+
         # Path
         path_label = QLabel(path)
-        path_label.setStyleSheet("color: #666; font-size: 10px;")
+        path_label.setProperty("class", "label-path")
         path_label.setWordWrap(True)
         info_layout.addWidget(path_label)
-        
+
         # Existing files info
         existing_files = duplicate.get('existing_files', [])
         if existing_files:
             files_text = f"Found: {', '.join(existing_files)}"
             files_label = QLabel(files_text)
-            files_label.setStyleSheet("color: #e67e22; font-size: 9px; font-style: italic;")
+            files_label.setProperty("class", "label-warning-hint")
             files_label.setWordWrap(True)
             info_layout.addWidget(files_label)
-        
+
         item_layout.addLayout(info_layout)
         item_layout.addStretch()
-        
+
         # Add subtle border
-        item_widget.setStyleSheet("QWidget { border: 1px solid #ddd; border-radius: 4px; margin: 2px; }")
+        item_widget.setProperty("class", "list-item-frame")
         
         layout.addWidget(item_widget)
     
@@ -252,7 +252,7 @@ class QueueDuplicatesDialog(QDialog):
             "Select which ones you want to replace:"
         )
         description.setWordWrap(True)
-        description.setStyleSheet("color: #666; margin: 10px 0px;")
+        description.setProperty("class", "dialog-description")
         layout.addWidget(description)
         
         # Scrollable list of duplicates
@@ -298,12 +298,12 @@ class QueueDuplicatesDialog(QDialog):
         button_layout.addStretch()
         
         no_btn = QPushButton("No, Keep Existing")
-        no_btn.setStyleSheet("QPushButton { min-width: 120px; }")
+        no_btn.setProperty("class", "dialog-btn-secondary")
         no_btn.clicked.connect(self.reject)
         button_layout.addWidget(no_btn)
-        
+
         yes_btn = QPushButton("Yes, Replace Selected")
-        yes_btn.setStyleSheet("QPushButton { min-width: 130px; background-color: #e67e22; color: white; font-weight: bold; }")
+        yes_btn.setProperty("class", "dialog-btn-warning")
         yes_btn.clicked.connect(self.accept)
         yes_btn.setDefault(True)
         button_layout.addWidget(yes_btn)
@@ -330,26 +330,26 @@ class QueueDuplicatesDialog(QDialog):
         # Gallery name
         name = duplicate.get('name', os.path.basename(path))
         name_label = QLabel(name)
-        name_label.setStyleSheet("font-weight: bold;")
+        name_label.setProperty("class", "label-bold")
         info_layout.addWidget(name_label)
-        
+
         # Path
         path_label = QLabel(path)
-        path_label.setStyleSheet("color: #666; font-size: 10px;")
+        path_label.setProperty("class", "label-path")
         path_label.setWordWrap(True)
         info_layout.addWidget(path_label)
-        
+
         # Current status
         current_status = duplicate.get('status', 'unknown')
         status_label = QLabel(f"Current status: {current_status}")
-        status_label.setStyleSheet("color: #3498db; font-size: 9px; font-style: italic;")
+        status_label.setProperty("class", "label-info-hint")
         info_layout.addWidget(status_label)
-        
+
         item_layout.addLayout(info_layout)
         item_layout.addStretch()
-        
+
         # Add subtle border with different color for queue items
-        item_widget.setStyleSheet("QWidget { border: 1px solid #3498db; border-radius: 4px; margin: 2px; }")
+        item_widget.setProperty("class", "list-item-frame-info")
         
         layout.addWidget(item_widget)
     

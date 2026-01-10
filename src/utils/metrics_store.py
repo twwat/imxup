@@ -539,6 +539,83 @@ class MetricsStore:
         with self._cache_lock:
             return list(self._session_cache.keys())
 
+    def get_hosts_for_period(self, period: str) -> Dict[str, Dict[str, Any]]:
+        """
+        Get metrics for all hosts for a specific time period.
+
+        This is useful for filtering statistics by timeframe in the UI.
+
+        Args:
+            period: One of 'session', 'today', 'week', 'month', 'all_time'
+
+        Returns:
+            Dict mapping host names to their metrics for the period
+        """
+        # Fast path for session - use in-memory cache
+        if period == 'session':
+            return self.get_all_host_stats()
+
+        # Fast path for all_time - use existing method
+        if period == 'all_time':
+            return self.get_hosts_with_history()
+
+        # For today/week/month, query daily records and aggregate
+        result = {}
+
+        with self._db_lock:
+            conn = self._connect()
+            try:
+                # Build date filter based on period
+                if period == 'today':
+                    date_filter = datetime.now().strftime('%Y-%m-%d')
+                    where_clause = "period_type = 'daily' AND period_date = ?"
+                    params = (date_filter,)
+                elif period == 'week':
+                    date_filter = (datetime.now() - timedelta(days=7)).strftime('%Y-%m-%d')
+                    where_clause = "period_type = 'daily' AND period_date >= ?"
+                    params = (date_filter,)
+                elif period == 'month':
+                    date_filter = (datetime.now() - timedelta(days=30)).strftime('%Y-%m-%d')
+                    where_clause = "period_type = 'daily' AND period_date >= ?"
+                    params = (date_filter,)
+                else:
+                    logger.warning(f"Unknown period type for get_hosts_for_period: {period}")
+                    return {}
+
+                cursor = conn.execute(f"""
+                    SELECT
+                        host_name,
+                        COALESCE(SUM(bytes_uploaded), 0) as bytes_uploaded,
+                        COALESCE(SUM(files_uploaded), 0) as files_uploaded,
+                        COALESCE(SUM(files_failed), 0) as files_failed,
+                        COALESCE(SUM(total_transfer_time), 0) as total_transfer_time,
+                        COALESCE(MAX(peak_speed), 0) as peak_speed
+                    FROM host_metrics
+                    WHERE {where_clause}
+                    GROUP BY host_name
+                """, params)
+
+                for row in cursor:
+                    total_files = row['files_uploaded'] + row['files_failed']
+                    success_rate = (row['files_uploaded'] / max(1, total_files)) * 100
+                    avg_speed = (row['bytes_uploaded'] / max(0.001, row['total_transfer_time']))
+
+                    result[row['host_name']] = {
+                        'bytes_uploaded': row['bytes_uploaded'],
+                        'files_uploaded': row['files_uploaded'],
+                        'files_failed': row['files_failed'],
+                        'total_transfer_time': row['total_transfer_time'],
+                        'peak_speed': row['peak_speed'],
+                        'avg_speed': avg_speed,
+                        'success_rate': success_rate
+                    }
+            except Exception as e:
+                logger.error(f"Failed to get hosts for period {period}: {e}")
+            finally:
+                conn.close()
+
+        return result
+
     def get_hosts_with_history(self) -> Dict[str, Dict[str, Any]]:
         """
         Get all hosts that have historical data in the database.

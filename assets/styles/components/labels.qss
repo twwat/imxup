@@ -1,0 +1,254 @@
+/* ============================================================================
+   ImxUp GUI Stylesheet - LABEL COMPONENT
+   ============================================================================
+
+   Status labels, text styling, info panels, and help content.
+
+   ============================================================================ */
+
+/* ==========================================================================
+   LIGHT THEME
+   ========================================================================== */
+
+/* LIGHT_THEME_START */
+
+/* Base colors */
+QWidget  { color: $colors.light.text.primary; }
+QDialog  { background-color: $colors.light.background.secondary; color: $colors.light.text.primary; }
+QToolTip { color: $colors.light.text.tooltip; background-color: $colors.light.background.tooltip; border: 1px solid #999; }
+QLabel   { color: $colors.light.text.primary; }
+QLabel[class="tab-description"] { color: $colors.light.text.secondary; }
+
+/* Console text */
+QTextEdit[class="console"] { color: $colors.light.text.primary; }
+
+/* Group boxes */
+QGroupBox        { border: 1px solid $colors.light.border.default; border-radius: 6px; }
+QGroupBox::title { color: #839cbf; }
+
+/* Status labels (class-based) */
+QLabel[class="status-muted"]          { color: #666; font-style: italic; }
+QLabel[class="status-success"]        { color: $colors.light.status.success; font-weight: bold; }
+QLabel[class="status-error"]          { color: $colors.light.status.error; font-weight: bold; }
+QLabel[class="status-warning"]        { color: $colors.light.status.warning; font-weight: bold; }
+QLabel[class="status-info"]           { color: $colors.light.status.info; font-weight: bold; }
+QLabel[class="status-success-light"]  { color: $colors.light.status.success; }
+QLabel[class="status-warning-light"]  { color: $colors.light.status.warning; }
+QLabel[class="status-disabled"]       { color: #999; }
+
+/* State-based status labels (property-based for dynamic updates) */
+QLabel[status="running"]              { color: $colors.light.status.info; }
+QLabel[status="success"]              { color: $colors.light.status.success; font-weight: bold; }
+QLabel[status="failure"]              { color: $colors.light.status.error; font-weight: bold; }
+QLabel[status="skipped"]              { color: #999; }
+QLabel[status="in-progress"]          { color: $colors.light.status.info; font-weight: bold; }
+QLabel[status="active"]               { color: $colors.light.status.success; font-weight: bold; }
+
+/* Icon config status labels */
+QLabel[icon-config="single"]          { font-weight: bold; font-size: 10px; color: #0066cc; padding: 5px; }
+QLabel[icon-config="pair"]            { font-weight: bold; font-size: 10px; color: #cc6600; padding: 5px; }
+QLabel[icon-config="invalid"]         { font-weight: bold; font-size: 10px; color: #cc0000; padding: 5px; }
+
+/* Icon status labels */
+QLabel[icon-status="available"]       { font-size: 9px; color: #006600; }
+QLabel[icon-status="fallback"]        { font-size: 9px; color: #cc0000; }
+
+/* Online status colors (for scanner/statistics) */
+QLabel[online-status="online"]        { color: #008000; font-weight: bold; }
+QLabel[online-status="partial"]       { color: #CC8500; font-weight: bold; }
+QLabel[online-status="offline"]       { color: #CC0000; font-weight: bold; }
+
+/* Exit dialog section headers */
+QLabel[section="uploading"]           { font-weight: bold; color: $colors.light.status.warning; }
+QLabel[section="file-host"]           { font-weight: bold; color: #9b59b6; }
+QLabel[section="queued"]              { font-weight: bold; color: $colors.light.status.info; }
+
+/* Shutdown step states (forced light theme) */
+QLabel[shutdown-step="in-progress"]   { color: #0066cc; font-weight: bold; }
+QLabel[shutdown-step="complete"]      { color: $colors.light.status.success; }
+
+/* Error labels (small) */
+QLabel[class="error-small"] { color: $colors.light.status.error; font-size: 11px; }
+
+/* Info panels */
+QTextEdit[class="info-panel"]  { background-color: #f9f9f9; border: 1px solid #ddd; border-radius: 5px; color: #333; }
+
+/* Info panel highlight (semi-transparent background) */
+QLabel[class="info-panel-highlight"] { padding: 10px; background-color: rgba(0, 0, 0, 15); border-radius: 4px; }
+
+/* About dialog */
+QLabel[class="about-title"]    { color: $colors.light.branding.title; }
+QLabel[class="about-subtitle"] { color: #666; }
+
+/* Template editor */
+QTextEdit[class="template-editor-placeholder"] { background-color: $colors.light.button.background; color: #6c757d; }
+
+/* Help Files */
+QTextEdit[class="help-content"] { background-color: white; color: #333; font-family: "Segoe UI", Arial, sans-serif; font-size: 11pt; padding: 15px; border: 1px solid #e0e0e0; selection-background-color: #3daee9; }
+
+/* Code blocks */
+code.code-block { background-color: $colors.light.table.header; color: #000000; padding: 5px; display: block; }
+QTextEdit[class="help-content"] code { background-color: $colors.light.table.header; }
+QTextEdit[class="help-content"] pre { background-color: $colors.light.table.header; }
+
+/* Icon frames */
+QFrame[class="light-icon-frame"] { border: 2px dashed #ddd; background: $colors.light.background.primary; border-radius: 8px; }
+QFrame[class="dark-icon-frame"]  { border: 2px dashed #555; background: $colors.dark.tab.inactive_bg; border-radius: 8px; }
+
+/* Icon labels (transparent background) */
+QLabel[class="label-icon-preview"] { border: none; background: transparent; }
+
+/* Credential setup dialog labels */
+QLabel[class="label-credential-note"]  { margin-top: 8px; color: #666; font-size: 11px; }
+
+/* Settings dialog labels */
+QLabel[class="label-bold"]             { font-weight: bold; }
+QLabel[class="label-bold-spaced"]      { font-weight: bold; margin-top: 8px; }
+QLabel[class="label-icon-name"]        { font-weight: bold; font-size: 12px; }
+QLabel[class="label-icon-description"] { color: #666; font-size: 11px; padding: 2px; }
+QLabel[class="label-icon-status"]      { font-size: 10px; color: #666; padding: 3px; }
+QLabel[class="label-icon-config"]      { font-weight: bold; font-size: 11px; color: #333; padding: 5px; }
+QLabel[class="label-validation-summary"] { font-weight: bold; padding: 10px; }
+
+/* Scrollbars */
+QScrollBar:vertical { background: $colors.light.scrollbar.background; width: 14px; border-radius: 0px; }
+QScrollBar::handle:vertical { background: $colors.light.scrollbar.handle; min-height: 20px; border-radius: 4px; }
+QScrollBar::handle:vertical:hover { background: $colors.light.scrollbar.handle_hover; }
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0px; }
+
+QScrollBar:horizontal { background: $colors.light.scrollbar.background; height: 14px; border-radius: 0px; }
+QScrollBar::handle:horizontal { background: $colors.light.scrollbar.handle; min-width: 20px; border-radius: 4px; }
+QScrollBar::handle:horizontal:hover { background: $colors.light.scrollbar.handle_hover; }
+QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal { width: 0px; }
+
+/* Shutdown dialog - forced light theme (always light regardless of app theme) */
+QDialog[class="dialog-shutdown"]               { background-color: $colors.light.background.primary; color: $colors.light.text.primary; }
+QLabel[class="label-shutdown-spinner"]         { font-size: 16pt; font-weight: bold; }
+QLabel[class="label-shutdown-step-current"]    { font-size: 10pt; color: #0066cc; }
+QFrame[class="frame-shutdown-steps"]           { background-color: $colors.light.background.secondary; border: 1px solid $colors.light.border.default; border-radius: 4px; }
+QLabel[class="label-shutdown-step-icon"]       { color: $colors.light.text.secondary; }
+QLabel[class="label-shutdown-step-text"]       { color: $colors.light.text.secondary; }
+
+/* LIGHT_THEME_END */
+
+/* ==========================================================================
+   DARK THEME
+   ========================================================================== */
+
+/* DARK_THEME_START */
+
+/* Base colors */
+QWidget  { color: #d0d0d0; }
+QDialog  { background-color: $colors.dark.background.secondary; color: $colors.dark.text.primary; }
+QToolTip { color: $colors.dark.text.tooltip; background-color: $colors.dark.background.tooltip; border: 1px solid #555; }
+QLabel   { color: $colors.dark.text.primary; }
+QLabel[class="tab-description"] { color: $colors.dark.text.secondary; }
+
+/* Console text */
+QTextEdit[class="console"] { color: #e1e1e1; }
+
+/* Group boxes */
+QGroupBox        { font-weight: bold; border: 1px solid $colors.dark.border.default; border-radius: 6px; color: #0078d4; }
+QGroupBox::title { color: #2094ec; font-family: 'Courier New', monospace; }
+
+/* Status labels (class-based) */
+QLabel[class="status-muted"]          { color: #aaa; font-style: italic; }
+QLabel[class="status-success"]        { color: $colors.dark.status.success; font-weight: bold; }
+QLabel[class="status-error"]          { color: $colors.dark.status.error_light; font-weight: bold; }
+QLabel[class="status-warning"]        { color: $colors.dark.status.warning; font-weight: bold; }
+QLabel[class="status-info"]           { color: $colors.dark.status.info; font-weight: bold; }
+QLabel[class="status-success-light"]  { color: $colors.dark.status.success; }
+QLabel[class="status-warning-light"]  { color: $colors.dark.status.warning; }
+QLabel[class="status-disabled"]       { color: #666; }
+
+/* State-based status labels (property-based for dynamic updates) */
+QLabel[status="running"]              { color: $colors.dark.status.info; }
+QLabel[status="success"]              { color: $colors.dark.status.success; font-weight: bold; }
+QLabel[status="failure"]              { color: $colors.dark.status.error_light; font-weight: bold; }
+QLabel[status="skipped"]              { color: #666; }
+QLabel[status="in-progress"]          { color: $colors.dark.status.info; font-weight: bold; }
+QLabel[status="active"]               { color: $colors.dark.status.success; font-weight: bold; }
+
+/* Icon config status labels (same as light theme - forced for consistency) */
+QLabel[icon-config="single"]          { font-weight: bold; font-size: 10px; color: #0066cc; padding: 5px; }
+QLabel[icon-config="pair"]            { font-weight: bold; font-size: 10px; color: #cc6600; padding: 5px; }
+QLabel[icon-config="invalid"]         { font-weight: bold; font-size: 10px; color: #cc0000; padding: 5px; }
+
+/* Icon status labels (same as light theme) */
+QLabel[icon-status="available"]       { font-size: 9px; color: #006600; }
+QLabel[icon-status="fallback"]        { font-size: 9px; color: #cc0000; }
+
+/* Online status colors (for scanner/statistics - dark theme) */
+QLabel[online-status="online"]        { color: #55D0A5; font-weight: bold; }
+QLabel[online-status="partial"]       { color: #FFBF40; font-weight: bold; }
+QLabel[online-status="offline"]       { color: #FF6B6B; font-weight: bold; }
+
+/* Exit dialog section headers (dark theme) */
+QLabel[section="uploading"]           { font-weight: bold; color: $colors.dark.status.warning; }
+QLabel[section="file-host"]           { font-weight: bold; color: #bb86fc; }
+QLabel[section="queued"]              { font-weight: bold; color: #64b5f6; }
+
+/* Shutdown step states (forced light theme - same as light) */
+QLabel[shutdown-step="in-progress"]   { color: #0066cc; font-weight: bold; }
+QLabel[shutdown-step="complete"]      { color: $colors.light.status.success; }
+
+/* Credential setup dialog labels (dark theme) */
+QLabel[class="label-credential-note"]  { margin-top: 8px; color: #aaa; font-size: 11px; }
+
+/* Settings dialog labels (dark theme) */
+QLabel[class="label-bold"]             { font-weight: bold; }
+QLabel[class="label-bold-spaced"]      { font-weight: bold; margin-top: 8px; }
+QLabel[class="label-icon-name"]        { font-weight: bold; font-size: 12px; }
+QLabel[class="label-icon-description"] { color: #aaa; font-size: 11px; padding: 2px; }
+QLabel[class="label-icon-status"]      { font-size: 10px; color: #888; padding: 3px; }
+QLabel[class="label-icon-config"]      { font-weight: bold; font-size: 11px; color: #ddd; padding: 5px; }
+
+/* Icon labels (transparent background) */
+QLabel[class="label-icon-preview"] { border: none; background: transparent; }
+QLabel[class="label-validation-summary"] { font-weight: bold; padding: 10px; }
+
+/* Error labels (small) */
+QLabel[class="error-small"] { color: $colors.dark.status.error_light; font-size: 11px; }
+
+/* Info panels */
+QTextEdit[class="info-panel"] { background-color: $colors.dark.background.secondary; border: 1px solid #555; border-radius: 5px; color: $colors.dark.text.primary; }
+
+/* Info panel highlight (semi-transparent background) */
+QLabel[class="info-panel-highlight"] { padding: 10px; background-color: rgba(255, 255, 255, 15); border-radius: 4px; }
+
+/* About dialog - keep title same as light for branding */
+QLabel[class="about-title"]    { color: $colors.dark.branding.title; }
+QLabel[class="about-subtitle"] { color: #1e89bf; }
+
+/* Help Files */
+QTextEdit[class="help-content"] { background-color: black; color: #ddd; font-family: "Segoe UI", Arial, sans-serif;
+      font-size: 11pt; padding: 15px; border: 1px solid #1d1d1d; selection-background-color: #3daee9; }
+
+/* Template editor */
+QTextEdit[class="template-editor-placeholder"] { background-color: $colors.dark.background.secondary; color: #999; }
+
+/* Code blocks */
+code.code-block { background-color: #222222; color: #e0e0e0; padding: 5px; display: block; }
+QTextEdit[class="help-content"] code { background-color: #222222; }
+QTextEdit[class="help-content"] pre { background-color: #222222; }
+
+/* Shutdown dialog - forced light theme (same as light, always light regardless of app theme) */
+QDialog[class="dialog-shutdown"]               { background-color: $colors.light.background.primary; color: $colors.light.text.primary; }
+QLabel[class="label-shutdown-spinner"]         { font-size: 16pt; font-weight: bold; }
+QLabel[class="label-shutdown-step-current"]    { font-size: 10pt; color: #0066cc; }
+QFrame[class="frame-shutdown-steps"]           { background-color: $colors.light.background.secondary; border: 1px solid $colors.light.border.default; border-radius: 4px; }
+QLabel[class="label-shutdown-step-icon"]       { color: $colors.light.text.secondary; }
+QLabel[class="label-shutdown-step-text"]       { color: $colors.light.text.secondary; }
+
+/* Scrollbars */
+QScrollBar:vertical { background: $colors.dark.scrollbar.background; width: 14px; border-radius: 0px; }
+QScrollBar::handle:vertical { background: $colors.dark.scrollbar.handle; min-height: 20px; border-radius: 4px; }
+QScrollBar::handle:vertical:hover { background: $colors.dark.scrollbar.handle_hover; }
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0px; }
+
+QScrollBar:horizontal { background: $colors.dark.scrollbar.background; height: 14px; border-radius: 0px; }
+QScrollBar::handle:horizontal { background: $colors.dark.scrollbar.handle; min-width: 20px; border-radius: 4px; }
+QScrollBar::handle:horizontal:hover { background: $colors.dark.scrollbar.handle_hover; }
+QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal { width: 0px; }
+
+/* DARK_THEME_END */

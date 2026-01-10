@@ -1380,6 +1380,11 @@ class WorkerStatusWidget(QWidget):
                     layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
                     layout.addWidget(icon_btn)
                     container.setProperty("worker_id", worker.worker_id)
+
+                    # Create an invisible item to store worker_id for tests/selection
+                    icon_item = QTableWidgetItem()
+                    icon_item.setData(Qt.ItemDataRole.UserRole, worker.worker_id)
+                    self.status_table.setItem(row_idx, col_idx, icon_item)
                     self.status_table.setCellWidget(row_idx, col_idx, container)
 
                 elif col_config.id == 'hostname':
@@ -1448,12 +1453,19 @@ class WorkerStatusWidget(QWidget):
                         # Install event filter to handle double-clicks on cell widgets
                         container.installEventFilter(self)
 
+                        # Create an invisible item to store worker_id for tests/selection
+                        # NOTE: Use empty string for text - the container widget shows the logo/text
+                        # Setting text here would cause it to render BEHIND the widget (overlap)
+                        hostname_item = QTableWidgetItem("")
+                        hostname_item.setData(Qt.ItemDataRole.UserRole, worker.worker_id)
+                        self.status_table.setItem(row_idx, col_idx, hostname_item)
                         self.status_table.setCellWidget(row_idx, col_idx, container)
                     else:
                         # Regular text item for non-auto hosts when logos disabled
                         hostname_item = QTableWidgetItem(worker.display_name)
                         hostname_item.setTextAlignment(col_config.alignment)
                         hostname_item.setToolTip(worker.display_name)
+                        hostname_item.setData(Qt.ItemDataRole.UserRole, worker.worker_id)
 
                         # Apply disabled styling
                         if worker.status == 'disabled':
@@ -1466,6 +1478,7 @@ class WorkerStatusWidget(QWidget):
                     speed_text = self._format_speed(worker.speed_bps)
                     speed_item = QTableWidgetItem(speed_text)
                     speed_item.setTextAlignment(col_config.alignment)
+                    speed_item.setData(Qt.ItemDataRole.UserRole, worker.worker_id)
                     speed_item.setData(Qt.ItemDataRole.UserRole + 10, worker.speed_bps)
                     speed_item.setToolTip(f"Current Speed\n{worker.display_name}: {speed_text}")
 
@@ -1485,6 +1498,7 @@ class WorkerStatusWidget(QWidget):
                     status_icon_item.setIcon(status_icon)
                     status_icon_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
                     status_icon_item.setToolTip(f"Status: {worker.status.capitalize()}")
+                    status_icon_item.setData(Qt.ItemDataRole.UserRole, worker.worker_id)
                     self.status_table.setItem(row_idx, col_idx, status_icon_item)
 
                 elif col_config.id == 'status_text':

@@ -10,12 +10,12 @@ from typing import Optional
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel,
     QDialogButtonBox, QApplication, QGridLayout, QGroupBox,
-    QTabWidget, QWidget, QTableWidget, QTableWidgetItem, QHeaderView
+    QTabWidget, QWidget, QTableWidget, QTableWidgetItem, QHeaderView,
+    QComboBox
 )
 from PyQt6.QtCore import Qt, QSettings
 
 from src.utils.format_utils import format_binary_size, format_binary_rate, format_duration
-from src.gui.theme_manager import get_online_status_colors
 from src.utils.logger import log
 
 
@@ -129,11 +129,29 @@ class StatisticsDialog(QDialog):
         """Create the File Hosts statistics tab content.
 
         Returns:
-            QWidget containing file host statistics table
+            QWidget containing file host statistics table with timeframe filter
         """
         tab = QWidget()
         layout = QVBoxLayout(tab)
         layout.setContentsMargins(10, 10, 10, 10)
+
+        # Timeframe filter row
+        filter_layout = QHBoxLayout()
+        filter_layout.addWidget(QLabel("Timeframe:"))
+
+        self._timeframe_combo = QComboBox()
+        self._timeframe_combo.addItem("All Time", "all_time")
+        self._timeframe_combo.addItem("This Session", "session")
+        self._timeframe_combo.addItem("Today", "today")
+        self._timeframe_combo.addItem("Last 7 Days", "week")
+        self._timeframe_combo.addItem("Last 30 Days", "month")
+        self._timeframe_combo.setCurrentIndex(0)  # Default to All Time
+        self._timeframe_combo.setMinimumWidth(120)
+        self._timeframe_combo.currentIndexChanged.connect(self._on_timeframe_changed)
+
+        filter_layout.addWidget(self._timeframe_combo)
+        filter_layout.addStretch()
+        layout.addLayout(filter_layout)
 
         # Create table
         self._file_hosts_table = QTableWidget()
@@ -170,6 +188,7 @@ class StatisticsDialog(QDialog):
 
         self._app_startups_label = QLabel("0")
         self._first_startup_label = QLabel("N/A")
+        self._current_session_label = QLabel("0s")
         self._total_time_label = QLabel("0s")
         self._avg_session_label = QLabel("0s")
 
@@ -179,11 +198,14 @@ class StatisticsDialog(QDialog):
         grid.addWidget(QLabel("First Startup:"), 1, 0)
         grid.addWidget(self._first_startup_label, 1, 1, Qt.AlignmentFlag.AlignRight)
 
-        grid.addWidget(QLabel("Total Time Open:"), 2, 0)
-        grid.addWidget(self._total_time_label, 2, 1, Qt.AlignmentFlag.AlignRight)
+        grid.addWidget(QLabel("Current Session:"), 2, 0)
+        grid.addWidget(self._current_session_label, 2, 1, Qt.AlignmentFlag.AlignRight)
 
-        grid.addWidget(QLabel("Avg Session Length:"), 3, 0)
-        grid.addWidget(self._avg_session_label, 3, 1, Qt.AlignmentFlag.AlignRight)
+        grid.addWidget(QLabel("Total Time Open:"), 3, 0)
+        grid.addWidget(self._total_time_label, 3, 1, Qt.AlignmentFlag.AlignRight)
+
+        grid.addWidget(QLabel("Avg Session Length:"), 4, 0)
+        grid.addWidget(self._avg_session_label, 4, 1, Qt.AlignmentFlag.AlignRight)
 
         return group
 
@@ -278,19 +300,18 @@ class StatisticsDialog(QDialog):
     def _load_stats(self) -> None:
         """Load all statistics from QSettings and display."""
         settings = QSettings("ImxUploader", "Stats")
-        colors = get_online_status_colors()
-
         # Session stats
         app_startups = settings.value("app_startup_count", 0, type=int)
         first_startup = settings.value("first_startup_timestamp", "")
         stored_time = settings.value("total_session_time_seconds", 0, type=int)
 
-        # Add current session time
+        # Calculate and display current session time
         current_session = int(time.time() - self._session_start_time)
         total_time = stored_time + current_session
 
         self._app_startups_label.setText(f"{app_startups:,}")
         self._first_startup_label.setText(first_startup if first_startup else "N/A")
+        self._current_session_label.setText(format_duration(current_session))
         self._total_time_label.setText(format_duration(total_time))
 
         # Calculate and display average session length
@@ -346,22 +367,49 @@ class StatisticsDialog(QDialog):
         self._online_images_label.setText(f"{online_images:,}")
         self._offline_images_label.setText(f"{offline_images:,}")
 
-        # Apply theme-aware colors to status labels
-        self._online_galleries_label.setStyleSheet(f"color: {colors['online'].name()};")
-        self._online_images_label.setStyleSheet(f"color: {colors['online'].name()};")
-        self._partial_galleries_label.setStyleSheet(f"color: {colors['partial'].name()};")
-        self._offline_galleries_label.setStyleSheet(f"color: {colors['offline'].name()};")
-        self._offline_images_label.setStyleSheet(f"color: {colors['offline'].name()};")
+        # Apply theme-aware colors to status labels via QSS properties
+        self._online_galleries_label.setProperty("online-status", "online")
+        self._online_galleries_label.style().unpolish(self._online_galleries_label)
+        self._online_galleries_label.style().polish(self._online_galleries_label)
+        
+        self._online_images_label.setProperty("online-status", "online")
+        self._online_images_label.style().unpolish(self._online_images_label)
+        self._online_images_label.style().polish(self._online_images_label)
+        
+        self._partial_galleries_label.setProperty("online-status", "partial")
+        self._partial_galleries_label.style().unpolish(self._partial_galleries_label)
+        self._partial_galleries_label.style().polish(self._partial_galleries_label)
+        
+        self._offline_galleries_label.setProperty("online-status", "offline")
+        self._offline_galleries_label.style().unpolish(self._offline_galleries_label)
+        self._offline_galleries_label.style().polish(self._offline_galleries_label)
+        
+        self._offline_images_label.setProperty("online-status", "offline")
+        self._offline_images_label.style().unpolish(self._offline_images_label)
+        self._offline_images_label.style().polish(self._offline_images_label)
 
         # Load file host statistics
         self._load_file_host_stats()
 
+    def _on_timeframe_changed(self, index: int) -> None:
+        """Handle timeframe filter selection change.
+
+        Args:
+            index: New combo box index (unused, we read currentData instead)
+        """
+        self._load_file_host_stats()
+
     def _load_file_host_stats(self) -> None:
-        """Load file host statistics into the table."""
+        """Load file host statistics into the table for the selected timeframe."""
+        # Get selected period from combo box
+        period = "all_time"
+        if hasattr(self, '_timeframe_combo'):
+            period = self._timeframe_combo.currentData() or "all_time"
+
         try:
             from src.utils.metrics_store import get_metrics_store
             metrics_store = get_metrics_store()
-            host_stats = metrics_store.get_hosts_with_history()
+            host_stats = metrics_store.get_hosts_for_period(period)
         except (ImportError, RuntimeError, OSError) as e:
             log(f"Failed to load file host metrics: {type(e).__name__}: {e}",
                 level="warning", category="stats")
@@ -374,7 +422,8 @@ class StatisticsDialog(QDialog):
 
         if not host_stats:
             self._file_hosts_table.setRowCount(1)
-            item = QTableWidgetItem("No file host uploads recorded yet")
+            period_name = self._timeframe_combo.currentText() if hasattr(self, '_timeframe_combo') else "All Time"
+            item = QTableWidgetItem(f"No file host uploads for {period_name}")
             item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             self._file_hosts_table.setItem(0, 0, item)
             self._file_hosts_table.setSpan(0, 0, 1, 7)

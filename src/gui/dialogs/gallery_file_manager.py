@@ -94,6 +94,7 @@ class GalleryFileManagerDialog(QDialog):
         self.gallery_item = queue_manager.get_item(gallery_path)
         self.modified: bool = False
         self.scanner: Optional[FileScanner] = None
+        self._scan_progress_dialog: Optional[QProgressDialog] = None
 
         # Track original and current files
         self.original_files: Set[str] = set()
@@ -303,23 +304,67 @@ class GalleryFileManagerDialog(QDialog):
 
     def scan_files(self, files: List[str]):
         """Scan files for validity in background"""
-        if self.scanner and self.scanner.isRunning():
-            self.scanner.stop()
-            self.scanner.wait()
-        
-        # Show progress dialog
-        progress = QProgressDialog("Scanning files...", "Cancel", 0, len(files), self)
-        progress.setWindowModality(Qt.WindowModality.WindowModal)
-        
+        # Cleanup any existing scanner first
+        self._cleanup_scanner()
+
+        # Show progress dialog - stored as instance variable to prevent GC
+        self._scan_progress_dialog = QProgressDialog("Scanning files...", "Cancel", 0, len(files), self)
+        self._scan_progress_dialog.setWindowModality(Qt.WindowModality.WindowModal)
+
         self.scanner = FileScanner(self.gallery_path, files)
-        self.scanner.progress.connect(lambda curr, total: progress.setValue(curr))
+        self.scanner.progress.connect(self._on_scan_progress)
         self.scanner.file_scanned.connect(self.on_file_scanned)
-        self.scanner.finished.connect(progress.close)
-        
-        progress.canceled.connect(self.scanner.stop)
-        
+        self.scanner.finished.connect(self._on_scan_finished)
+
+        self._scan_progress_dialog.canceled.connect(self._on_scan_canceled)
+
         self.scanner.start()
     
+    def _on_scan_progress(self, current: int, total: int) -> None:
+        """Handle scan progress update safely."""
+        if self._scan_progress_dialog is not None:
+            try:
+                self._scan_progress_dialog.setValue(current)
+            except RuntimeError:
+                pass  # Dialog was deleted
+
+    def _on_scan_finished(self) -> None:
+        """Handle scan completion - safely close progress dialog."""
+        if self._scan_progress_dialog is not None:
+            try:
+                self._scan_progress_dialog.close()
+            except RuntimeError:
+                pass
+            self._scan_progress_dialog = None
+
+    def _cleanup_scanner(self) -> None:
+        """Stop and cleanup the file scanner thread safely."""
+        if self.scanner is not None:
+            if self.scanner.isRunning():
+                self.scanner.stop()
+                self.scanner.wait(2000)
+                if self.scanner.isRunning():
+                    self.scanner.terminate()
+            try:
+                self.scanner.progress.disconnect()
+                self.scanner.file_scanned.disconnect()
+                self.scanner.finished.disconnect()
+            except (RuntimeError, TypeError):
+                pass
+            self.scanner = None
+
+        if self._scan_progress_dialog is not None:
+            try:
+                self._scan_progress_dialog.close()
+            except RuntimeError:
+                pass
+            self._scan_progress_dialog = None
+
+    def _on_scan_canceled(self) -> None:
+        """Handle user canceling the scan."""
+        if self.scanner is not None:
+            self.scanner.stop()
+
     def on_file_scanned(self, filename: str, is_valid: bool, error_msg: str):
         """Handle file scan result"""
         self.file_status[filename] = (is_valid, error_msg)
@@ -643,6 +688,7 @@ class GalleryFileManagerDialog(QDialog):
     
     def accept(self):
         """Accept changes and close dialog"""
+        self._cleanup_scanner()
         if self.modified:
             # Update queue manager if needed
             if self.gallery_item:
@@ -660,3 +706,13 @@ class GalleryFileManagerDialog(QDialog):
                         # Progress will be adjusted when upload starts
         
         super().accept()
+
+    def reject(self):
+        """Handle dialog rejection/cancel"""
+        self._cleanup_scanner()
+        super().reject()
+
+    def closeEvent(self, event):
+        """Handle dialog close event"""
+        self._cleanup_scanner()
+        super().closeEvent(event)

@@ -24,6 +24,7 @@ from src.gui.main_window import (
     LogTextEdit, NumericTableWidgetItem, get_icon,
     check_stored_credentials, api_key_is_set, format_timestamp_for_display
 )
+from src.gui.menu_manager import MenuManager
 
 
 # ============================================================================
@@ -250,7 +251,7 @@ class TestSingleInstanceServer:
 # ============================================================================
 
 @pytest.fixture
-def mock_dependencies(monkeypatch, temp_assets_dir, tmp_path):
+def mock_dependencies(monkeypatch, tmp_path):
     """Mock all dependencies for ImxUploadGUI"""
     # Mock imxup functions
     monkeypatch.setattr('imxup.get_project_root', lambda: str(tmp_path))
@@ -289,6 +290,8 @@ def mock_dependencies(monkeypatch, temp_assets_dir, tmp_path):
 
     # Mock TabManager
     mock_tab_mgr = Mock()
+    mock_tab_mgr.get_visible_tab_names.return_value = []
+    mock_tab_mgr.get_all_tabs.return_value = []
     monkeypatch.setattr('src.gui.main_window.TabManager', lambda x: mock_tab_mgr)
 
     # Mock FileHostWorkerManager
@@ -322,83 +325,87 @@ class TestImxUploadGUIInitialization:
     @patch('src.gui.main_window.QSettings')
     def test_main_window_creation(self, mock_qsettings, qtbot, mock_dependencies):
         """Test main window can be created"""
-        mock_qsettings.return_value = Mock()
+        mock_settings = Mock()
+        mock_settings.value.return_value = 0
+        mock_qsettings.return_value = mock_settings
 
-        with patch.object(ImxUploadGUI, 'setup_ui'):
-            with patch.object(ImxUploadGUI, 'setup_menu_bar'):
-                with patch.object(ImxUploadGUI, 'setup_system_tray'):
-                    with patch.object(ImxUploadGUI, 'restore_settings'):
-                        with patch.object(ImxUploadGUI, 'check_credentials'):
-                            with patch.object(ImxUploadGUI, 'start_worker'):
-                                window = ImxUploadGUI()
-                                qtbot.addWidget(window)
+        with patch.object(MenuManager, 'setup_menu_bar'):
+            with patch.object(ImxUploadGUI, 'setup_system_tray'):
+                with patch.object(ImxUploadGUI, 'restore_settings'):
+                    with patch.object(ImxUploadGUI, 'check_credentials'):
+                        window = ImxUploadGUI()
+                        qtbot.addWidget(window)
 
-                                assert window is not None
-                                assert isinstance(window, QMainWindow)
+                        assert window is not None
+                        assert isinstance(window, QMainWindow)
 
     @patch('src.gui.main_window.QSettings')
     def test_main_window_has_queue_manager(self, mock_qsettings, qtbot, mock_dependencies):
         """Test main window initializes queue manager"""
-        mock_qsettings.return_value = Mock()
+        mock_settings = Mock()
+        mock_settings.value.return_value = 0
+        mock_qsettings.return_value = mock_settings
 
         with patch.object(ImxUploadGUI, 'setup_ui'):
-            with patch.object(ImxUploadGUI, 'setup_menu_bar'):
+            with patch.object(MenuManager, 'setup_menu_bar'):
                 with patch.object(ImxUploadGUI, 'setup_system_tray'):
                     with patch.object(ImxUploadGUI, 'restore_settings'):
                         with patch.object(ImxUploadGUI, 'check_credentials'):
-                            with patch.object(ImxUploadGUI, 'start_worker'):
-                                window = ImxUploadGUI()
-                                qtbot.addWidget(window)
+                            window = ImxUploadGUI()
+                            qtbot.addWidget(window)
 
-                                assert hasattr(window, 'queue_manager')
+                            assert hasattr(window, 'queue_manager')
 
     @patch('src.gui.main_window.QSettings')
     def test_main_window_has_completion_worker(self, mock_qsettings, qtbot, mock_dependencies):
         """Test main window starts completion worker"""
-        mock_qsettings.return_value = Mock()
+        mock_settings = Mock()
+        mock_settings.value.return_value = 0
+        mock_qsettings.return_value = mock_settings
 
         with patch.object(ImxUploadGUI, 'setup_ui'):
-            with patch.object(ImxUploadGUI, 'setup_menu_bar'):
+            with patch.object(MenuManager, 'setup_menu_bar'):
                 with patch.object(ImxUploadGUI, 'setup_system_tray'):
                     with patch.object(ImxUploadGUI, 'restore_settings'):
                         with patch.object(ImxUploadGUI, 'check_credentials'):
-                            with patch.object(ImxUploadGUI, 'start_worker'):
-                                window = ImxUploadGUI()
-                                qtbot.addWidget(window)
+                            window = ImxUploadGUI()
+                            qtbot.addWidget(window)
 
-                                assert hasattr(window, 'completion_worker')
+                            assert hasattr(window, 'completion_worker')
 
     @patch('src.gui.main_window.QSettings')
     def test_main_window_has_single_instance_server(self, mock_qsettings, qtbot, mock_dependencies):
         """Test main window starts single instance server"""
-        mock_qsettings.return_value = Mock()
+        mock_settings = Mock()
+        mock_settings.value.return_value = 0
+        mock_qsettings.return_value = mock_settings
 
         with patch.object(ImxUploadGUI, 'setup_ui'):
-            with patch.object(ImxUploadGUI, 'setup_menu_bar'):
+            with patch.object(MenuManager, 'setup_menu_bar'):
                 with patch.object(ImxUploadGUI, 'setup_system_tray'):
                     with patch.object(ImxUploadGUI, 'restore_settings'):
                         with patch.object(ImxUploadGUI, 'check_credentials'):
-                            with patch.object(ImxUploadGUI, 'start_worker'):
-                                window = ImxUploadGUI()
-                                qtbot.addWidget(window)
+                            window = ImxUploadGUI()
+                            qtbot.addWidget(window)
 
-                                assert hasattr(window, 'server')
+                            assert hasattr(window, 'server')
 
     @patch('src.gui.main_window.QSettings')
     def test_main_window_accepts_drops(self, mock_qsettings, qtbot, mock_dependencies):
         """Test main window accepts drag and drop"""
-        mock_qsettings.return_value = Mock()
+        mock_settings = Mock()
+        mock_settings.value.return_value = 0
+        mock_qsettings.return_value = mock_settings
 
         with patch.object(ImxUploadGUI, 'setup_ui'):
-            with patch.object(ImxUploadGUI, 'setup_menu_bar'):
+            with patch.object(MenuManager, 'setup_menu_bar'):
                 with patch.object(ImxUploadGUI, 'setup_system_tray'):
                     with patch.object(ImxUploadGUI, 'restore_settings'):
                         with patch.object(ImxUploadGUI, 'check_credentials'):
-                            with patch.object(ImxUploadGUI, 'start_worker'):
-                                window = ImxUploadGUI()
-                                qtbot.addWidget(window)
+                            window = ImxUploadGUI()
+                            qtbot.addWidget(window)
 
-                                assert window.acceptDrops() is True
+                            assert window.acceptDrops() is True
 
 
 # ============================================================================
@@ -411,50 +418,53 @@ class TestImxUploadGUISetup:
     @patch('src.gui.main_window.QSettings')
     def test_setup_ui_called(self, mock_qsettings, qtbot, mock_dependencies):
         """Test setup_ui is called during initialization"""
-        mock_qsettings.return_value = Mock()
+        mock_settings = Mock()
+        mock_settings.value.return_value = 0
+        mock_qsettings.return_value = mock_settings
 
-        with patch.object(ImxUploadGUI, 'setup_ui') as mock_setup:
-            with patch.object(ImxUploadGUI, 'setup_menu_bar'):
-                with patch.object(ImxUploadGUI, 'setup_system_tray'):
-                    with patch.object(ImxUploadGUI, 'restore_settings'):
-                        with patch.object(ImxUploadGUI, 'check_credentials'):
-                            with patch.object(ImxUploadGUI, 'start_worker'):
-                                window = ImxUploadGUI()
-                                qtbot.addWidget(window)
+        with patch.object(MenuManager, 'setup_menu_bar'):
+            with patch.object(ImxUploadGUI, 'setup_system_tray'):
+                with patch.object(ImxUploadGUI, 'restore_settings'):
+                    with patch.object(ImxUploadGUI, 'check_credentials'):
+                        window = ImxUploadGUI()
+                        qtbot.addWidget(window)
 
-                                mock_setup.assert_called_once()
+                        # setup_ui is called as part of initialization
+                        assert hasattr(window, 'gallery_table')
 
     @patch('src.gui.main_window.QSettings')
     def test_setup_menu_bar_called(self, mock_qsettings, qtbot, mock_dependencies):
         """Test setup_menu_bar is called during initialization"""
-        mock_qsettings.return_value = Mock()
+        mock_settings = Mock()
+        mock_settings.value.return_value = 0
+        mock_qsettings.return_value = mock_settings
 
         with patch.object(ImxUploadGUI, 'setup_ui'):
-            with patch.object(ImxUploadGUI, 'setup_menu_bar') as mock_menu:
+            with patch.object(MenuManager, 'setup_menu_bar') as mock_menu:
                 with patch.object(ImxUploadGUI, 'setup_system_tray'):
                     with patch.object(ImxUploadGUI, 'restore_settings'):
                         with patch.object(ImxUploadGUI, 'check_credentials'):
-                            with patch.object(ImxUploadGUI, 'start_worker'):
-                                window = ImxUploadGUI()
-                                qtbot.addWidget(window)
+                            window = ImxUploadGUI()
+                            qtbot.addWidget(window)
 
-                                mock_menu.assert_called_once()
+                            mock_menu.assert_called_once()
 
     @patch('src.gui.main_window.QSettings')
     def test_setup_system_tray_called(self, mock_qsettings, qtbot, mock_dependencies):
         """Test setup_system_tray is called during initialization"""
-        mock_qsettings.return_value = Mock()
+        mock_settings = Mock()
+        mock_settings.value.return_value = 0
+        mock_qsettings.return_value = mock_settings
 
         with patch.object(ImxUploadGUI, 'setup_ui'):
-            with patch.object(ImxUploadGUI, 'setup_menu_bar'):
+            with patch.object(MenuManager, 'setup_menu_bar'):
                 with patch.object(ImxUploadGUI, 'setup_system_tray') as mock_tray:
                     with patch.object(ImxUploadGUI, 'restore_settings'):
                         with patch.object(ImxUploadGUI, 'check_credentials'):
-                            with patch.object(ImxUploadGUI, 'start_worker'):
-                                window = ImxUploadGUI()
-                                qtbot.addWidget(window)
+                            window = ImxUploadGUI()
+                            qtbot.addWidget(window)
 
-                                mock_tray.assert_called_once()
+                            mock_tray.assert_called_once()
 
 
 # ============================================================================
@@ -467,74 +477,77 @@ class TestImxUploadGUIHelpers:
     @patch('src.gui.main_window.QSettings')
     def test_format_rate_consistent(self, mock_qsettings, qtbot, mock_dependencies):
         """Test rate formatting"""
-        mock_qsettings.return_value = Mock()
+        mock_settings = Mock()
+        mock_settings.value.return_value = 0
+        mock_qsettings.return_value = mock_settings
 
         with patch.object(ImxUploadGUI, 'setup_ui'):
-            with patch.object(ImxUploadGUI, 'setup_menu_bar'):
+            with patch.object(MenuManager, 'setup_menu_bar'):
                 with patch.object(ImxUploadGUI, 'setup_system_tray'):
                     with patch.object(ImxUploadGUI, 'restore_settings'):
                         with patch.object(ImxUploadGUI, 'check_credentials'):
-                            with patch.object(ImxUploadGUI, 'start_worker'):
-                                window = ImxUploadGUI()
-                                qtbot.addWidget(window)
+                            window = ImxUploadGUI()
+                            qtbot.addWidget(window)
 
                                 # Test KiB/s
-                                result = window._format_rate_consistent(500)
-                                assert "KiB/s" in result
+                            result = window._format_rate_consistent(500)
+                            assert "KiB/s" in result
 
                                 # Test MiB/s
-                                result = window._format_rate_consistent(1500)
-                                assert "MiB/s" in result
+                            result = window._format_rate_consistent(1500)
+                            assert "MiB/s" in result
 
     @patch('src.gui.main_window.QSettings')
     def test_format_size_consistent(self, mock_qsettings, qtbot, mock_dependencies):
         """Test size formatting"""
-        mock_qsettings.return_value = Mock()
+        mock_settings = Mock()
+        mock_settings.value.return_value = 0
+        mock_qsettings.return_value = mock_settings
 
         with patch.object(ImxUploadGUI, 'setup_ui'):
-            with patch.object(ImxUploadGUI, 'setup_menu_bar'):
+            with patch.object(MenuManager, 'setup_menu_bar'):
                 with patch.object(ImxUploadGUI, 'setup_system_tray'):
                     with patch.object(ImxUploadGUI, 'restore_settings'):
                         with patch.object(ImxUploadGUI, 'check_credentials'):
-                            with patch.object(ImxUploadGUI, 'start_worker'):
-                                window = ImxUploadGUI()
-                                qtbot.addWidget(window)
+                            window = ImxUploadGUI()
+                            qtbot.addWidget(window)
 
                                 # Test bytes
-                                result = window._format_size_consistent(512)
-                                assert "B" in result
+                            result = window._format_size_consistent(512)
+                            assert "B" in result
 
                                 # Test KiB
-                                result = window._format_size_consistent(1024 * 10)
-                                assert "KiB" in result
+                            result = window._format_size_consistent(1024 * 10)
+                            assert "KiB" in result
 
                                 # Test MiB
-                                result = window._format_size_consistent(1024 * 1024 * 5)
-                                assert "MiB" in result
+                            result = window._format_size_consistent(1024 * 1024 * 5)
+                            assert "MiB" in result
 
                                 # Test GiB
-                                result = window._format_size_consistent(1024 * 1024 * 1024 * 2)
-                                assert "GiB" in result
+                            result = window._format_size_consistent(1024 * 1024 * 1024 * 2)
+                            assert "GiB" in result
 
     @patch('src.gui.main_window.QSettings')
     def test_format_size_empty(self, mock_qsettings, qtbot, mock_dependencies):
         """Test size formatting with empty value"""
-        mock_qsettings.return_value = Mock()
+        mock_settings = Mock()
+        mock_settings.value.return_value = 0
+        mock_qsettings.return_value = mock_settings
 
         with patch.object(ImxUploadGUI, 'setup_ui'):
-            with patch.object(ImxUploadGUI, 'setup_menu_bar'):
+            with patch.object(MenuManager, 'setup_menu_bar'):
                 with patch.object(ImxUploadGUI, 'setup_system_tray'):
                     with patch.object(ImxUploadGUI, 'restore_settings'):
                         with patch.object(ImxUploadGUI, 'check_credentials'):
-                            with patch.object(ImxUploadGUI, 'start_worker'):
-                                window = ImxUploadGUI()
-                                qtbot.addWidget(window)
+                            window = ImxUploadGUI()
+                            qtbot.addWidget(window)
 
-                                result = window._format_size_consistent(0)
-                                assert result == ""
+                            result = window._format_size_consistent(0)
+                            assert result == ""
 
-                                result = window._format_size_consistent(None)
-                                assert result == ""
+                            result = window._format_size_consistent(None)
+                            assert result == ""
 
 
 # ============================================================================
@@ -547,37 +560,39 @@ class TestImxUploadGUISignals:
     @patch('src.gui.main_window.QSettings')
     def test_completion_worker_signals_connected(self, mock_qsettings, qtbot, mock_dependencies):
         """Test completion worker signals are connected"""
-        mock_qsettings.return_value = Mock()
+        mock_settings = Mock()
+        mock_settings.value.return_value = 0
+        mock_qsettings.return_value = mock_settings
 
         with patch.object(ImxUploadGUI, 'setup_ui'):
-            with patch.object(ImxUploadGUI, 'setup_menu_bar'):
+            with patch.object(MenuManager, 'setup_menu_bar'):
                 with patch.object(ImxUploadGUI, 'setup_system_tray'):
                     with patch.object(ImxUploadGUI, 'restore_settings'):
                         with patch.object(ImxUploadGUI, 'check_credentials'):
-                            with patch.object(ImxUploadGUI, 'start_worker'):
-                                window = ImxUploadGUI()
-                                qtbot.addWidget(window)
+                            window = ImxUploadGUI()
+                            qtbot.addWidget(window)
 
                                 # Verify signals exist
-                                assert hasattr(window.completion_worker, 'completion_processed')
-                                assert hasattr(window.completion_worker, 'log_message')
+                            assert hasattr(window.completion_worker, 'completion_processed')
+                            assert hasattr(window.completion_worker, 'log_message')
 
     @patch('src.gui.main_window.QSettings')
     def test_server_signals_connected(self, mock_qsettings, qtbot, mock_dependencies):
         """Test single instance server signals are connected"""
-        mock_qsettings.return_value = Mock()
+        mock_settings = Mock()
+        mock_settings.value.return_value = 0
+        mock_qsettings.return_value = mock_settings
 
         with patch.object(ImxUploadGUI, 'setup_ui'):
-            with patch.object(ImxUploadGUI, 'setup_menu_bar'):
+            with patch.object(MenuManager, 'setup_menu_bar'):
                 with patch.object(ImxUploadGUI, 'setup_system_tray'):
                     with patch.object(ImxUploadGUI, 'restore_settings'):
                         with patch.object(ImxUploadGUI, 'check_credentials'):
-                            with patch.object(ImxUploadGUI, 'start_worker'):
-                                window = ImxUploadGUI()
-                                qtbot.addWidget(window)
+                            window = ImxUploadGUI()
+                            qtbot.addWidget(window)
 
                                 # Verify signal exists
-                                assert hasattr(window.server, 'folder_received')
+                            assert hasattr(window.server, 'folder_received')
 
 
 # ============================================================================
@@ -590,19 +605,20 @@ class TestImxUploadGUICleanup:
     @patch('src.gui.main_window.QSettings')
     def test_completion_worker_stops_on_close(self, mock_qsettings, qtbot, mock_dependencies):
         """Test completion worker is stopped on window close"""
-        mock_qsettings.return_value = Mock()
+        mock_settings = Mock()
+        mock_settings.value.return_value = 0
+        mock_qsettings.return_value = mock_settings
 
         with patch.object(ImxUploadGUI, 'setup_ui'):
-            with patch.object(ImxUploadGUI, 'setup_menu_bar'):
+            with patch.object(MenuManager, 'setup_menu_bar'):
                 with patch.object(ImxUploadGUI, 'setup_system_tray'):
                     with patch.object(ImxUploadGUI, 'restore_settings'):
                         with patch.object(ImxUploadGUI, 'check_credentials'):
-                            with patch.object(ImxUploadGUI, 'start_worker'):
-                                window = ImxUploadGUI()
-                                qtbot.addWidget(window)
+                            window = ImxUploadGUI()
+                            qtbot.addWidget(window)
 
                                 # Verify worker exists
-                                assert hasattr(window, 'completion_worker')
+                            assert hasattr(window, 'completion_worker')
 
 
 # ============================================================================
@@ -615,27 +631,28 @@ class TestImxUploadGUIResize:
     @patch('src.gui.main_window.QSettings')
     def test_resize_event_updates_panel(self, mock_qsettings, qtbot, mock_dependencies):
         """Test resize event updates right panel width"""
-        mock_qsettings.return_value = Mock()
+        mock_settings = Mock()
+        mock_settings.value.return_value = 0
+        mock_qsettings.return_value = mock_settings
 
         with patch.object(ImxUploadGUI, 'setup_ui'):
-            with patch.object(ImxUploadGUI, 'setup_menu_bar'):
+            with patch.object(MenuManager, 'setup_menu_bar'):
                 with patch.object(ImxUploadGUI, 'setup_system_tray'):
                     with patch.object(ImxUploadGUI, 'restore_settings'):
                         with patch.object(ImxUploadGUI, 'check_credentials'):
-                            with patch.object(ImxUploadGUI, 'start_worker'):
-                                window = ImxUploadGUI()
-                                qtbot.addWidget(window)
+                            window = ImxUploadGUI()
+                            qtbot.addWidget(window)
 
                                 # Create mock right panel
-                                mock_panel = Mock()
-                                window.right_panel = mock_panel
+                            mock_panel = Mock()
+                            window.right_panel = mock_panel
 
                                 # Trigger resize
-                                window.resize(1000, 800)
-                                qtbot.wait(100)
+                            window.resize(1000, 800)
+                            qtbot.wait(100)
 
                                 # Panel should exist
-                                assert hasattr(window, 'right_panel')
+                            assert hasattr(window, 'right_panel')
 
 
 # ============================================================================
@@ -648,27 +665,28 @@ class TestImxUploadGUIFilter:
     @patch('src.gui.main_window.QSettings')
     def test_refresh_filter(self, mock_qsettings, qtbot, mock_dependencies):
         """Test refresh_filter method"""
-        mock_qsettings.return_value = Mock()
+        mock_settings = Mock()
+        mock_settings.value.return_value = 0
+        mock_qsettings.return_value = mock_settings
 
         with patch.object(ImxUploadGUI, 'setup_ui'):
-            with patch.object(ImxUploadGUI, 'setup_menu_bar'):
+            with patch.object(MenuManager, 'setup_menu_bar'):
                 with patch.object(ImxUploadGUI, 'setup_system_tray'):
                     with patch.object(ImxUploadGUI, 'restore_settings'):
                         with patch.object(ImxUploadGUI, 'check_credentials'):
-                            with patch.object(ImxUploadGUI, 'start_worker'):
-                                window = ImxUploadGUI()
-                                qtbot.addWidget(window)
+                            window = ImxUploadGUI()
+                            qtbot.addWidget(window)
 
                                 # Mock gallery_table
-                                mock_table = Mock()
-                                mock_table.refresh_filter = Mock()
-                                window.gallery_table = mock_table
+                            mock_table = Mock()
+                            mock_table.refresh_filter = Mock()
+                            window.gallery_table = mock_table
 
                                 # Call refresh
-                                window.refresh_filter()
+                            window.refresh_filter()
 
                                 # Should call gallery_table's refresh_filter
-                                mock_table.refresh_filter.assert_called_once()
+                            mock_table.refresh_filter.assert_called_once()
 
 
 # ============================================================================
@@ -681,26 +699,27 @@ class TestImxUploadGUIIcons:
     @patch('src.gui.main_window.QSettings')
     def test_refresh_icons(self, mock_qsettings, qtbot, mock_dependencies):
         """Test refresh_icons method"""
-        mock_qsettings.return_value = Mock()
+        mock_settings = Mock()
+        mock_settings.value.return_value = 0
+        mock_qsettings.return_value = mock_settings
 
         with patch.object(ImxUploadGUI, 'setup_ui'):
-            with patch.object(ImxUploadGUI, 'setup_menu_bar'):
+            with patch.object(MenuManager, 'setup_menu_bar'):
                 with patch.object(ImxUploadGUI, 'setup_system_tray'):
                     with patch.object(ImxUploadGUI, 'restore_settings'):
                         with patch.object(ImxUploadGUI, 'check_credentials'):
-                            with patch.object(ImxUploadGUI, 'start_worker'):
-                                window = ImxUploadGUI()
-                                qtbot.addWidget(window)
+                            window = ImxUploadGUI()
+                            qtbot.addWidget(window)
 
                                 # Mock gallery_table
-                                mock_table = Mock()
-                                mock_table.table = Mock()
-                                mock_table.table.rowCount.return_value = 0
-                                mock_table.table.viewport.return_value = Mock()
-                                window.gallery_table = mock_table
+                            mock_table = Mock()
+                            mock_table.table = Mock()
+                            mock_table.table.rowCount.return_value = 0
+                            mock_table.table.viewport.return_value = Mock()
+                            window.gallery_table = mock_table
 
                                 # Should not raise
-                                window.refresh_icons()
+                            window.refresh_icons()
 
 
 # ============================================================================
@@ -715,64 +734,67 @@ class TestImxUploadGUIConfirmation:
     @patch('src.gui.main_window.QMessageBox.question')
     def test_confirm_removal_single(self, mock_msg, mock_defaults, mock_qsettings, qtbot, mock_dependencies):
         """Test confirmation for single gallery removal"""
-        mock_qsettings.return_value = Mock()
+        mock_settings = Mock()
+        mock_settings.value.return_value = 0
+        mock_qsettings.return_value = mock_settings
         mock_defaults.return_value = {'confirm_delete': True}
         mock_msg.return_value = QMessageBox.StandardButton.Yes
 
         with patch.object(ImxUploadGUI, 'setup_ui'):
-            with patch.object(ImxUploadGUI, 'setup_menu_bar'):
+            with patch.object(MenuManager, 'setup_menu_bar'):
                 with patch.object(ImxUploadGUI, 'setup_system_tray'):
                     with patch.object(ImxUploadGUI, 'restore_settings'):
                         with patch.object(ImxUploadGUI, 'check_credentials'):
-                            with patch.object(ImxUploadGUI, 'start_worker'):
-                                window = ImxUploadGUI()
-                                qtbot.addWidget(window)
+                            window = ImxUploadGUI()
+                            qtbot.addWidget(window)
 
-                                result = window._confirm_removal(['/path/1'], ['Gallery 1'])
-                                assert result is True
-                                mock_msg.assert_called_once()
+                            result = window._confirm_removal(['/path/1'], ['Gallery 1'])
+                            assert result is True
+                            mock_msg.assert_called_once()
 
     @patch('src.gui.main_window.QSettings')
     @patch('src.gui.main_window.load_user_defaults')
     def test_confirm_removal_disabled(self, mock_defaults, mock_qsettings, qtbot, mock_dependencies):
         """Test confirmation skipped when disabled"""
-        mock_qsettings.return_value = Mock()
+        mock_settings = Mock()
+        mock_settings.value.return_value = 0
+        mock_qsettings.return_value = mock_settings
         mock_defaults.return_value = {'confirm_delete': False}
 
         with patch.object(ImxUploadGUI, 'setup_ui'):
-            with patch.object(ImxUploadGUI, 'setup_menu_bar'):
+            with patch.object(MenuManager, 'setup_menu_bar'):
                 with patch.object(ImxUploadGUI, 'setup_system_tray'):
                     with patch.object(ImxUploadGUI, 'restore_settings'):
                         with patch.object(ImxUploadGUI, 'check_credentials'):
-                            with patch.object(ImxUploadGUI, 'start_worker'):
-                                window = ImxUploadGUI()
-                                qtbot.addWidget(window)
+                            window = ImxUploadGUI()
+                            qtbot.addWidget(window)
 
-                                result = window._confirm_removal(['/path/1'], ['Gallery 1'])
-                                assert result is True  # Should auto-confirm
+                            result = window._confirm_removal(['/path/1'], ['Gallery 1'])
+                            assert result is True  # Should auto-confirm
 
     @patch('src.gui.main_window.QSettings')
     @patch('src.gui.main_window.load_user_defaults')
     @patch('src.gui.main_window.QMessageBox.question')
     def test_confirm_removal_large_batch(self, mock_msg, mock_defaults, mock_qsettings, qtbot, mock_dependencies):
         """Test confirmation always shown for large batches"""
-        mock_qsettings.return_value = Mock()
+        mock_settings = Mock()
+        mock_settings.value.return_value = 0
+        mock_qsettings.return_value = mock_settings
         mock_defaults.return_value = {'confirm_delete': False}
         mock_msg.return_value = QMessageBox.StandardButton.Yes
 
         with patch.object(ImxUploadGUI, 'setup_ui'):
-            with patch.object(ImxUploadGUI, 'setup_menu_bar'):
+            with patch.object(MenuManager, 'setup_menu_bar'):
                 with patch.object(ImxUploadGUI, 'setup_system_tray'):
                     with patch.object(ImxUploadGUI, 'restore_settings'):
                         with patch.object(ImxUploadGUI, 'check_credentials'):
-                            with patch.object(ImxUploadGUI, 'start_worker'):
-                                window = ImxUploadGUI()
-                                qtbot.addWidget(window)
+                            window = ImxUploadGUI()
+                            qtbot.addWidget(window)
 
-                                paths = [f'/path/{i}' for i in range(60)]
-                                result = window._confirm_removal(paths)
+                            paths = [f'/path/{i}' for i in range(60)]
+                            result = window._confirm_removal(paths)
                                 # Should show confirmation for >50 galleries
-                                mock_msg.assert_called_once()
+                            mock_msg.assert_called_once()
 
 
 # ============================================================================
@@ -785,43 +807,45 @@ class TestImxUploadGUIBackgroundUpdates:
     @patch('src.gui.main_window.QSettings')
     def test_queue_background_tab_update(self, mock_qsettings, qtbot, mock_dependencies):
         """Test queueing background tab updates"""
-        mock_qsettings.return_value = Mock()
+        mock_settings = Mock()
+        mock_settings.value.return_value = 0
+        mock_qsettings.return_value = mock_settings
 
         with patch.object(ImxUploadGUI, 'setup_ui'):
-            with patch.object(ImxUploadGUI, 'setup_menu_bar'):
+            with patch.object(MenuManager, 'setup_menu_bar'):
                 with patch.object(ImxUploadGUI, 'setup_system_tray'):
                     with patch.object(ImxUploadGUI, 'restore_settings'):
                         with patch.object(ImxUploadGUI, 'check_credentials'):
-                            with patch.object(ImxUploadGUI, 'start_worker'):
-                                window = ImxUploadGUI()
-                                qtbot.addWidget(window)
+                            window = ImxUploadGUI()
+                            qtbot.addWidget(window)
 
                                 # Should have background update tracking
-                                assert hasattr(window, '_background_tab_updates')
-                                assert isinstance(window._background_tab_updates, dict)
+                            assert hasattr(window, '_background_tab_updates')
+                            assert isinstance(window._background_tab_updates, dict)
 
     @patch('src.gui.main_window.QSettings')
     def test_clear_background_tab_updates(self, mock_qsettings, qtbot, mock_dependencies):
         """Test clearing background tab updates"""
-        mock_qsettings.return_value = Mock()
+        mock_settings = Mock()
+        mock_settings.value.return_value = 0
+        mock_qsettings.return_value = mock_settings
 
         with patch.object(ImxUploadGUI, 'setup_ui'):
-            with patch.object(ImxUploadGUI, 'setup_menu_bar'):
+            with patch.object(MenuManager, 'setup_menu_bar'):
                 with patch.object(ImxUploadGUI, 'setup_system_tray'):
                     with patch.object(ImxUploadGUI, 'restore_settings'):
                         with patch.object(ImxUploadGUI, 'check_credentials'):
-                            with patch.object(ImxUploadGUI, 'start_worker'):
-                                window = ImxUploadGUI()
-                                qtbot.addWidget(window)
+                            window = ImxUploadGUI()
+                            qtbot.addWidget(window)
 
                                 # Add fake update
-                                window._background_tab_updates['test'] = ('item', 'progress', 0)
+                            window._background_tab_updates['test'] = ('item', 'progress', 0)
 
                                 # Clear
-                                window.clear_background_tab_updates()
+                            window.clear_background_tab_updates()
 
                                 # Should be empty
-                                assert len(window._background_tab_updates) == 0
+                            assert len(window._background_tab_updates) == 0
 
 
 # ============================================================================
@@ -834,19 +858,20 @@ class TestImxUploadGUIAnimation:
     @patch('src.gui.main_window.QSettings')
     def test_upload_animation_timer_exists(self, mock_qsettings, qtbot, mock_dependencies):
         """Test upload animation timer is initialized"""
-        mock_qsettings.return_value = Mock()
+        mock_settings = Mock()
+        mock_settings.value.return_value = 0
+        mock_qsettings.return_value = mock_settings
 
         with patch.object(ImxUploadGUI, 'setup_ui'):
-            with patch.object(ImxUploadGUI, 'setup_menu_bar'):
+            with patch.object(MenuManager, 'setup_menu_bar'):
                 with patch.object(ImxUploadGUI, 'setup_system_tray'):
                     with patch.object(ImxUploadGUI, 'restore_settings'):
                         with patch.object(ImxUploadGUI, 'check_credentials'):
-                            with patch.object(ImxUploadGUI, 'start_worker'):
-                                window = ImxUploadGUI()
-                                qtbot.addWidget(window)
+                            window = ImxUploadGUI()
+                            qtbot.addWidget(window)
 
-                                assert hasattr(window, '_upload_animation_timer')
-                                assert hasattr(window, '_upload_animation_frame')
+                            assert hasattr(window, '_upload_animation_timer')
+                            assert hasattr(window, '_upload_animation_frame')
 
 
 # ============================================================================
@@ -859,21 +884,22 @@ class TestImxUploadGUIPathMapping:
     @patch('src.gui.main_window.QSettings')
     def test_path_mapping_initialized(self, mock_qsettings, qtbot, mock_dependencies):
         """Test path mapping dictionaries are initialized"""
-        mock_qsettings.return_value = Mock()
+        mock_settings = Mock()
+        mock_settings.value.return_value = 0
+        mock_qsettings.return_value = mock_settings
 
         with patch.object(ImxUploadGUI, 'setup_ui'):
-            with patch.object(ImxUploadGUI, 'setup_menu_bar'):
+            with patch.object(MenuManager, 'setup_menu_bar'):
                 with patch.object(ImxUploadGUI, 'setup_system_tray'):
                     with patch.object(ImxUploadGUI, 'restore_settings'):
                         with patch.object(ImxUploadGUI, 'check_credentials'):
-                            with patch.object(ImxUploadGUI, 'start_worker'):
-                                window = ImxUploadGUI()
-                                qtbot.addWidget(window)
+                            window = ImxUploadGUI()
+                            qtbot.addWidget(window)
 
-                                assert hasattr(window, 'path_to_row')
-                                assert hasattr(window, 'row_to_path')
-                                assert isinstance(window.path_to_row, dict)
-                                assert isinstance(window.row_to_path, dict)
+                            assert hasattr(window, 'path_to_row')
+                            assert hasattr(window, 'row_to_path')
+                            assert isinstance(window.path_to_row, dict)
+                            assert isinstance(window.row_to_path, dict)
 
 
 # ============================================================================
@@ -890,15 +916,14 @@ class TestImxUploadGUISettings:
         mock_qsettings.return_value = mock_settings
 
         with patch.object(ImxUploadGUI, 'setup_ui'):
-            with patch.object(ImxUploadGUI, 'setup_menu_bar'):
+            with patch.object(MenuManager, 'setup_menu_bar'):
                 with patch.object(ImxUploadGUI, 'setup_system_tray'):
                     with patch.object(ImxUploadGUI, 'restore_settings'):
                         with patch.object(ImxUploadGUI, 'check_credentials'):
-                            with patch.object(ImxUploadGUI, 'start_worker'):
-                                window = ImxUploadGUI()
-                                qtbot.addWidget(window)
+                            window = ImxUploadGUI()
+                            qtbot.addWidget(window)
 
-                                assert hasattr(window, 'settings')
+                            assert hasattr(window, 'settings')
 
 
 # ============================================================================
@@ -911,20 +936,21 @@ class TestImxUploadGUILogDisplay:
     @patch('src.gui.main_window.QSettings')
     def test_refresh_log_display_settings(self, mock_qsettings, qtbot, mock_dependencies):
         """Test log display settings refresh"""
-        mock_qsettings.return_value = Mock()
+        mock_settings = Mock()
+        mock_settings.value.return_value = 0
+        mock_qsettings.return_value = mock_settings
 
         with patch.object(ImxUploadGUI, 'setup_ui'):
-            with patch.object(ImxUploadGUI, 'setup_menu_bar'):
+            with patch.object(MenuManager, 'setup_menu_bar'):
                 with patch.object(ImxUploadGUI, 'setup_system_tray'):
                     with patch.object(ImxUploadGUI, 'restore_settings'):
                         with patch.object(ImxUploadGUI, 'check_credentials'):
-                            with patch.object(ImxUploadGUI, 'start_worker'):
-                                window = ImxUploadGUI()
-                                qtbot.addWidget(window)
+                            window = ImxUploadGUI()
+                            qtbot.addWidget(window)
 
                                 # Should have log display settings cached
-                                assert hasattr(window, '_log_show_level')
-                                assert hasattr(window, '_log_show_category')
+                            assert hasattr(window, '_log_show_level')
+                            assert hasattr(window, '_log_show_category')
 
 
 # ============================================================================
@@ -937,15 +963,16 @@ class TestImxUploadGUIUpdateTimer:
     @patch('src.gui.main_window.QSettings')
     def test_update_timer_exists(self, mock_qsettings, qtbot, mock_dependencies):
         """Test update timer is created"""
-        mock_qsettings.return_value = Mock()
+        mock_settings = Mock()
+        mock_settings.value.return_value = 0
+        mock_qsettings.return_value = mock_settings
 
         with patch.object(ImxUploadGUI, 'setup_ui'):
-            with patch.object(ImxUploadGUI, 'setup_menu_bar'):
+            with patch.object(MenuManager, 'setup_menu_bar'):
                 with patch.object(ImxUploadGUI, 'setup_system_tray'):
                     with patch.object(ImxUploadGUI, 'restore_settings'):
                         with patch.object(ImxUploadGUI, 'check_credentials'):
-                            with patch.object(ImxUploadGUI, 'start_worker'):
-                                window = ImxUploadGUI()
-                                qtbot.addWidget(window)
+                            window = ImxUploadGUI()
+                            qtbot.addWidget(window)
 
-                                assert hasattr(window, 'update_timer')
+                            assert hasattr(window, 'update_timer')

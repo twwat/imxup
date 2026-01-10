@@ -116,12 +116,12 @@ class IconManagerDialog(QDialog):
         details_layout = QVBoxLayout(details_group)
 
         self.icon_name_label = QLabel("Select an icon to customize")
-        self.icon_name_label.setStyleSheet("font-weight: bold; font-size: 12px;")
+        self.icon_name_label.setProperty("class", "label-icon-name")
         details_layout.addWidget(self.icon_name_label)
 
         self.icon_description_label = QLabel("")
         self.icon_description_label.setWordWrap(True)
-        self.icon_description_label.setStyleSheet("color: #666; font-size: 11px; padding: 2px;")
+        self.icon_description_label.setProperty("class", "label-icon-description")
         details_layout.addWidget(self.icon_description_label)
 
         right_layout.addWidget(details_group)
@@ -139,7 +139,7 @@ class IconManagerDialog(QDialog):
 
         self.light_icon_frame = IconDropFrame('light')
         self.light_icon_frame.setFixedSize(100, 100)
-        self.light_icon_frame.setStyleSheet("border: 2px dashed #ddd; background: #ffffff; border-radius: 8px;")
+        self.light_icon_frame.setProperty("class", "light-icon-frame")
         self.light_icon_frame.icon_dropped.connect(lambda path: self.handle_icon_drop_variant(path, 'light'))
         light_frame_layout = QVBoxLayout(self.light_icon_frame)
         light_frame_layout.setContentsMargins(0, 0, 0, 0)
@@ -147,7 +147,7 @@ class IconManagerDialog(QDialog):
         self.light_icon_label = QLabel()
         self.light_icon_label.setFixedSize(96, 96)
         self.light_icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.light_icon_label.setStyleSheet("border: none; background: transparent;")
+        self.light_icon_label.setProperty("class", "label-icon-preview")
         self.light_icon_label.setScaledContents(True)
         light_frame_layout.addWidget(self.light_icon_label)
 
@@ -155,7 +155,7 @@ class IconManagerDialog(QDialog):
 
         self.light_status_label = QLabel("No icon")
         self.light_status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.light_status_label.setStyleSheet("font-size: 10px; color: #666; padding: 3px;")
+        self.light_status_label.setProperty("class", "label-icon-status")
         light_box_layout.addWidget(self.light_status_label)
 
         light_controls = QHBoxLayout()
@@ -178,7 +178,7 @@ class IconManagerDialog(QDialog):
 
         self.dark_icon_frame = IconDropFrame('dark')
         self.dark_icon_frame.setFixedSize(100, 100)
-        self.dark_icon_frame.setStyleSheet("border: 2px dashed #555; background: #2b2b2b; border-radius: 8px;")
+        self.dark_icon_frame.setProperty("class", "dark-icon-frame")
         self.dark_icon_frame.icon_dropped.connect(lambda path: self.handle_icon_drop_variant(path, 'dark'))
         dark_frame_layout = QVBoxLayout(self.dark_icon_frame)
         dark_frame_layout.setContentsMargins(0, 0, 0, 0)
@@ -186,7 +186,7 @@ class IconManagerDialog(QDialog):
         self.dark_icon_label = QLabel()
         self.dark_icon_label.setFixedSize(96, 96)
         self.dark_icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.dark_icon_label.setStyleSheet("border: none; background: transparent;")
+        self.dark_icon_label.setProperty("class", "label-icon-preview")
         self.dark_icon_label.setScaledContents(True)
         dark_frame_layout.addWidget(self.dark_icon_label)
 
@@ -194,7 +194,7 @@ class IconManagerDialog(QDialog):
 
         self.dark_status_label = QLabel("No icon")
         self.dark_status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.dark_status_label.setStyleSheet("font-size: 10px; color: #666; padding: 3px;")
+        self.dark_status_label.setProperty("class", "label-icon-status")
         dark_box_layout.addWidget(self.dark_status_label)
 
         dark_controls = QHBoxLayout()
@@ -216,7 +216,7 @@ class IconManagerDialog(QDialog):
         # Configuration indicator
         self.config_type_label = QLabel("Configuration: Unknown")
         self.config_type_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.config_type_label.setStyleSheet("font-weight: bold; font-size: 11px; color: #333; padding: 5px;")
+        self.config_type_label.setProperty("class", "label-icon-config")
         preview_layout.addWidget(self.config_type_label)
 
         right_layout.addWidget(preview_group)
@@ -380,13 +380,19 @@ class IconManagerDialog(QDialog):
             # Determine configuration type
             if isinstance(icon_config, str):
                 self.config_type_label.setText("Configuration: Single icon (auto-adapts)")
-                self.config_type_label.setStyleSheet("font-weight: bold; font-size: 10px; color: #0066cc; padding: 5px;")
+                self.config_type_label.setProperty("icon-config", "single")
+                self.config_type_label.style().unpolish(self.config_type_label)
+                self.config_type_label.style().polish(self.config_type_label)
             elif isinstance(icon_config, list):
                 self.config_type_label.setText("Configuration: Light/Dark pair (manual control)")
-                self.config_type_label.setStyleSheet("font-weight: bold; font-size: 10px; color: #cc6600; padding: 5px;")
+                self.config_type_label.setProperty("icon-config", "pair")
+                self.config_type_label.style().unpolish(self.config_type_label)
+                self.config_type_label.style().polish(self.config_type_label)
             else:
                 self.config_type_label.setText("Configuration: Invalid")
-                self.config_type_label.setStyleSheet("font-weight: bold; font-size: 10px; color: #cc0000; padding: 5px;")
+                self.config_type_label.setProperty("icon-config", "invalid")
+                self.config_type_label.style().unpolish(self.config_type_label)
+                self.config_type_label.style().polish(self.config_type_label)
 
             # Update light theme preview
             light_icon = icon_manager.get_icon(icon_key, theme_mode='light', is_selected=False, requested_size=96)
@@ -396,14 +402,20 @@ class IconManagerDialog(QDialog):
 
                 if isinstance(icon_config, str):
                     self.light_status_label.setText("Original")
-                    self.light_status_label.setStyleSheet("font-size: 9px; color: #006600;")
+                    self.light_status_label.setProperty("icon-status", "available")
+                    self.light_status_label.style().unpolish(self.light_status_label)
+                    self.light_status_label.style().polish(self.light_status_label)
                 else:
                     self.light_status_label.setText("Light variant")
-                    self.light_status_label.setStyleSheet("font-size: 9px; color: #006600;")
+                    self.light_status_label.setProperty("icon-status", "available")
+                    self.light_status_label.style().unpolish(self.light_status_label)
+                    self.light_status_label.style().polish(self.light_status_label)
             else:
                 self.light_icon_label.setText("Missing")
                 self.light_status_label.setText("Qt fallback")
-                self.light_status_label.setStyleSheet("font-size: 9px; color: #cc0000;")
+                self.light_status_label.setProperty("icon-status", "fallback")
+                self.light_status_label.style().unpolish(self.light_status_label)
+                self.light_status_label.style().polish(self.light_status_label)
 
             # Update dark theme preview
             dark_icon = icon_manager.get_icon(icon_key, theme_mode='dark', is_selected=False, requested_size=96)
@@ -413,14 +425,20 @@ class IconManagerDialog(QDialog):
 
                 if isinstance(icon_config, str):
                     self.dark_status_label.setText("Original")
-                    self.dark_status_label.setStyleSheet("font-size: 9px; color: #006600;")
+                    self.dark_status_label.setProperty("icon-status", "available")
+                    self.dark_status_label.style().unpolish(self.dark_status_label)
+                    self.dark_status_label.style().polish(self.dark_status_label)
                 else:
                     self.dark_status_label.setText("Dark variant")
-                    self.dark_status_label.setStyleSheet("font-size: 9px; color: #006600;")
+                    self.dark_status_label.setProperty("icon-status", "available")
+                    self.dark_status_label.style().unpolish(self.dark_status_label)
+                    self.dark_status_label.style().polish(self.dark_status_label)
             else:
                 self.dark_icon_label.setText("Missing")
                 self.dark_status_label.setText("Qt fallback")
-                self.dark_status_label.setStyleSheet("font-size: 9px; color: #cc0000;")
+                self.dark_status_label.setProperty("icon-status", "fallback")
+                self.dark_status_label.style().unpolish(self.dark_status_label)
+                self.dark_status_label.style().polish(self.dark_status_label)
 
             self._update_reset_button_states(icon_key, icon_config)
 
@@ -704,7 +722,7 @@ class IconManagerDialog(QDialog):
             summary_label = QLabel(f"Total icons: {len(icon_manager.ICON_MAP)}\n"
                                  f"Found: {len(result['found'])}\n"
                                  f"Missing: {len(result['missing'])}")
-            summary_label.setStyleSheet("font-weight: bold; padding: 10px;")
+            summary_label.setProperty("class", "label-validation-summary")
             layout.addWidget(summary_label)
 
             details = QPlainTextEdit()

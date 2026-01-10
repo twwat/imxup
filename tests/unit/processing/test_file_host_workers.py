@@ -34,8 +34,9 @@ class TestFileHostWorkerInit:
         assert worker.host_id == "rapidgator"
         assert worker.queue_store == mock_queue_store
         assert worker.log_prefix == "RapidGator Worker"
-        assert worker.running is True
-        assert worker.paused is False
+        # Worker uses threading.Event objects for state management
+        assert not worker._stop_event.is_set()  # Not stopped
+        assert not worker._pause_event.is_set()  # Not paused
 
     @patch('src.processing.file_host_workers.get_config_manager')
     @patch('src.processing.file_host_workers.get_coordinator')
@@ -242,7 +243,7 @@ class TestFileHostWorkerControl:
         worker = FileHostWorker("testhost", Mock())
         worker.pause()
 
-        assert worker.paused is True
+        assert worker._pause_event.is_set()
 
     @patch('src.processing.file_host_workers.get_config_manager')
     @patch('src.processing.file_host_workers.get_coordinator')
@@ -255,10 +256,10 @@ class TestFileHostWorkerControl:
         mock_config_mgr.return_value.get_host.return_value = mock_config
 
         worker = FileHostWorker("testhost", Mock())
-        worker.paused = True
+        worker._pause_event.set()  # Simulate paused state
         worker.resume()
 
-        assert worker.paused is False
+        assert not worker._pause_event.is_set()
 
     @patch('src.processing.file_host_workers.get_config_manager')
     @patch('src.processing.file_host_workers.get_coordinator')
@@ -294,7 +295,7 @@ class TestFileHostWorkerControl:
         with patch.object(worker, 'wait'):
             worker.stop()
 
-        assert worker.running is False
+        assert worker._stop_event.is_set()
 
 
 class TestFileHostWorkerTestQueue:
@@ -361,14 +362,14 @@ class TestFileHostWorkerBandwidth:
 
         worker = FileHostWorker("testhost", Mock())
         worker.current_upload_id = 789
-        worker.current_gallery_id = 456
+        worker.current_db_id = 456
         worker.current_host = "testhost"
 
         info = worker.get_current_upload_info()
 
         assert info is not None
         assert info['upload_id'] == 789
-        assert info['gallery_id'] == 456
+        assert info['db_id'] == 456
         assert info['host_name'] == "testhost"
 
     @patch('src.processing.file_host_workers.get_config_manager')
@@ -568,6 +569,9 @@ class TestFileHostWorkerProcessUpload:
         mock_config_mgr.return_value.get_host.return_value = mock_config
 
         mock_queue_store = Mock()
+        # Mock get_file_host_uploads to return a list (not iterable by default)
+        mock_queue_store.get_file_host_uploads.return_value = []
+
         worker = FileHostWorker("testhost", mock_queue_store)
 
         # Mock signals
@@ -577,7 +581,7 @@ class TestFileHostWorkerProcessUpload:
         # Process upload with non-existent path
         worker._process_upload(
             upload_id=1,
-            gallery_id=123,
+            db_id=123,
             gallery_path="/nonexistent/path",
             gallery_name="Test",
             host_name="testhost",

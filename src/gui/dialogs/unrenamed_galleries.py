@@ -34,7 +34,7 @@ class UnrenamedGalleriesDialog(QDialog):
         )
         info_label = QLabel(info_text)
         info_label.setWordWrap(True)
-        info_label.setStyleSheet("padding: 10px; background-color: rgba(255, 255, 255, 10);")
+        info_label.setProperty("class", "info-panel-highlight")
         layout.addWidget(info_label)
 
         # Table widget

@@ -682,17 +682,16 @@ class TestFileHostUploads:
 
     def test_get_file_host_uploads(self, queue_store):
         """Test getting file host uploads for gallery."""
-        gallery = {
-            'path': '/test/gallery1',
-            'status': 'ready',
-            'added_time': int(time.time()),
-            'tab_name': 'Main'
-        }
-        queue_store.bulk_upsert([gallery])
+        # Use normalized path to avoid cross-platform issues
+        gallery_path = os.path.normpath('/test/gallery1')
 
-        queue_store.add_file_host_upload('/test/gallery1', 'gofile')
+        # Add file host upload - this will auto-create the gallery if needed
+        upload_id = queue_store.add_file_host_upload(gallery_path, 'gofile', status='pending')
 
-        uploads = queue_store.get_file_host_uploads('/test/gallery1')
+        assert upload_id is not None
+        assert upload_id > 0
+
+        uploads = queue_store.get_file_host_uploads(gallery_path)
 
         assert len(uploads) == 1
         assert uploads[0]['host_name'] == 'gofile'
@@ -700,15 +699,14 @@ class TestFileHostUploads:
 
     def test_update_file_host_upload(self, queue_store):
         """Test updating file host upload record."""
-        gallery = {
-            'path': '/test/gallery1',
-            'status': 'ready',
-            'added_time': int(time.time()),
-            'tab_name': 'Main'
-        }
-        queue_store.bulk_upsert([gallery])
+        # Use normalized path to avoid cross-platform issues
+        gallery_path = os.path.normpath('/test/gallery1')
 
-        upload_id = queue_store.add_file_host_upload('/test/gallery1', 'pixeldrain')
+        # Add file host upload - this will auto-create the gallery
+        upload_id = queue_store.add_file_host_upload(gallery_path, 'pixeldrain', status='pending')
+
+        assert upload_id is not None
+        assert upload_id > 0
 
         success = queue_store.update_file_host_upload(
             upload_id,
@@ -718,7 +716,8 @@ class TestFileHostUploads:
 
         assert success
 
-        uploads = queue_store.get_file_host_uploads('/test/gallery1')
+        uploads = queue_store.get_file_host_uploads(gallery_path)
+        assert len(uploads) == 1
         assert uploads[0]['status'] == 'completed'
         assert uploads[0]['download_url'] == 'https://example.com/file'
 

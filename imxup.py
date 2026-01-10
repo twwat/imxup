@@ -63,7 +63,7 @@ except ImportError:
     winreg = None  # Not available on Linux/Mac
 import mimetypes
 
-__version__ = "0.7.1"  # Application version number
+__version__ = "0.7.2"  # Application version number
 
 # GitHub repository info for update checker
 GITHUB_OWNER = "twwat"
