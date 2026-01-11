@@ -653,16 +653,21 @@ class ComprehensiveSettingsDialog(QDialog):
         """Setup the Templates tab with integrated template management and selection"""
         templates_widget = QWidget()
         layout = QVBoxLayout(templates_widget)
-        
+
+        # Get current active template from parent window
+        active_template = "default"
+        if self.parent_window and hasattr(self.parent_window, 'template_combo'):
+            active_template = self.parent_window.template_combo.currentText()
+
         # Create and integrate the template manager dialog
-        self.template_dialog = TemplateManagerDialog(self)
+        self.template_dialog = TemplateManagerDialog(self, current_template=active_template)
         self.template_dialog.setParent(templates_widget)
         self.template_dialog.setWindowFlags(Qt.WindowType.Widget)  # Make it a child widget
         self.template_dialog.setModal(False)  # Not modal when embedded
-        
+
         # Add the template dialog to the layout
         layout.addWidget(self.template_dialog)
-        
+
         self.tab_widget.addTab(templates_widget, "Templates")
         
     def setup_tabs_tab(self):
@@ -2243,7 +2248,7 @@ class ComprehensiveSettingsDialog(QDialog):
         config_file = get_config_path()
 
         if os.path.exists(config_file):
-            config.read(config_file)
+            config.read(config_file, encoding='utf-8')
             if config.has_section('Advanced'):
                 values = {}
                 for key, value in config.items('Advanced'):
@@ -2268,7 +2273,7 @@ class ComprehensiveSettingsDialog(QDialog):
         config_file = get_config_path()
 
         if os.path.exists(config_file):
-            config.read(config_file)
+            config.read(config_file, encoding='utf-8')
 
         # Remove existing Advanced section and recreate with current values
         if config.has_section('Advanced'):
@@ -2280,7 +2285,7 @@ class ComprehensiveSettingsDialog(QDialog):
             for key, value in non_defaults.items():
                 config.set('Advanced', key, str(value))
 
-        with open(config_file, 'w') as f:
+        with open(config_file, 'w', encoding='utf-8') as f:
             config.write(f)
 
         return True
@@ -2536,7 +2541,7 @@ class ComprehensiveSettingsDialog(QDialog):
             config_file = get_config_path()
 
             if os.path.exists(config_file):
-                config.read(config_file)
+                config.read(config_file, encoding='utf-8')
 
             # Block ALL signals during loading to prevent marking tab as dirty
             controls_to_block = [
@@ -2620,7 +2625,7 @@ class ComprehensiveSettingsDialog(QDialog):
             #print(f"{timestamp()} DEBUG: Loading external apps settings from {config_file}")
 
             if os.path.exists(config_file):
-                config.read(config_file)
+                config.read(config_file, encoding='utf-8')
             else:
                 log(f"Config file does not exist: {config_file}", level="warning", category="settings")
                 return
@@ -2695,7 +2700,7 @@ class ComprehensiveSettingsDialog(QDialog):
             config_file = get_config_path()
 
             if os.path.exists(config_file):
-                config.read(config_file)
+                config.read(config_file, encoding='utf-8')
 
             # Prepare settings dict
             settings_dict = {
@@ -2751,7 +2756,7 @@ class ComprehensiveSettingsDialog(QDialog):
             config_file = get_config_path()
 
             if os.path.exists(config_file):
-                config.read(config_file)
+                config.read(config_file, encoding='utf-8')
 
             if 'FILE_HOSTS' not in config:
                 config.add_section('FILE_HOSTS')
@@ -2780,7 +2785,7 @@ class ComprehensiveSettingsDialog(QDialog):
                     set_credential(f'file_host_{host_id}_credentials', '')
 
             # Write INI file
-            with open(config_file, 'w') as f:
+            with open(config_file, 'w', encoding='utf-8') as f:
                 config.write(f)
 
         except Exception as e:
@@ -2865,7 +2870,7 @@ class ComprehensiveSettingsDialog(QDialog):
             config_file = get_config_path()
 
             if os.path.exists(config_file):
-                config.read(config_file)
+                config.read(config_file, encoding='utf-8')
 
             if 'SCANNING' not in config:
                 config.add_section('SCANNING')
@@ -2884,7 +2889,7 @@ class ComprehensiveSettingsDialog(QDialog):
             config.set('SCANNING', 'stats_exclude_outliers', str(self.stats_exclude_outliers_check.isChecked()))
             config.set('SCANNING', 'use_median', str(self.avg_median_radio.isChecked()))
 
-            with open(config_file, 'w') as f:
+            with open(config_file, 'w', encoding='utf-8') as f:
                 config.write(f)
 
         except Exception as e:
@@ -2904,7 +2909,7 @@ class ComprehensiveSettingsDialog(QDialog):
             config_file = get_config_path()
 
             if os.path.exists(config_file):
-                config.read(config_file)
+                config.read(config_file, encoding='utf-8')
 
             if 'EXTERNAL_APPS' not in config:
                 config.add_section('EXTERNAL_APPS')
@@ -2933,7 +2938,7 @@ class ComprehensiveSettingsDialog(QDialog):
                     key_mapping = getattr(self, f'hook_{hook_type}_key{i}').text()
                     config.set('EXTERNAL_APPS', f'hook_{hook_type}_key{i}', key_mapping)
 
-            with open(config_file, 'w') as f:
+            with open(config_file, 'w', encoding='utf-8') as f:
                 config.write(f)
 
         except Exception as e:
@@ -3148,11 +3153,16 @@ class ComprehensiveSettingsDialog(QDialog):
     
     def _check_unsaved_changes_before_close(self, close_callback):
         """Check for unsaved changes and handle closing"""
-        if hasattr(self, 'template_dialog') and self.template_dialog.unsaved_changes:
+        has_template_changes = (
+            hasattr(self, 'template_dialog')
+            and self.template_dialog.has_pending_changes()
+        )
+
+        if has_template_changes:
             msg_box = QMessageBox(self)
             msg_box.setIcon(QMessageBox.Icon.Question)
             msg_box.setWindowTitle("Unsaved Changes")
-            msg_box.setText(f"You have unsaved changes to template '{self.template_dialog.current_template_name}'. Do you want to save them before closing?")
+            msg_box.setText("You have unsaved template changes. Do you want to save them before closing?")
             msg_box.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No | QMessageBox.StandardButton.Cancel)
             msg_box.setDefaultButton(QMessageBox.StandardButton.Yes)
             msg_box.finished.connect(lambda result: self._handle_unsaved_changes_result(result, close_callback))
@@ -3160,32 +3170,35 @@ class ComprehensiveSettingsDialog(QDialog):
         else:
             # No unsaved changes, proceed with close
             close_callback()
-    
+
     def _handle_unsaved_changes_result(self, result, close_callback):
         """Handle the result of unsaved changes dialog"""
         if result == QMessageBox.StandardButton.Yes:
-            # Save the template first, then close
-            self.template_dialog.save_template()
+            # Commit pending template changes, then close
+            if hasattr(self, 'template_dialog'):
+                self.template_dialog.commit_all_changes()
             close_callback()
         elif result == QMessageBox.StandardButton.No:
-            # Don't save, but close
+            # Discard changes and close
+            if hasattr(self, 'template_dialog'):
+                self.template_dialog.discard_all_changes()
             close_callback()
         # Cancel - do nothing (dialog stays open)
     
     def closeEvent(self, event):
         """Handle dialog closing with unsaved changes check"""
-        
+
         # Check for unsaved changes in any tab
         has_unsaved = False
         for i in range(self.tab_widget.count()):
             if self.tab_dirty_states.get(i, False):
                 has_unsaved = True
                 break
-        
-        # Also check if Templates tab has unsaved changes (legacy check)
-        if hasattr(self, 'template_dialog') and self.template_dialog.unsaved_changes:
+
+        # Also check if Templates tab has pending changes
+        if hasattr(self, 'template_dialog') and self.template_dialog.has_pending_changes():
             has_unsaved = True
-        
+
         if has_unsaved:
             # Use the same logic as save_and_close but for close
             event.ignore()  # Prevent immediate close
@@ -3349,7 +3362,7 @@ class ComprehensiveSettingsDialog(QDialog):
             config_file = get_config_path()
             
             if os.path.exists(config_file):
-                config.read(config_file)
+                config.read(config_file, encoding='utf-8')
             
             if 'UPLOAD' not in config:
                 config.add_section('UPLOAD')
@@ -3479,7 +3492,7 @@ class ComprehensiveSettingsDialog(QDialog):
                     # Write to NEW location (not config_file which is old location)
                     new_config_file = os.path.join(new_path, 'imxup.ini')
                     os.makedirs(new_path, exist_ok=True)
-                    with open(new_config_file, 'w') as f:
+                    with open(new_config_file, 'w', encoding='utf-8') as f:
                         config.write(f)
 
                     if msg_box.clickedButton() == yes_btn:
@@ -3503,14 +3516,14 @@ class ComprehensiveSettingsDialog(QDialog):
                     # Write to NEW location
                     new_config_file = os.path.join(new_path, 'imxup.ini')
                     os.makedirs(new_path, exist_ok=True)
-                    with open(new_config_file, 'w') as f:
+                    with open(new_config_file, 'w', encoding='utf-8') as f:
                         config.write(f)
             else:
                 # Path not changing, just save other settings
                 config.set('DEFAULTS', 'storage_mode', storage_mode)
                 if new_path:
                     config.set('DEFAULTS', 'central_store_path', new_path)
-                with open(config_file, 'w') as f:
+                with open(config_file, 'w', encoding='utf-8') as f:
                     config.write(f)
 
                 # CRITICAL: Save base path to QSettings for bootstrap
@@ -3677,8 +3690,8 @@ class ComprehensiveSettingsDialog(QDialog):
     def _save_templates_tab(self):
         """Save Templates tab settings only"""
         try:
-            if hasattr(self, 'template_dialog') and self.template_dialog.unsaved_changes:
-                return self.template_dialog.save_template()
+            if hasattr(self, 'template_dialog'):
+                return self.template_dialog.commit_all_changes()
             return True
         except Exception as e:
             log(f"Error saving template settings: {e}", level="warning", category="settings")
@@ -3691,7 +3704,7 @@ class ComprehensiveSettingsDialog(QDialog):
             config_file = get_config_path()
             
             if os.path.exists(config_file):
-                config.read(config_file)
+                config.read(config_file, encoding='utf-8')
             
             if 'TABS' not in config:
                 config.add_section('TABS')
