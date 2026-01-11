@@ -1,6 +1,6 @@
 # Core dependencies
 # Python 3.14+ required (already installed - cannot be installed via pip)
-requests==2.31.0
+requests==2.32.4
 pycurl==7.45.7
 PyQt6==6.9.1
 PyQt6-Qt6==6.9.1
