@@ -5,7 +5,8 @@ Provides credential setup, testing, and configuration for file host uploads
 """
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QFormLayout, QGridLayout, QLabel, QGroupBox,
-    QPushButton, QLineEdit, QCheckBox, QProgressBar, QComboBox, QWidget, QListWidget, QSplitter, QSpinBox, QSizePolicy
+    QPushButton, QLineEdit, QCheckBox, QProgressBar, QComboBox, QWidget, QListWidget,
+    QSplitter, QSpinBox, QSizePolicy, QPlainTextEdit
 )
 from PyQt6.QtCore import QSettings, QTimer, Qt
 from PyQt6.QtGui import QPixmap, QFont
@@ -459,16 +460,26 @@ class FileHostConfigDialog(QDialog):
         self.upload_timeout_spin.valueChanged.connect(self._mark_dirty)
         settings_layout.addRow("Max upload time:", self.upload_timeout_spin)
 
-        # 7. bbcode_format - QLineEdit
+        # 7. bbcode_format - QPlainTextEdit (auto-expanding up to 3 lines)
         bbcode_format = get_file_host_setting(self.host_id, "bbcode_format", "str")
-        self.bbcode_format_edit = QLineEdit()
-        self.bbcode_format_edit.setText(bbcode_format if bbcode_format else "")
+        self.bbcode_format_edit = QPlainTextEdit()
+        self.bbcode_format_edit.setPlainText(bbcode_format if bbcode_format else "")
         self.bbcode_format_edit.setPlaceholderText("[url=#link#]#hostName#[/url]")
         self.bbcode_format_edit.setToolTip(
             "Format for download links in BBCode. Use #link# for URL and #hostName# for host name. "
-            "Leave empty for raw URL."
+            "Leave empty for raw URL. Supports multiple lines."
         )
+        # Auto-expand height based on content (1-3 lines)
+        self.bbcode_format_edit.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.bbcode_format_edit.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.bbcode_format_edit.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
+        line_height = self.bbcode_format_edit.fontMetrics().lineSpacing()
+        # Start with 1 line height, expand up to 3
+        self.bbcode_format_edit.setMinimumHeight(line_height + 12)
+        self.bbcode_format_edit.setMaximumHeight(line_height * 3 + 12)
         self.bbcode_format_edit.textChanged.connect(self._mark_dirty)
+        self.bbcode_format_edit.textChanged.connect(self._adjust_bbcode_height)
+        self._adjust_bbcode_height()  # Initial adjustment
         settings_layout.addRow("BBCode Format:", self.bbcode_format_edit)
 
         content_layout.addWidget(settings_group)
@@ -1264,6 +1275,16 @@ class FileHostConfigDialog(QDialog):
         self.has_unsaved_changes = True
         self.apply_btn.setEnabled(True)
 
+    def _adjust_bbcode_height(self):
+        """Adjust BBCode format text edit height based on content (1-3 lines)."""
+        doc = self.bbcode_format_edit.document()
+        line_count = doc.blockCount()
+        line_height = self.bbcode_format_edit.fontMetrics().lineSpacing()
+        # Clamp between 1 and 3 lines
+        visible_lines = max(1, min(3, line_count))
+        new_height = line_height * visible_lines + 12  # 12px for padding/margins
+        self.bbcode_format_edit.setFixedHeight(new_height)
+
     def _check_unsaved_changes(self, action_name: str) -> bool:
         """Check for unsaved changes and warn user.
 
@@ -1357,7 +1378,7 @@ class FileHostConfigDialog(QDialog):
             save_file_host_setting(self.host_id, "upload_timeout", upload_timeout_value if upload_timeout_value > 0 else None)
 
             # Save BBCode format (empty string if not set)
-            bbcode_format_value = self.bbcode_format_edit.text().strip()
+            bbcode_format_value = self.bbcode_format_edit.toPlainText().strip()
             save_file_host_setting(self.host_id, "bbcode_format", bbcode_format_value if bbcode_format_value else "")
 
         except IOError as e:
