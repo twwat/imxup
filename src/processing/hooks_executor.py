@@ -71,7 +71,7 @@ class HooksExecutor:
         config_file = get_config_path()
 
         if os.path.exists(config_file):
-            config.read(config_file)
+            config.read(config_file, encoding='utf-8')
 
         hooks_config = {
             'parallel_execution': config.getboolean('EXTERNAL_APPS', 'parallel_execution', fallback=True),

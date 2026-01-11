@@ -291,7 +291,7 @@ class SettingsManager(QObject):
             config_file = get_config_path()
 
             if os.path.exists(config_file):
-                config.read(config_file)
+                config.read(config_file, encoding='utf-8')
 
             # Ensure DEFAULTS section exists
             if 'DEFAULTS' not in config:
@@ -310,7 +310,7 @@ class SettingsManager(QObject):
             config['DEFAULTS']['central_store_path'] = central_store_path
 
             # Save to file
-            with open(config_file, 'w') as f:
+            with open(config_file, 'w', encoding='utf-8') as f:
                 config.write(f)
 
             log("Quick settings saved successfully", level="info", category="ui")

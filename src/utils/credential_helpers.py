@@ -371,15 +371,15 @@ class CredentialRotationHelper:
 
         try:
             if log_file.exists():
-                with open(log_file, 'r') as f:
+                with open(log_file, 'r', encoding='utf-8') as f:
                     log = json.load(f)
             else:
                 log = []
 
             log.append(rotation_data)
 
-            with open(log_file, 'w') as f:
-                json.dump(log, f, indent=2)
+            with open(log_file, 'w', encoding='utf-8') as f:
+                json.dump(log, f, indent=2, ensure_ascii=False)
         except Exception as e:
             raise CredentialError(f"Failed to record rotation: {e}")
 
@@ -399,7 +399,7 @@ class CredentialRotationHelper:
             if not log_file.exists():
                 return None
 
-            with open(log_file, 'r') as f:
+            with open(log_file, 'r', encoding='utf-8') as f:
                 log = json.load(f)
 
             # Find most recent rotation for this credential

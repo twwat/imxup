@@ -289,7 +289,7 @@ class CredentialSetupDialog(QDialog):
         config_file = get_config_path()
         cookies_enabled = True  # Default
         if os.path.exists(config_file):
-            config.read(config_file)
+            config.read(config_file, encoding='utf-8')
             if 'CREDENTIALS' in config:
                 cookies_enabled_val = str(config['CREDENTIALS'].get('cookies_enabled', 'true')).lower()
                 cookies_enabled = cookies_enabled_val != 'false'
@@ -491,11 +491,11 @@ class CredentialSetupDialog(QDialog):
             config = configparser.ConfigParser()
             config_file = get_config_path()
             if os.path.exists(config_file):
-                config.read(config_file)
+                config.read(config_file, encoding='utf-8')
             if 'CREDENTIALS' not in config:
                 config['CREDENTIALS'] = {}
             config['CREDENTIALS']['cookies_enabled'] = 'true'
-            with open(config_file, 'w') as f:
+            with open(config_file, 'w', encoding='utf-8') as f:
                 config.write(f)
             self.load_current_credentials()
         except Exception as e:
@@ -507,11 +507,11 @@ class CredentialSetupDialog(QDialog):
             config = configparser.ConfigParser()
             config_file = get_config_path()
             if os.path.exists(config_file):
-                config.read(config_file)
+                config.read(config_file, encoding='utf-8')
             if 'CREDENTIALS' not in config:
                 config['CREDENTIALS'] = {}
             config['CREDENTIALS']['cookies_enabled'] = 'false'
-            with open(config_file, 'w') as f:
+            with open(config_file, 'w', encoding='utf-8') as f:
                 config.write(f)
             self.load_current_credentials()
         except Exception as e:

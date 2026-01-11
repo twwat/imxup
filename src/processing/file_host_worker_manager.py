@@ -50,10 +50,6 @@ class FileHostWorkerManager(QObject):
         self.pending_workers: Dict[str, FileHostWorker] = {}  # Workers spinning up (testing credentials)
         self._pending_lock = threading.Lock()  # Protects pending_workers dict
 
-        import traceback
-        caller = traceback.extract_stack()[-2]
-        log(f"File Host Manager initialized (called from {caller.filename}:{caller.lineno} in {caller.name})", level="debug", category="file_hosts")
-
     def init_enabled_hosts(self) -> None:
         """Spawn workers for all enabled file hosts at startup.
 
@@ -66,8 +62,6 @@ class FileHostWorkerManager(QObject):
         import configparser
         import os
 
-        log("Initializing file host workers on startup...", level="debug", category="file_hosts")
-
         config_manager = get_config_manager()
 
         # Read INI file ONCE to get all enabled hosts
@@ -79,7 +73,7 @@ class FileHostWorkerManager(QObject):
             from src.core.file_host_config import _ini_file_lock
             with _ini_file_lock:
                 config = configparser.ConfigParser()
-                config.read(config_file)
+                config.read(config_file, encoding='utf-8')
 
                 # Check each host's enabled state from INI
                 for host_id in config_manager.hosts:
@@ -96,8 +90,6 @@ class FileHostWorkerManager(QObject):
             log(f"INI file does not exist at {config_file}, no hosts enabled by default",
                 level="debug", category="file_hosts")
 
-        log(f"Found {len(enabled_hosts)} enabled hosts: {enabled_hosts}", level="debug", category="file_hosts")
-
         # Initialize workers for enabled hosts
         for host_id in enabled_hosts:
             try:
@@ -106,8 +98,6 @@ class FileHostWorkerManager(QObject):
                 self.enable_host(host_id, persist=False)
             except Exception as e:
                 log(f"Failed to enable host {host_id}: {e}", level="error", category="file_hosts")
-
-        log(f"[File Host Manager] After init_enabled_hosts: {len(self.workers)} in workers, {len(self.pending_workers)} pending", level="debug", category="file_hosts")
 
     def enable_host(self, host_id: str, persist: bool = True) -> None:
         """Spawn and start worker for a host.
@@ -146,12 +136,6 @@ class FileHostWorkerManager(QObject):
 
         # Store persist flag for use in _on_spinup_complete
         worker._persist_on_spinup = persist
-
-        log(
-            f"[File Host Manager] Starting worker spinup for {host_id}...",
-            level="debug",
-            category="file_hosts"
-        )
 
         # Start worker thread (will test credentials during spinup)
         worker.start()
@@ -266,26 +250,13 @@ class FileHostWorkerManager(QObject):
         persist = getattr(worker, '_persist_on_spinup', True)
 
         if error:
-            # Spinup failed - kill dead worker
-            log(
-                f"[File Host Manager] Worker spinup failed for {host_id}: {error}",
-                level="warning",
-                category="file_hosts"
-            )
-
-            # Worker already emits failed status before spinup_complete signal
-            # No need to emit here - would cause double status update to UI
-
+            # Spinup failed - log and cleanup
+            log(f"{host_id}: failed ({error})", level="warning", category="file_hosts")
             worker.wait()  # Clean up thread
             # Do NOT persist state - keep previous INI value on failure
         else:
             # Spinup succeeded - move to enabled workers
-            log(
-                f"[File Host Manager] Worker started successfully for {host_id}",
-                level="debug",
-                category="file_hosts"
-            )
-
+            log(f"{host_id}: ready", level="info", category="file_hosts")
             self.workers[host_id] = worker
 
             # Only persist if requested (skip during startup to avoid redundant writes)

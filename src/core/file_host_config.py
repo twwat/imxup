@@ -262,7 +262,7 @@ def get_file_host_setting(host_id: str, key: str, value_type: str = "str") -> An
     if os.path.exists(ini_path):
         with _ini_file_lock:  # Thread-safe INI access
             cfg = configparser.ConfigParser()
-            cfg.read(ini_path)
+            cfg.read(ini_path, encoding='utf-8')
             if cfg.has_section("FILE_HOSTS"):
                 ini_key = f"{host_id}_{key}"
                 if cfg.has_option("FILE_HOSTS", ini_key):
@@ -379,7 +379,7 @@ def save_file_host_setting(host_id: str, key: str, value: Any) -> None:
 
         # Load existing INI
         if os.path.exists(ini_path):
-            cfg.read(ini_path)
+            cfg.read(ini_path, encoding='utf-8')
 
         # Ensure section exists
         if not cfg.has_section("FILE_HOSTS"):
@@ -396,7 +396,7 @@ def save_file_host_setting(host_id: str, key: str, value: Any) -> None:
 
         # Save to file
         try:
-            with open(ini_path, 'w') as f:
+            with open(ini_path, 'w', encoding='utf-8') as f:
                 cfg.write(f)
             log(f"Saved {host_id}_{key}={value} to INI", level="debug", category="file_hosts")
         except Exception as e:
@@ -433,20 +433,17 @@ class FileHostConfigManager:
         self.hosts.clear()
 
         # Load built-in hosts first
-        log(f"Loading hosts from built-in dir: {self.builtin_dir}", level="debug", category="file_hosts")
         if self.builtin_dir.exists():
             self._load_hosts_from_dir(self.builtin_dir, is_builtin=True)
         else:
             log(f"Built-in hosts directory does not exist: {self.builtin_dir}", level="warning", category="file_hosts")
 
         # Load custom hosts (can override built-in)
-        log(f"Loading hosts from custom dir: {self.custom_dir}", level="debug", category="file_hosts")
         if self.custom_dir.exists():
             self._load_hosts_from_dir(self.custom_dir, is_builtin=False)
 
     def reload_hosts(self) -> None:
         """Reload all host configurations (useful for testing or after config changes)."""
-        log("Reloading all host configurations", level="info", category="file_hosts")
         self.load_all_hosts()
 
     def _load_hosts_from_dir(self, directory: Path, is_builtin: bool) -> None:
@@ -470,8 +467,7 @@ class FileHostConfigManager:
 
                 self.hosts[host_id] = host_config
 
-                source = "built-in" if is_builtin else "custom"
-                log(f"Loaded {source} host config file for {host_config.name} ({json_file})", level="debug", category="file_hosts")
+                # Config loading is internal - no need to log each file
 
             except Exception as e:
                 log(f"Error loading host config {json_file}: {e}", level="error")
