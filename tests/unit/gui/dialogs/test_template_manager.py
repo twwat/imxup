@@ -21,7 +21,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent.parent))
 from src.gui.dialogs.template_manager import (
     TemplateManagerDialog,
     ConditionalInsertDialog,
-    PlaceholderHighlighter
+    PlaceholderHighlighter,
+    BUILTIN_TEMPLATES
 )
 
 
@@ -252,14 +253,16 @@ class TestTemplateManagerDialogInit:
 
     @patch('imxup.load_templates')
     def test_initial_state(self, mock_load, qtbot):
-        """Test dialog initial state"""
+        """Test dialog initial state with pending changes tracking"""
         mock_load.return_value = {'default': 'Template'}
 
         dialog = TemplateManagerDialog()
         qtbot.addWidget(dialog)
 
-        assert not dialog.unsaved_changes
-        assert dialog.current_template_name is None
+        # New pending state tracking
+        assert dialog.pending_changes == {}
+        assert dialog.pending_new_templates == set()
+        assert dialog.pending_deleted_templates == set()
         assert dialog.initial_template == "default"
 
     @patch('imxup.load_templates')
@@ -275,8 +278,9 @@ class TestTemplateManagerDialogInit:
         assert dialog.new_btn is not None
         assert dialog.rename_btn is not None
         assert dialog.delete_btn is not None
-        assert dialog.save_btn is not None
+        assert dialog.copy_btn is not None  # New copy button
         assert dialog.validate_btn is not None
+        # Note: save_btn no longer exists - saving handled by commit_all_changes()
 
     @patch('imxup.load_templates')
     def test_highlighter_attached(self, mock_load, qtbot):
@@ -299,7 +303,7 @@ class TestTemplateLoading:
 
     @patch('imxup.load_templates')
     def test_load_templates_populates_list(self, mock_load, qtbot):
-        """Test loading templates populates the list"""
+        """Test loading templates populates the list with display names"""
         mock_load.return_value = {
             'default': 'Default template',
             'custom1': 'Custom 1',
@@ -310,10 +314,40 @@ class TestTemplateLoading:
         qtbot.addWidget(dialog)
 
         assert dialog.template_list.count() == 3
-        items = [dialog.template_list.item(i).text() for i in range(dialog.template_list.count())]
-        assert 'default' in items
-        assert 'custom1' in items
-        assert 'custom2' in items
+
+        # Check that actual names are stored in UserRole
+        actual_names = []
+        for i in range(dialog.template_list.count()):
+            item = dialog.template_list.item(i)
+            actual_name = item.data(Qt.ItemDataRole.UserRole)
+            actual_names.append(actual_name)
+
+        assert 'default' in actual_names
+        assert 'custom1' in actual_names
+        assert 'custom2' in actual_names
+
+    @patch('imxup.load_templates')
+    def test_template_display_names_have_indicators(self, mock_load, qtbot):
+        """Test that template display names have appropriate indicators"""
+        mock_load.return_value = {
+            'default': 'Default template',
+            'custom1': 'Custom 1'
+        }
+
+        dialog = TemplateManagerDialog(current_template='default')
+        qtbot.addWidget(dialog)
+
+        # Find default template item
+        for i in range(dialog.template_list.count()):
+            item = dialog.template_list.item(i)
+            actual_name = item.data(Qt.ItemDataRole.UserRole)
+            display_name = item.text()
+
+            if actual_name == 'default':
+                # Should have (Built-in) indicator
+                assert "(Built-in)" in display_name
+                # Should have star indicator since it's the active template
+                assert "\u2605" in display_name  # Star character
 
     @patch('imxup.load_templates')
     def test_initial_template_selected(self, mock_load, qtbot):
@@ -326,7 +360,10 @@ class TestTemplateLoading:
         dialog = TemplateManagerDialog(current_template='custom')
         qtbot.addWidget(dialog)
 
-        assert dialog.template_list.currentItem().text() == 'custom'
+        # Check UserRole data for actual template name
+        current_item = dialog.template_list.currentItem()
+        actual_name = current_item.data(Qt.ItemDataRole.UserRole)
+        assert actual_name == 'custom'
 
     @patch('imxup.load_templates')
     def test_fallback_to_first_template(self, mock_load, qtbot):
@@ -353,7 +390,20 @@ class TestTemplateLoading:
         dialog.load_template_content('test')
 
         assert dialog.template_editor.toPlainText() == template_content
-        assert not dialog.unsaved_changes
+
+    @patch('imxup.load_templates')
+    def test_load_template_from_pending_changes(self, mock_load, qtbot):
+        """Test loading template content from pending_changes first"""
+        mock_load.return_value = {'test': 'Original content'}
+
+        dialog = TemplateManagerDialog()
+        qtbot.addWidget(dialog)
+
+        # Simulate pending change
+        dialog.pending_changes['test'] = 'Modified content'
+        dialog.load_template_content('test')
+
+        assert dialog.template_editor.toPlainText() == 'Modified content'
 
 
 # ============================================================================
@@ -375,13 +425,17 @@ class TestTemplateSelection:
         qtbot.addWidget(dialog)
 
         # Select custom template
-        dialog.template_list.setCurrentRow(1)
+        for i in range(dialog.template_list.count()):
+            item = dialog.template_list.item(i)
+            if item.data(Qt.ItemDataRole.UserRole) == 'custom':
+                dialog.template_list.setCurrentRow(i)
+                break
 
         assert dialog.template_editor.toPlainText() == 'Custom content'
 
     @patch('imxup.load_templates')
-    def test_select_default_disables_editing(self, mock_load, qtbot):
-        """Test selecting default template disables editing"""
+    def test_select_builtin_disables_editing(self, mock_load, qtbot):
+        """Test selecting built-in template disables editing"""
         mock_load.return_value = {
             'default': 'Default',
             'custom': 'Custom'
@@ -390,15 +444,17 @@ class TestTemplateSelection:
         dialog = TemplateManagerDialog()
         qtbot.addWidget(dialog)
 
-        # Find and select default template
+        # Find and select default template (built-in)
         for i in range(dialog.template_list.count()):
-            if dialog.template_list.item(i).text() == 'default':
+            item = dialog.template_list.item(i)
+            if item.data(Qt.ItemDataRole.UserRole) == 'default':
                 dialog.template_list.setCurrentRow(i)
                 break
 
         assert dialog.template_editor.isReadOnly()
         assert not dialog.rename_btn.isEnabled()
         assert not dialog.delete_btn.isEnabled()
+        assert dialog.copy_btn.isEnabled()  # Copy should still work
 
     @patch('imxup.load_templates')
     def test_select_custom_enables_editing(self, mock_load, qtbot):
@@ -411,8 +467,12 @@ class TestTemplateSelection:
         dialog = TemplateManagerDialog()
         qtbot.addWidget(dialog)
 
-        # Select custom template (not default)
-        dialog.template_list.setCurrentRow(1)
+        # Select custom template (not built-in)
+        for i in range(dialog.template_list.count()):
+            item = dialog.template_list.item(i)
+            if item.data(Qt.ItemDataRole.UserRole) == 'custom':
+                dialog.template_list.setCurrentRow(i)
+                break
 
         assert not dialog.template_editor.isReadOnly()
         assert dialog.rename_btn.isEnabled()
@@ -430,6 +490,32 @@ class TestTemplateSelection:
 
         assert dialog.current_template_name == 'test'
 
+    @patch('imxup.load_templates')
+    def test_editing_template_saves_to_pending(self, mock_load, qtbot):
+        """Test editing template content saves to pending_changes immediately"""
+        mock_load.return_value = {
+            'template1': 'Content 1',
+            'template2': 'Content 2'
+        }
+
+        dialog = TemplateManagerDialog()
+        qtbot.addWidget(dialog)
+
+        # Select first template (non-builtin)
+        for i in range(dialog.template_list.count()):
+            item = dialog.template_list.item(i)
+            if item.data(Qt.ItemDataRole.UserRole) == 'template1':
+                dialog.template_list.setCurrentRow(i)
+                break
+
+        # Modify content
+        dialog.template_editor.setPlainText('Modified content')
+
+        # Changes should be immediately tracked in pending_changes
+        assert dialog.unsaved_changes
+        assert 'template1' in dialog.pending_changes
+        assert dialog.pending_changes['template1'] == 'Modified content'
+
 
 # ============================================================================
 # Template CRUD Operations Tests
@@ -441,7 +527,7 @@ class TestCreateTemplate:
     @patch('imxup.load_templates')
     @patch('PyQt6.QtWidgets.QInputDialog.getText')
     def test_create_new_template(self, mock_input, mock_load, qtbot):
-        """Test creating a new template"""
+        """Test creating a new template adds to pending state"""
         mock_load.return_value = {'default': 'Default'}
         mock_input.return_value = ('new_template', True)
 
@@ -453,8 +539,9 @@ class TestCreateTemplate:
 
         assert dialog.template_list.count() == initial_count + 1
         assert dialog.current_template_name == 'new_template'
-        assert dialog.unsaved_changes
-        assert dialog.save_btn.isEnabled()
+        assert 'new_template' in dialog.pending_new_templates
+        assert 'new_template' in dialog.pending_changes
+        assert dialog.pending_changes['new_template'] == ""  # Empty for new
 
     @patch('imxup.load_templates')
     @patch('PyQt6.QtWidgets.QInputDialog.getText')
@@ -493,44 +580,44 @@ class TestRenameTemplate:
     """Test renaming templates"""
 
     @patch('imxup.load_templates')
-    @patch('imxup.get_template_path')
     @patch('PyQt6.QtWidgets.QInputDialog.getText')
-    @patch('PyQt6.QtWidgets.QMessageBox.information')
+    @patch('os.path.exists')
     @patch('os.rename')
-    def test_rename_template_success(self, mock_rename, mock_info, mock_input, mock_path, mock_load, qtbot):
+    def test_rename_template_success(self, mock_rename, mock_exists, mock_input, mock_load, qtbot):
         """Test successfully renaming a template"""
         mock_load.return_value = {'old_name': 'Content'}
-        mock_path.return_value = '/tmp/templates'
         mock_input.return_value = ('new_name', True)
+        mock_exists.return_value = True
 
-        dialog = TemplateManagerDialog()
-        qtbot.addWidget(dialog)
+        with patch('imxup.get_template_path', return_value='/tmp/templates'):
+            dialog = TemplateManagerDialog()
+            qtbot.addWidget(dialog)
 
-        dialog.template_list.setCurrentRow(0)
-        dialog.rename_template()
+            dialog.template_list.setCurrentRow(0)
+            dialog.rename_template()
 
-        mock_rename.assert_called_once()
-        mock_info.assert_called_once()
+            mock_rename.assert_called_once()
 
     @patch('imxup.load_templates')
     @patch('PyQt6.QtWidgets.QMessageBox.warning')
-    def test_rename_default_template_blocked(self, mock_warning, mock_load, qtbot):
-        """Test renaming default template is blocked"""
+    def test_rename_builtin_template_blocked(self, mock_warning, mock_load, qtbot):
+        """Test renaming built-in template is blocked"""
         mock_load.return_value = {'default': 'Content'}
 
         dialog = TemplateManagerDialog()
         qtbot.addWidget(dialog)
 
-        # Select default template
+        # Select default template (built-in)
         for i in range(dialog.template_list.count()):
-            if dialog.template_list.item(i).text() == 'default':
+            item = dialog.template_list.item(i)
+            if item.data(Qt.ItemDataRole.UserRole) == 'default':
                 dialog.template_list.setCurrentRow(i)
                 break
 
         dialog.rename_template()
 
         mock_warning.assert_called_once()
-        assert "Cannot rename the default template" in str(mock_warning.call_args)
+        assert "Cannot rename built-in templates" in str(mock_warning.call_args)
 
     @patch('imxup.load_templates')
     @patch('PyQt6.QtWidgets.QInputDialog.getText')
@@ -543,24 +630,20 @@ class TestRenameTemplate:
         qtbot.addWidget(dialog)
 
         dialog.template_list.setCurrentRow(0)
-        original_name = dialog.template_list.currentItem().text()
+        original_name = dialog.template_list.currentItem().data(Qt.ItemDataRole.UserRole)
         dialog.rename_template()
 
-        assert dialog.template_list.currentItem().text() == original_name
+        assert dialog.template_list.currentItem().data(Qt.ItemDataRole.UserRole) == original_name
 
 
 class TestDeleteTemplate:
     """Test deleting templates"""
 
     @patch('imxup.load_templates')
-    @patch('imxup.get_template_path')
     @patch('PyQt6.QtWidgets.QMessageBox.question')
-    @patch('PyQt6.QtWidgets.QMessageBox.information')
-    @patch('os.remove')
-    def test_delete_template_success(self, mock_remove, mock_info, mock_question, mock_path, mock_load, qtbot):
-        """Test successfully deleting a template"""
+    def test_delete_template_adds_to_pending(self, mock_question, mock_load, qtbot):
+        """Test deleting template adds to pending_deleted_templates"""
         mock_load.return_value = {'test': 'Content'}
-        mock_path.return_value = '/tmp/templates'
         mock_question.return_value = QMessageBox.StandardButton.Yes
 
         dialog = TemplateManagerDialog()
@@ -571,27 +654,29 @@ class TestDeleteTemplate:
 
         dialog.delete_template()
 
-        mock_remove.assert_called_once()
+        # Should be removed from UI but tracked in pending_deleted
         assert dialog.template_list.count() == initial_count - 1
+        assert 'test' in dialog.pending_deleted_templates
 
     @patch('imxup.load_templates')
     @patch('PyQt6.QtWidgets.QMessageBox.warning')
-    def test_delete_default_template_blocked(self, mock_warning, mock_load, qtbot):
-        """Test deleting default template is blocked"""
+    def test_delete_builtin_template_blocked(self, mock_warning, mock_load, qtbot):
+        """Test deleting built-in template is blocked"""
         mock_load.return_value = {'default': 'Content'}
 
         dialog = TemplateManagerDialog()
         qtbot.addWidget(dialog)
 
         for i in range(dialog.template_list.count()):
-            if dialog.template_list.item(i).text() == 'default':
+            item = dialog.template_list.item(i)
+            if item.data(Qt.ItemDataRole.UserRole) == 'default':
                 dialog.template_list.setCurrentRow(i)
                 break
 
         dialog.delete_template()
 
         mock_warning.assert_called_once()
-        assert "Cannot delete the default template" in str(mock_warning.call_args)
+        assert "Cannot delete built-in templates" in str(mock_warning.call_args)
 
     @patch('imxup.load_templates')
     @patch('PyQt6.QtWidgets.QMessageBox.question')
@@ -610,74 +695,270 @@ class TestDeleteTemplate:
 
         assert dialog.template_list.count() == initial_count
 
+    @patch('imxup.load_templates')
+    @patch('PyQt6.QtWidgets.QInputDialog.getText')
+    @patch('PyQt6.QtWidgets.QMessageBox.question')
+    def test_delete_pending_new_template(self, mock_question, mock_input, mock_load, qtbot):
+        """Test deleting a template that was just created (not on disk)"""
+        mock_load.return_value = {'default': 'Default'}
+        mock_input.return_value = ('new_template', True)
+        mock_question.return_value = QMessageBox.StandardButton.Yes
 
-# ============================================================================
-# Template Saving Tests
-# ============================================================================
+        dialog = TemplateManagerDialog()
+        qtbot.addWidget(dialog)
 
-class TestSaveTemplate:
-    """Test template saving functionality"""
+        # Create new template
+        dialog.create_new_template()
+        assert 'new_template' in dialog.pending_new_templates
+
+        # Delete it
+        dialog.delete_template()
+
+        # Should be removed from pending_new, not added to pending_deleted
+        assert 'new_template' not in dialog.pending_new_templates
+        assert 'new_template' not in dialog.pending_deleted_templates
+
+
+class TestCopyTemplate:
+    """Test copying templates"""
 
     @patch('imxup.load_templates')
-    @patch('imxup.get_template_path')
-    @patch('PyQt6.QtWidgets.QMessageBox.information')
-    @patch('builtins.open', new_callable=mock_open)
-    def test_save_template_success(self, mock_file, mock_info, mock_path, mock_load, qtbot):
-        """Test successfully saving a template"""
-        mock_load.return_value = {'test': 'Old content'}
-        mock_path.return_value = '/tmp/templates'
+    @patch('PyQt6.QtWidgets.QInputDialog.getText')
+    def test_copy_template_success(self, mock_input, mock_load, qtbot):
+        """Test successfully copying a template"""
+        mock_load.return_value = {'source': 'Source content'}
+        mock_input.return_value = ('source_copy', True)
 
         dialog = TemplateManagerDialog()
         qtbot.addWidget(dialog)
 
         dialog.template_list.setCurrentRow(0)
-        dialog.template_editor.setPlainText('New content')
-        dialog.current_template_name = 'test'
+        initial_count = dialog.template_list.count()
 
-        dialog.save_template()
+        dialog.copy_template()
 
-        mock_file.assert_called_once()
-        assert not dialog.save_btn.isEnabled()
-        assert not dialog.unsaved_changes
+        assert dialog.template_list.count() == initial_count + 1
+        assert 'source_copy' in dialog.pending_new_templates
+        assert dialog.pending_changes['source_copy'] == 'Source content'
 
     @patch('imxup.load_templates')
-    @patch('imxup.get_template_path')
+    @patch('PyQt6.QtWidgets.QInputDialog.getText')
+    def test_copy_builtin_template_allowed(self, mock_input, mock_load, qtbot):
+        """Test copying built-in template is allowed"""
+        mock_load.return_value = {'default': 'Default content'}
+        mock_input.return_value = ('my_default', True)
+
+        dialog = TemplateManagerDialog()
+        qtbot.addWidget(dialog)
+
+        # Select default template (built-in)
+        for i in range(dialog.template_list.count()):
+            item = dialog.template_list.item(i)
+            if item.data(Qt.ItemDataRole.UserRole) == 'default':
+                dialog.template_list.setCurrentRow(i)
+                break
+
+        dialog.copy_template()
+
+        assert 'my_default' in dialog.pending_new_templates
+        assert dialog.pending_changes['my_default'] == 'Default content'
+
+    @patch('imxup.load_templates')
+    @patch('PyQt6.QtWidgets.QInputDialog.getText')
     @patch('PyQt6.QtWidgets.QMessageBox.warning')
-    @patch('builtins.open', side_effect=IOError("Write failed"))
-    def test_save_template_error_handling(self, mock_file, mock_warning, mock_path, mock_load, qtbot):
-        """Test error handling during template save"""
-        mock_load.return_value = {'test': 'Content'}
-        mock_path.return_value = '/tmp/templates'
+    def test_copy_template_duplicate_name(self, mock_warning, mock_input, mock_load, qtbot):
+        """Test copying to duplicate name shows warning"""
+        mock_load.return_value = {'source': 'Content', 'existing': 'Existing'}
+        mock_input.return_value = ('existing', True)
 
         dialog = TemplateManagerDialog()
         qtbot.addWidget(dialog)
 
         dialog.template_list.setCurrentRow(0)
-        dialog.current_template_name = 'test'
+        initial_count = dialog.template_list.count()
 
-        dialog.save_template()
+        dialog.copy_template()
 
         mock_warning.assert_called_once()
-        assert "Failed to save template" in str(mock_warning.call_args)
+        assert dialog.template_list.count() == initial_count
+
+
+# ============================================================================
+# Pending Changes Management Tests
+# ============================================================================
+
+class TestPendingChanges:
+    """Test pending changes commit/discard functionality"""
 
     @patch('imxup.load_templates')
-    def test_save_button_enabled_on_change(self, mock_load, qtbot):
-        """Test save button enabled when template is changed"""
+    @patch('builtins.open', new_callable=mock_open)
+    def test_commit_all_changes(self, mock_file, mock_load, qtbot):
+        """Test committing all pending changes to disk"""
+        mock_load.return_value = {'test': 'Original'}
+
+        with patch('imxup.get_template_path', return_value='/tmp/templates'):
+            dialog = TemplateManagerDialog()
+            qtbot.addWidget(dialog)
+
+            # Make some changes
+            dialog.pending_changes['test'] = 'Modified content'
+            dialog.pending_changes['new_template'] = 'New content'
+            dialog.pending_new_templates.add('new_template')
+
+            result = dialog.commit_all_changes()
+
+            assert result is True
+            assert dialog.pending_changes == {}
+            assert dialog.pending_new_templates == set()
+            assert dialog.pending_deleted_templates == set()
+
+    @patch('imxup.load_templates')
+    @patch('os.path.exists')
+    @patch('os.remove')
+    @patch('builtins.open', new_callable=mock_open)
+    def test_commit_deletes_pending_deleted(self, mock_file, mock_remove, mock_exists, mock_load, qtbot):
+        """Test commit_all_changes deletes pending_deleted_templates"""
+        mock_load.return_value = {'test': 'Content'}
+        mock_exists.return_value = True
+
+        with patch('imxup.get_template_path', return_value='/tmp/templates'):
+            dialog = TemplateManagerDialog()
+            qtbot.addWidget(dialog)
+
+            dialog.pending_deleted_templates.add('test')
+
+            result = dialog.commit_all_changes()
+
+            assert result is True
+            mock_remove.assert_called_once()
+            assert dialog.pending_deleted_templates == set()
+
+    @patch('imxup.load_templates')
+    def test_discard_all_changes(self, mock_load, qtbot):
+        """Test discarding all pending changes clears tracking state"""
+        # Use only built-in template to avoid on_template_changed adding to pending
+        mock_load.return_value = {'default': 'Default content'}
+
+        dialog = TemplateManagerDialog()
+        qtbot.addWidget(dialog)
+
+        # Manually set up pending state (simulating changes made before discard)
+        dialog.pending_changes['custom_template'] = 'Modified'
+        dialog.pending_new_templates.add('new_template')
+        dialog.pending_deleted_templates.add('to_delete')
+        dialog.unsaved_changes = True
+
+        dialog.discard_all_changes()
+
+        # pending_new_templates and pending_deleted_templates should be cleared
+        assert dialog.pending_new_templates == set()
+        assert dialog.pending_deleted_templates == set()
+        # unsaved_changes should be false after discard
+        assert dialog.unsaved_changes is False
+        # Note: pending_changes may have content loaded from disk for non-builtin
+        # templates after load_templates() triggers selection.
+        # For built-in templates (like 'default'), pending_changes won't be populated
+        # because on_template_changed skips built-in templates.
+
+    @patch('imxup.load_templates')
+    def test_has_pending_changes_true(self, mock_load, qtbot):
+        """Test has_pending_changes returns True when there are changes"""
         mock_load.return_value = {'test': 'Content'}
 
         dialog = TemplateManagerDialog()
         qtbot.addWidget(dialog)
 
-        dialog.template_list.setCurrentRow(0)
+        # Case 1: pending_changes
+        dialog.pending_changes['test'] = 'Modified'
+        assert dialog.has_pending_changes() is True
+
+        dialog.pending_changes.clear()
+
+        # Case 2: pending_new_templates
+        dialog.pending_new_templates.add('new')
+        assert dialog.has_pending_changes() is True
+
+        dialog.pending_new_templates.clear()
+
+        # Case 3: pending_deleted_templates
+        dialog.pending_deleted_templates.add('to_delete')
+        assert dialog.has_pending_changes() is True
+
+        dialog.pending_deleted_templates.clear()
+
+        # Case 4: unsaved_changes flag
         dialog.current_template_name = 'test'
+        dialog.unsaved_changes = True
+        assert dialog.has_pending_changes() is True
 
-        assert not dialog.save_btn.isEnabled()
+    @patch('imxup.load_templates')
+    def test_has_pending_changes_false(self, mock_load, qtbot):
+        """Test has_pending_changes returns False when no changes"""
+        mock_load.return_value = {'test': 'Content'}
 
-        # Trigger change
-        dialog.template_editor.setPlainText('Modified content')
+        dialog = TemplateManagerDialog()
+        qtbot.addWidget(dialog)
 
-        assert dialog.save_btn.isEnabled()
-        assert dialog.unsaved_changes
+        dialog.unsaved_changes = False
+        dialog.pending_changes.clear()
+        dialog.pending_new_templates.clear()
+        dialog.pending_deleted_templates.clear()
+
+        assert dialog.has_pending_changes() is False
+
+
+# ============================================================================
+# Built-in Templates Protection Tests
+# ============================================================================
+
+class TestBuiltinTemplatesProtection:
+    """Test that built-in templates are protected"""
+
+    @patch('imxup.load_templates')
+    def test_builtin_templates_constant(self, mock_load, qtbot):
+        """Test BUILTIN_TEMPLATES constant is defined correctly"""
+        assert "default" in BUILTIN_TEMPLATES
+        assert "Extended Example" in BUILTIN_TEMPLATES
+
+    @patch('imxup.load_templates')
+    @patch('PyQt6.QtWidgets.QMessageBox.warning')
+    def test_extended_example_cannot_be_renamed(self, mock_warning, mock_load, qtbot):
+        """Test Extended Example template cannot be renamed"""
+        mock_load.return_value = {'Extended Example': 'Content'}
+
+        dialog = TemplateManagerDialog()
+        qtbot.addWidget(dialog)
+
+        for i in range(dialog.template_list.count()):
+            item = dialog.template_list.item(i)
+            if item.data(Qt.ItemDataRole.UserRole) == 'Extended Example':
+                dialog.template_list.setCurrentRow(i)
+                break
+
+        dialog.rename_template()
+
+        mock_warning.assert_called_once()
+        assert "Cannot rename built-in templates" in str(mock_warning.call_args)
+
+    @patch('imxup.load_templates')
+    @patch('PyQt6.QtWidgets.QMessageBox.warning')
+    def test_extended_example_cannot_be_deleted(self, mock_warning, mock_load, qtbot):
+        """Test Extended Example template cannot be deleted"""
+        mock_load.return_value = {'Extended Example': 'Content'}
+
+        dialog = TemplateManagerDialog()
+        qtbot.addWidget(dialog)
+
+        for i in range(dialog.template_list.count()):
+            item = dialog.template_list.item(i)
+            if item.data(Qt.ItemDataRole.UserRole) == 'Extended Example':
+                dialog.template_list.setCurrentRow(i)
+                break
+
+        dialog.delete_template()
+
+        mock_warning.assert_called_once()
+        assert "Cannot delete built-in templates" in str(mock_warning.call_args)
 
 
 # ============================================================================
@@ -745,7 +1026,7 @@ class TestTemplateValidation:
 
     @patch('imxup.load_templates')
     def test_validate_unmatched_bbcode(self, mock_load, qtbot):
-        """Test detecting unmatched BBCode tags"""
+        """Test detecting unmatched BBCode tags with new error format"""
         mock_load.return_value = {'test': ''}
 
         dialog = TemplateManagerDialog()
@@ -755,7 +1036,8 @@ class TestTemplateValidation:
         is_valid, errors = dialog.validate_template_syntax(content)
 
         assert not is_valid
-        assert any("Unmatched [b] tags" in err for err in errors)
+        # New error format: "Line X: Tag [b] was never closed"
+        assert any("Tag [b] was never closed" in err for err in errors)
 
     @patch('imxup.load_templates')
     @patch('PyQt6.QtWidgets.QMessageBox.information')
@@ -785,7 +1067,7 @@ class TestTemplateValidation:
         dialog.validate_and_show_results()
 
         mock_warning.assert_called_once()
-        assert "syntax errors" in str(mock_warning.call_args)
+        assert "syntax errors" in str(mock_warning.call_args).lower()
 
 
 # ============================================================================
@@ -856,104 +1138,33 @@ class TestPlaceholderInsertion:
 
 
 # ============================================================================
-# Unsaved Changes Tests
+# Close Event Tests
 # ============================================================================
 
-class TestUnsavedChanges:
-    """Test unsaved changes handling"""
+class TestCloseEvent:
+    """Test dialog close event behavior"""
 
     @patch('imxup.load_templates')
-    @patch('PyQt6.QtWidgets.QMessageBox.question')
-    def test_switch_template_with_unsaved_changes_save(self, mock_question, mock_load, qtbot):
-        """Test switching templates with unsaved changes - save option"""
-        mock_load.return_value = {
-            'template1': 'Content 1',
-            'template2': 'Content 2'
-        }
-        mock_question.return_value = QMessageBox.StandardButton.Yes
-
-        dialog = TemplateManagerDialog()
-        qtbot.addWidget(dialog)
-
-        # Select first template and make changes
-        dialog.template_list.setCurrentRow(0)
-        dialog.current_template_name = dialog.template_list.item(0).text()
-        dialog.template_editor.setPlainText('Modified')
-        dialog.unsaved_changes = True
-
-        # Mock save operation
-        with patch('builtins.open', mock_open()):
-            with patch('src.gui.dialogs.template_manager.get_template_path', return_value='/tmp'):
-                # Try to switch to second template
-                dialog.template_list.setCurrentRow(1)
-
-        mock_question.assert_called_once()
-
-    @patch('imxup.load_templates')
-    @patch('PyQt6.QtWidgets.QMessageBox.question')
-    def test_switch_template_with_unsaved_changes_cancel(self, mock_question, mock_load, qtbot):
-        """Test switching templates with unsaved changes - cancel option"""
-        mock_load.return_value = {
-            'template1': 'Content 1',
-            'template2': 'Content 2'
-        }
-        mock_question.return_value = QMessageBox.StandardButton.Cancel
-
-        dialog = TemplateManagerDialog()
-        qtbot.addWidget(dialog)
-
-        dialog.template_list.setCurrentRow(0)
-        dialog.current_template_name = 'template1'
-        dialog.unsaved_changes = True
-
-        # Try to switch to second template
-        dialog.template_list.setCurrentRow(1)
-
-        # Should stay on first template
-        assert dialog.template_list.currentRow() == 0
-
-    @patch('imxup.load_templates')
-    def test_close_with_unsaved_changes(self, mock_load, qtbot):
-        """Test closing dialog with unsaved changes"""
+    def test_close_event_accepts_without_prompt(self, mock_load, qtbot):
+        """Test closeEvent accepts without prompting (parent handles save)"""
         mock_load.return_value = {'test': 'Content'}
 
         dialog = TemplateManagerDialog()
         qtbot.addWidget(dialog)
 
+        # Make some unsaved changes
         dialog.template_list.setCurrentRow(0)
         dialog.current_template_name = 'test'
         dialog.template_editor.setPlainText('Modified')
         dialog.unsaved_changes = True
 
-        # Mock the question dialog to return Cancel
-        with patch('src.gui.dialogs.template_manager.QMessageBox.question',
-                  return_value=QMessageBox.StandardButton.Cancel):
-            event = Mock()
-            dialog.closeEvent(event)
+        # Close event should accept without prompting
+        event = Mock()
+        dialog.closeEvent(event)
 
-            event.ignore.assert_called_once()
-
-    @patch('imxup.load_templates')
-    def test_save_with_validation_errors_confirm(self, mock_load, qtbot):
-        """Test saving template with validation errors after confirmation"""
-        mock_load.return_value = {'test': 'Content'}
-
-        dialog = TemplateManagerDialog()
-        qtbot.addWidget(dialog)
-
-        dialog.template_list.setCurrentRow(0)
-        dialog.current_template_name = 'test'
-        dialog.template_editor.setPlainText('[if unclosed')
-
-        with patch('src.gui.dialogs.template_manager.QMessageBox.question',
-                  return_value=QMessageBox.StandardButton.Yes):
-            with patch('builtins.open', mock_open()):
-                with patch('src.gui.dialogs.template_manager.get_template_path', return_value='/tmp'):
-                    with patch('src.gui.dialogs.template_manager.QMessageBox.information'):
-                        dialog.save_template()
-
-        # Template should be saved despite errors
-        assert not dialog.unsaved_changes
+        # Should accept (parent dialog handles save/discard)
+        event.accept.assert_called_once()
+        event.ignore.assert_not_called()
 
 
 # ============================================================================
@@ -964,35 +1175,35 @@ class TestTemplateManagerIntegration:
     """Integration tests for complete workflows"""
 
     @patch('imxup.load_templates')
-    @patch('imxup.get_template_path')
     @patch('PyQt6.QtWidgets.QInputDialog.getText')
     @patch('builtins.open', new_callable=mock_open)
-    @patch('PyQt6.QtWidgets.QMessageBox.information')
-    def test_complete_template_creation_workflow(self, mock_info, mock_file, mock_input,
-                                                  mock_path, mock_load, qtbot):
-        """Test complete workflow: create, edit, validate, save"""
+    def test_complete_template_creation_workflow(self, mock_file, mock_input, mock_load, qtbot):
+        """Test complete workflow: create, edit, validate, commit"""
         mock_load.return_value = {'default': 'Default'}
-        mock_path.return_value = '/tmp/templates'
         mock_input.return_value = ('new_template', True)
 
-        dialog = TemplateManagerDialog()
-        qtbot.addWidget(dialog)
+        with patch('imxup.get_template_path', return_value='/tmp/templates'):
+            dialog = TemplateManagerDialog()
+            qtbot.addWidget(dialog)
 
-        # Create new template
-        dialog.create_new_template()
-        assert dialog.current_template_name == 'new_template'
+            # Create new template
+            dialog.create_new_template()
+            assert dialog.current_template_name == 'new_template'
+            assert 'new_template' in dialog.pending_new_templates
 
-        # Edit template
-        dialog.template_editor.setPlainText('[b]#folderName#[/b]')
-        assert dialog.unsaved_changes
+            # Edit template
+            dialog.template_editor.setPlainText('[b]#folderName#[/b]')
+            assert dialog.unsaved_changes
 
-        # Validate
-        is_valid, errors = dialog.validate_template_syntax(dialog.template_editor.toPlainText())
-        assert is_valid
+            # Validate
+            is_valid, errors = dialog.validate_template_syntax(dialog.template_editor.toPlainText())
+            assert is_valid
 
-        # Save
-        dialog.save_template()
-        assert not dialog.unsaved_changes
+            # Commit all changes
+            result = dialog.commit_all_changes()
+            assert result is True
+            assert dialog.pending_new_templates == set()
+            assert dialog.pending_changes == {}
 
     @patch('imxup.load_templates')
     def test_placeholder_buttons_functional(self, mock_load, qtbot):
