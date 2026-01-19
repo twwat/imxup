@@ -17,62 +17,62 @@ class IconManager:
     # Hybrid icon mapping: string for auto-invert, list for manual light/dark pairs
     ICON_MAP = {
         # Status icons           Light icon                      Dark icon
-        'status_completed':     ['status_completed-light.png',  'status_completed-dark.png'],
-        'status_failed':        ['status_failed-light.png',     'status_failed-dark.png'],
+        'status_completed':     'status_completed.png',
+        'status_failed':        'status_failed.png',
         'status_uploading':     ['status_uploading-light.png',  'status_uploading-dark.png'],  # Fallback for single frame
 
         # Multi-frame uploading animation (7 frames, light/dark variants)
-        'status_uploading_frame_0': ['status_uploading-001-light.png', 'status_uploading-001-dark.png'],
-        'status_uploading_frame_1': ['status_uploading-002-light.png', 'status_uploading-002-dark.png'],
-        'status_uploading_frame_2': ['status_uploading-003-light.png', 'status_uploading-003-dark.png'],
+        'status_uploading_frame_0': 'status_uploading-001.png',
+        'status_uploading_frame_1': 'status_uploading-002.png',
+        'status_uploading_frame_2': 'status_uploading-003.png',
 
-        'status_paused':        ['status_paused-light.png',     'status_paused-dark.png'],
-        'status_queued':        ['status_queued-light.png',     'status_queued-dark.png'],
-        'status_ready':         ['status_ready-light.png',      'status_ready-dark.png'],
-        'status_pending':       ['status_pending-light.png',    'status_pending-dark.png'],
-        'status_incomplete':    ['status_incomplete-light.png', 'status_incomplete-dark.png'],
-        'status_scan_failed':   ['status_scan_failed-light.png','status_scan_failed-dark.png'],
-        'status_upload_failed': ['status_error-light.png',      'status_error-dark.png'],
-        'status_error':         ['status_error-light.png',      'status_error-dark.png'],
-        'status_idle':          ['status_ready-light.png',      'status_ready-dark.png'],  # Reuse ready icons for idle state
+        'status_paused':        'status_paused.png',
+        'status_queued':        'status_queued.png',
+        'status_ready':         'status_ready.png', # Also used for status_idle
+        'status_pending':       'status_queued.png',
+        'status_incomplete':    'status_incomplete.png',
+        'status_scan_failed':   'status_scan_failed.png',
+        'status_upload_failed': 'status_error.png',
+        'status_error':         'status_error.png',
+        'status_idle':          'status_ready.png', # Reuse ready icons for idle state
         'status_scanning':      ['status_scanning-light.png',   'status_scanning-dark.png'],
         'status_validating':    ['status_validating-light.png', 'status_validating-dark.png'],
 
         # Action button icons    Light icon                      Dark icon
-        'action_start':         ['action_start-light.png',      'action_start-dark.png'],
-        'action_stop':          ['action_stop-light.png',       'action_stop-dark.png'],
-        'action_view':          ['action_view-light.png',       'action_view-dark.png'],
-        'action_view_error':    ['action_view_error-light.png', 'action_view_error-dark.png'],
-        'action_cancel':        ['action_cancel-light.png',     'action_cancel-dark.png'],
+        'action_start':         'action_start.png',
+        'action_stop':          'action_stop.png',
+        'action_view':          'action_view.png',
+        'action_view_error':    'action_view_error.png',
+        'action_cancel':        'action_cancel.png',
         'action_resume':        ['action_resume-light.png',     'action_resume-dark.png'],
 
         # Rename status icons
-        'renamed_true':         ['renamed_true-light.png',      'renamed_true-dark.png'],
-        'renamed_false':        ['renamed_false-light.png',     'renamed_false-dark.png'],
+        'renamed_true':         'renamed_true.png',
+        'renamed_false':        'renamed_false.png',
 
         # File host
-        'host_enabled':         ['host_enabled-light.png',      'host_enabled-dark.png'],
-        'host_disabled':        ['host_disabled-light.png',     'host_disabled-dark.png'],
+        'host_enabled':         'host_enabled.png',
+        'host_disabled':        'host_disabled.png',
         'imx':                  ['imx-light.png',               'imx-dark.png'],
-        'auto':                 ['auto-light.png',              'auto-dark.png'],
-        'auto-disabled':        ['auto-disabled-light.png',     'auto-disabled-dark.png'],
-        'disabledhost':         ['disabledhost-dark.png',       'disabledhost-light.png'],
+        'auto':                 'auto.png',
+        'auto-disabled':        'auto-disabled.png',
+        'disabledhost':         'disabledhost.png',
 
         # UI element icons / Quick Settings
         'settings':             ['settings-light.png',          'settings-dark.png'],
-        'templates':            ['templates-light.png',         'templates-dark.png'],
+        'templates':            'templates.png',
         'credentials':          ['credentials-light.png',       'credentials-dark.png'],
-        'filehosts':            ['filehosts-light.png',         'filehosts-dark.png'],
-        'help':                 ['help-light.png',              'help-dark.png'],
-        'hooks':                ['hooks-light.png',             'hooks-dark.png'],
-        'scan':                 ['scan-light.png',              'scan-dark.png'],
+        'filehosts':            'filehosts.png',
+        'help':                 'help.png',
+        'hooks':                'hooks.png',
+        'scan':                 'scan.png',
         'toggle_theme':         ['toggle_theme-light.png',      'toggle_theme-dark.png'],
-        'statistics':           ['statistics-light.png',        'statistics-dark.png'],
-        'log_viewer':           ['log_viewer-light.png',        'log_viewer-dark.png'],
+        'statistics':           'statistics.png',
+        'log_viewer':           'log_viewer.png',
         'radio_check':          ['radio_check-light.png',       'radio_check-dark.png'],
         'check':                ['check-light.png',             'check-dark.png'],
-        'checkbox_check':       ['checkbox_check-light.png',    'checkbox_check-dark.png'],
-        'main_window':          ['imxup-main-icon.png', 'imxup-main-icon.png'],
+        'checkbox_check':       'checkbox_check.png',
+        'main_window':          'imxup-main-icon.png',
         'app_icon':             'imxup.ico',
         # Alternative sizes (optional)
     }
@@ -193,8 +193,12 @@ class IconManager:
             else:
                 theme_mode = 'dark'
 
-        # Create cache key that includes theme/selection state and size
-        cache_key = f"{icon_key}_{theme_mode}_{is_selected}_{requested_size}"
+        # Create cache key - skip theme_mode for single-file icons (string config)
+        config = self.ICON_MAP.get(icon_key)
+        if isinstance(config, str):
+            cache_key = f"{icon_key}_{is_selected}_{requested_size}"
+        else:
+            cache_key = f"{icon_key}_{theme_mode}_{is_selected}_{requested_size}"
 
         # Check cache first
         if cache_key in self._icon_cache:
@@ -204,8 +208,8 @@ class IconManager:
         # Cache miss - will need to load from disk
         self._cache_misses += 1
 
-        # Get the configuration from our map
-        if icon_key not in self.ICON_MAP:
+        # Handle unknown icon keys (config already fetched above for cache key)
+        if config is None:
             log(f"Unknown icon key '{icon_key}'", level="warning", category="ui")
             # Try Qt standard fallback
             if icon_key in self.QT_FALLBACKS:
@@ -221,8 +225,6 @@ class IconManager:
                         self._icon_cache[cache_key] = icon
                         return icon
             return QIcon()
-
-        config = self.ICON_MAP[icon_key]
 
         # Determine which icon file to use
         # Convert to list if it's a list type for proper type handling
