@@ -9,6 +9,7 @@ pillow==11.3.0
 tqdm==4.67.1
 cryptography==45.0.5
 standard-imghdr==3.10.14
+psutil>=5.9.0
 certifi>=2024.0.0
 keyring>=25.0.0
 markdown>=3.4.0
