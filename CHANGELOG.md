@@ -4,9 +4,9 @@ All notable changes to IMXuploader will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
-## [0.7.3] - 2026-01-19
+## [0.7.4] - 2026-01-19
 
-v0.7.3: Unified theme icons, bandwidth manager, table delegates
+v0.7.4: Unified theme icons, bandwidth manager, table delegates
 
 ### Performance
 - **Table delegates**: Reduced memory footprint by eliminating per-row widget instances
@@ -27,6 +27,7 @@ v0.7.3: Unified theme icons, bandwidth manager, table delegates
 - Normalized line endings (CRLF → LF) for cross-platform consistency
 
 ### Fixed
+- **Checkbox icons not loading**: Updated QSS files to reference unified `checkbox_check.png`
 - Improved settings dialog icon references
 - Enhanced table row rendering with delegate pattern
 

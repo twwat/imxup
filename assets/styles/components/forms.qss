@@ -55,9 +55,9 @@ QSpinBox:disabled, QComboBox:disabled, QDoubleSpinBox:disabled { opacity: 0.5; f
 
 /* Checkbox */
 QCheckBox::indicator { border: 2px solid #bbb; border-radius: 2px; background-color: $colors.light.background.input; }
-QCheckBox::indicator:checked { background-color: #f1faff; border: 2px solid #68c1fc; image: url(assets:checkbox_check-light.png); }
+QCheckBox::indicator:checked { background-color: #f1faff; border: 2px solid #68c1fc; image: url(assets:checkbox_check.png); }
 QCheckBox::indicator:hover { border: 2px solid #2a71a0; background-color: $colors.light.background.input; }
-QCheckBox::indicator:checked:hover { background-color: #f1faff; border: 2px solid #2a71a0; image: url(assets:checkbox_check-light.png); }
+QCheckBox::indicator:checked:hover { background-color: #f1faff; border: 2px solid #2a71a0; image: url(assets:checkbox_check.png); }
 QCheckBox::indicator:disabled { background-color: $colors.light.table.header; border: 2px solid #ccc; }
 
 /* Radio Button */
@@ -96,9 +96,9 @@ QSpinBox:disabled, QComboBox:disabled, QDoubleSpinBox:disabled { font-weight: no
 
 /* Checkbox */
 QCheckBox::indicator { border: 2px solid #666; border-radius: 2px; background-color: #252525; }
-QCheckBox::indicator:checked { border: 2px solid #1d6ea3; background-color: #18222b; image: url(assets:checkbox_check-dark.png); }
+QCheckBox::indicator:checked { border: 2px solid #1d6ea3; background-color: #18222b; image: url(assets:checkbox_check.png); }
 QCheckBox::indicator:hover { border: 2px solid $colors.dark.accent.primary; background-color: #292929; }
-QCheckBox::indicator:checked:hover { border: 2px solid $colors.dark.accent.primary; background-color: #18222b; image: url(assets:checkbox_check-dark.png); }
+QCheckBox::indicator:checked:hover { border: 2px solid $colors.dark.accent.primary; background-color: #18222b; image: url(assets:checkbox_check.png); }
 QCheckBox::indicator:disabled { background-color: #1a1a1a; border: 2px solid #222; }
 
 /* Radio Button */
