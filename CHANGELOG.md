@@ -4,6 +4,36 @@ All notable changes to IMXuploader will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [0.7.3] - 2026-01-19
+
+v0.7.3: Unified theme icons, bandwidth manager, table delegates
+
+### Performance
+- **Table delegates**: Reduced memory footprint by eliminating per-row widget instances
+- **Icon consolidation**: Faster startup with fewer assets to load and cache
+
+### Added
+- **Centralized bandwidth manager**: Unified tracking of upload bandwidth across all workers
+- **Table delegates**: Custom delegates for action buttons and file host status display
+- New auto-upload mode icons (auto.png, auto-disabled.png)
+- IMX light theme logo variant (imx-light.png)
+
+### Changed
+- **Asset consolidation**: Replaced 66 theme-specific icon pairs (-dark/-light) with 33 unified icons
+- Updated icon manager to support theme-independent assets
+- Refactored main window signal handling for bandwidth integration
+- Optimized file host logos (filedot, katfile) - reduced file sizes
+- Cleaned up file host client code organization
+- Normalized line endings (CRLF → LF) for cross-platform consistency
+
+### Fixed
+- Improved settings dialog icon references
+- Enhanced table row rendering with delegate pattern
+
+### Tests
+- Added comprehensive tests for bandwidth manager
+- Added unit tests for action button and file host status delegates
+
 ## [0.7.2] - 2026-01-10
 
 v0.7.2: Performance optimization, modular theming, design tokens

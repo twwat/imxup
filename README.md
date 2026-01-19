@@ -1,6 +1,6 @@
 # ImXup - Multi-Host Gallery Uploader
 
-![Version](https://img.shields.io/badge/version-0.7.2-blue.svg)
+![Version](https://img.shields.io/badge/version-0.7.3-blue.svg)
 ![Python](https://img.shields.io/badge/python-3.14+-green.svg)
 ![License](https://img.shields.io/badge/license-MIT-orange.svg)
 ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20Mac-lightgrey.svg)
