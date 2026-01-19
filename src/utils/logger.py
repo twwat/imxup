@@ -301,6 +301,13 @@ def log(message: str,
         # Get AppLogger for file logging
         app_logger = _get_app_logger()
 
+        # Check upload success filtering EARLY (applies to ALL outputs: file, console, GUI)
+        if category == "uploads" and subtype and app_logger:
+            if subtype == "file" and not app_logger.should_log_upload_file_success("gui"):
+                return  # Block file-level upload success messages everywhere
+            if subtype == "gallery" and not app_logger.should_log_upload_gallery_success("gui"):
+                return  # Block gallery-level upload success messages everywhere
+
         # 1. Always try file logging (if enabled)
         if app_logger:
             try:
@@ -330,13 +337,6 @@ def log(message: str,
                 # Check if should show in GUI based on filters
                 if app_logger and not app_logger.should_emit_gui(category, log_level):
                     return
-
-                # Special handling for upload success messages
-                if category == "uploads" and subtype and app_logger:
-                    if subtype == "file" and not app_logger.should_log_upload_file_success("gui"):
-                        return
-                    if subtype == "gallery" and not app_logger.should_log_upload_gallery_success("gui"):
-                        return
 
                 # Send to main window's simple log display (Qt handles cross-thread signals safely)
                 if hasattr(_main_window, 'add_log_message'):
