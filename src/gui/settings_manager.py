@@ -70,19 +70,26 @@ class SettingsManager(QObject):
             if splitter_state:
                 mw.top_splitter.restoreState(splitter_state)
 
-        # Restore vertical splitter state (Settings/Log divider)
+        # Store vertical splitter state for later restoration
+        vertical_splitter_state = None
         if hasattr(mw, 'right_vertical_splitter'):
             vertical_splitter_state = settings.value("splitter/vertical_state")
-            if vertical_splitter_state:
-                mw.right_vertical_splitter.restoreState(vertical_splitter_state)
 
         # Restore right panel collapsed state
         is_collapsed = settings.value("right_panel/collapsed", False, type=bool)
         if is_collapsed and hasattr(mw, 'action_toggle_right_panel'):
             # Collapse after a short delay to allow UI to initialize
             QTimer.singleShot(100, lambda: mw.toggle_right_panel())
+            # Don't restore vertical splitter state when panel is collapsed
+            # The saved state would be from when panel was expanded
         elif hasattr(mw, 'action_toggle_right_panel'):
             mw.action_toggle_right_panel.setChecked(True)
+            # Restore vertical splitter state only when panel is NOT collapsed
+            # Delay slightly to allow layout to settle
+            if vertical_splitter_state and hasattr(mw, 'right_vertical_splitter'):
+                def restore_vertical():
+                    mw.right_vertical_splitter.restoreState(vertical_splitter_state)
+                QTimer.singleShot(50, restore_vertical)
 
         # Load settings from .ini file (for reference by other components)
         defaults = load_user_defaults()
@@ -123,9 +130,13 @@ class SettingsManager(QObject):
             settings.setValue("splitter/state", mw.top_splitter.saveState())
 
         # Save vertical splitter state (Settings/Log divider)
-        if hasattr(mw, 'right_vertical_splitter'):
-            settings.setValue("splitter/vertical_state",
-                            mw.right_vertical_splitter.saveState())
+        # Only save when the right panel is NOT collapsed, as collapsed state would save
+        # invalid/zero sizes that can't be properly restored
+        if hasattr(mw, 'right_vertical_splitter') and hasattr(mw, 'top_splitter'):
+            right_panel_width = mw.top_splitter.sizes()[1] if len(mw.top_splitter.sizes()) > 1 else 0
+            if right_panel_width >= 50:  # Only save if panel is not collapsed
+                settings.setValue("splitter/vertical_state",
+                                mw.right_vertical_splitter.saveState())
 
         # Save right panel collapsed state
         if hasattr(mw, 'action_toggle_right_panel'):

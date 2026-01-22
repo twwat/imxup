@@ -1560,11 +1560,12 @@ class ImxUploadGUI(QMainWindow):
         self.settings_group = AdaptiveGroupBox("Quick Settings")
         self.settings_group.setProperty("class", "settings-group")
 
-        # Set size policy with minimum size to prevent splitter from shrinking too small
+        # Set size policy - let AdaptiveGroupBox.minimumSizeHint() determine the actual minimum
+        # based on layout content. Don't use hardcoded setMinimumHeight() as it prevents
+        # the splitter from restoring saved positions smaller than that value.
         size_policy = QSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum)
         size_policy.setVerticalStretch(0)
         self.settings_group.setSizePolicy(size_policy)
-        self.settings_group.setMinimumHeight(400)
 
         settings_layout = QGridLayout(self.settings_group)
         try:
@@ -1956,7 +1957,8 @@ class ImxUploadGUI(QMainWindow):
         self.right_vertical_splitter.setStretchFactor(2, 1)  # Log: stretches to fill space
 
         # Set initial vertical splitter sizes [settings, worker_status, log]
-        self.right_vertical_splitter.setSizes([400, 180, 270])
+        # Settings group no longer has hardcoded minimum, so use a reasonable default
+        self.right_vertical_splitter.setSizes([200, 180, 270])
 
         # Set minimum width for right panel (Settings + Log) - reduced for better resizing
         self.right_panel.setMinimumWidth(270)
