@@ -1192,20 +1192,13 @@ class GalleryTableWidget(QTableWidget):
     def set_online_imx_status(self, row: int, online_count: int, total_count: int, check_datetime: Optional[str] = None):
         """Set the Online (imx) column value for a specific row.
 
-        Displays the check date (yyyy-mm-dd) with color-coded text indicating status:
-        - Green (normal): All images online
-        - Amber (bold): Some images offline (partial)
-        - Red (bold): All images offline
-
-        Bold formatting is used for offline/partial to help with color blindness.
+        Displays a status icon with the check date:
+        - Green checkmark: All images online
+        - X/disabled icon: Some or all images offline
 
         Sorting behavior (via OnlineStatusSortItem):
         - Primary: Offline count DESCENDING (most offline files first)
         - Secondary: Date (direction toggles with column header clicks)
-
-        Colors are theme-aware via get_online_status_colors():
-        - Light theme: Darker colors for contrast on white background
-        - Dark theme: Brighter colors for contrast on dark background
 
         Args:
             row: The table row index
@@ -1216,31 +1209,21 @@ class GalleryTableWidget(QTableWidget):
         if row < 0 or row >= self.rowCount():
             return
 
-        # Get theme-aware status colors
-        from src.gui.theme_manager import get_online_status_colors
-        colors = get_online_status_colors()
+        from src.gui.icon_manager import get_icon
 
         # Calculate offline count for sorting and styling
         offline_count = total_count - online_count
 
-        # Determine color and bold status based on online status
-        # Green = all online, Amber = partial, Red = all offline
-        # Bold is used for partial/offline to help with color blindness accessibility
-        if total_count == 0:
-            text_color = None
-            use_bold = False
-        elif online_count == total_count:
-            # All online -> GREEN, normal weight
-            text_color = colors['online']
-            use_bold = False
-        elif online_count == 0:
-            # All offline -> RED, bold
-            text_color = colors['offline']
-            use_bold = True
-        else:
-            # Partially offline (0 < online < total) -> AMBER, bold
-            text_color = colors['partial']
-            use_bold = True
+        # Determine icon based on online status
+        # Checkmark = all online, X = any offline
+        status_icon = None
+        if total_count > 0:
+            if online_count == total_count:
+                # All online -> green checkmark
+                status_icon = get_icon('status_online')
+            else:
+                # Any offline (partial or all) -> X/disabled icon
+                status_icon = get_icon('status_offline')
 
         # Parse check_datetime and build display text and tooltip
         display_text = ""
@@ -1269,9 +1252,10 @@ class GalleryTableWidget(QTableWidget):
                 else:
                     days_ago_text = f"{days_ago} days ago"
 
-                # Build rich tooltip
+                # Build rich tooltip with status
+                status_text = "Online" if online_count == total_count else f"Offline: {offline_count}"
                 formatted_datetime = check_dt.strftime("%Y-%m-%d %H:%M")
-                tooltip_text = f"Images online: {online_count}/{total_count}\nLast checked: {formatted_datetime} ({days_ago_text})"
+                tooltip_text = f"Status: {status_text}\nImages online: {online_count}/{total_count}\nLast checked: {formatted_datetime} ({days_ago_text})"
             except (ValueError, TypeError):
                 # Fallback if datetime parsing fails
                 display_text = ""
@@ -1290,19 +1274,16 @@ class GalleryTableWidget(QTableWidget):
         # Secondary: timestamp (direction toggles with sort)
         item.setData(Qt.ItemDataRole.UserRole, (offline_count, timestamp))
 
-        # Apply color coding
-        if text_color is not None:
-            item.setForeground(text_color)
-
-        # Apply bold for offline/partial to help with color blindness accessibility
-        if use_bold:
-            font = item.font()
-            font.setBold(True)
-            item.setFont(font)
+        # Set status icon
+        if status_icon is not None and not status_icon.isNull():
+            item.setIcon(status_icon)
         else:
-            font = item.font()
-            font.setBold(False)
-            item.setFont(font)
+            item.setIcon(QIcon())  # Clear icon if none
+
+        # Reset font to normal (no bold needed with icons)
+        font = item.font()
+        font.setBold(False)
+        item.setFont(font)
 
         item.setToolTip(tooltip_text)
 
@@ -1314,6 +1295,7 @@ class GalleryTableWidget(QTableWidget):
         item = self.item(row, self.COL_ONLINE_IMX)
         if item is not None:
             item.setText("")
+            item.setIcon(QIcon())  # Clear the status icon
             item.setData(Qt.ItemDataRole.UserRole, -1)
             item.setToolTip("")
             # Reset foreground color to default
