@@ -47,13 +47,17 @@ class IconManager:
         'action_resume':        ['action_resume-light.png',     'action_resume-dark.png'],
 
         # Rename status icons
-        'renamed_true':         'renamed_true.png',
+        'renamed_true':         'check.png',
         'renamed_false':        'renamed_false.png',
+
+        # Generic status indicators (for online checker, table cells, etc.)
+        'status_online':        'check.png',           # Green checkmark for "online"
+        'status_offline':       'disabledhost.png',    # X/disabled for "offline"
 
         # File host
         'host_enabled':         'host_enabled.png',
         'host_disabled':        'host_disabled.png',
-        'imx':                  ['imx-light.png',               'imx-dark.png'],
+        'imx':                  'imx.png',
         'auto':                 'auto.png',
         'auto-disabled':        'auto-disabled.png',
         'disabledhost':         'disabledhost.png',
@@ -70,8 +74,8 @@ class IconManager:
         'statistics':           'statistics.png',
         'log_viewer':           'log_viewer.png',
         'radio_check':          ['radio_check-light.png',       'radio_check-dark.png'],
-        'check':                ['check-light.png',             'check-dark.png'],
-        'checkbox_check':       'checkbox_check.png',
+        'check':                'check.png',          #green, also used for rename
+        'checkbox_check':       'checkbox_check.png', #blue
         'main_window':          'imxup-main-icon.png',
         'app_icon':             'imxup.ico',
         # Alternative sizes (optional)
@@ -626,3 +630,19 @@ def init_icon_manager(assets_dir: str) -> IconManager:
     global _icon_manager
     _icon_manager = IconManager(assets_dir)
     return _icon_manager
+
+
+def get_icon(icon_key: str, theme_mode: Optional[str] = None, is_selected: bool = False) -> QIcon:
+    """Convenience function to get an icon from the global icon manager.
+
+    Args:
+        icon_key: The icon identifier (e.g., 'status_online', 'status_offline')
+        theme_mode: Theme mode string ('light', 'dark', or None for auto-detect)
+        is_selected: Whether the icon is for a selected table row
+
+    Returns:
+        QIcon object (may be null if icon manager not initialized or icon not found)
+    """
+    if _icon_manager is None:
+        return QIcon()
+    return _icon_manager.get_icon(icon_key, theme_mode, is_selected)
