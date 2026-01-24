@@ -68,6 +68,19 @@ from src.gui.dialogs.credential_setup import CredentialSetupDialog
 from src.gui.widgets.advanced_settings_widget import AdvancedSettingsWidget
 
 
+class TabIndex:
+    """Named constants for settings tab indices to prevent index mismatch bugs."""
+    GENERAL = 0
+    CREDENTIALS = 1
+    TEMPLATES = 2
+    LOGS = 3
+    IMAGE_SCAN = 4
+    HOOKS = 5
+    FILE_HOSTS = 6
+    PROXY = 7
+    ADVANCED = 8
+
+
 class IconDropFrame(QFrame):
     """Drop-enabled frame for icon files"""
     
@@ -273,6 +286,7 @@ class ComprehensiveSettingsDialog(QDialog):
         self.setup_scanning_tab()
         self.setup_external_apps_tab()
         self.setup_file_hosts_tab()
+        self.setup_proxy_tab()
         self.setup_advanced_tab()
 
         # Buttons
@@ -610,28 +624,28 @@ class ComprehensiveSettingsDialog(QDialog):
         layout.addStretch()
         
         # Connect change signals to mark tab as dirty
-        self.thumbnail_size_combo.currentIndexChanged.connect(lambda: self.mark_tab_dirty(0))
-        self.thumbnail_format_combo.currentIndexChanged.connect(lambda: self.mark_tab_dirty(0))
-        self.max_retries_slider.valueChanged.connect(lambda: self.mark_tab_dirty(0))
-        self.batch_size_slider.valueChanged.connect(lambda: self.mark_tab_dirty(0))
-        self.connect_timeout_slider.valueChanged.connect(lambda: self.mark_tab_dirty(0))
-        self.read_timeout_slider.valueChanged.connect(lambda: self.mark_tab_dirty(0))
-        self.confirm_delete_check.toggled.connect(lambda: self.mark_tab_dirty(0))
-        self.auto_rename_check.toggled.connect(lambda: self.mark_tab_dirty(0))
-        self.auto_regenerate_bbcode_check.toggled.connect(lambda: self.mark_tab_dirty(0))
-        self.auto_start_upload_check.toggled.connect(lambda: self.mark_tab_dirty(0))
-        self.auto_clear_completed_check.toggled.connect(lambda: self.mark_tab_dirty(0))
-        self.check_updates_checkbox.toggled.connect(lambda: self.mark_tab_dirty(0))
-        self.store_in_uploaded_check.toggled.connect(lambda: self.mark_tab_dirty(0))
-        self.store_in_central_check.toggled.connect(lambda: self.mark_tab_dirty(0))
-        self.home_radio.toggled.connect(lambda: self.mark_tab_dirty(0))
-        self.portable_radio.toggled.connect(lambda: self.mark_tab_dirty(0))
-        self.custom_radio.toggled.connect(lambda: self.mark_tab_dirty(0))
-        self.path_edit.textChanged.connect(lambda: self.mark_tab_dirty(0))
-        self.theme_combo.currentIndexChanged.connect(lambda: self.mark_tab_dirty(0))
-        self.font_size_spin.valueChanged.connect(lambda: self.mark_tab_dirty(0))
-        self.quick_settings_icons_only_check.toggled.connect(lambda: self.mark_tab_dirty(0))
-        self.show_worker_logos_check.toggled.connect(lambda: self.mark_tab_dirty(0))
+        self.thumbnail_size_combo.currentIndexChanged.connect(lambda: self.mark_tab_dirty(TabIndex.GENERAL))
+        self.thumbnail_format_combo.currentIndexChanged.connect(lambda: self.mark_tab_dirty(TabIndex.GENERAL))
+        self.max_retries_slider.valueChanged.connect(lambda: self.mark_tab_dirty(TabIndex.GENERAL))
+        self.batch_size_slider.valueChanged.connect(lambda: self.mark_tab_dirty(TabIndex.GENERAL))
+        self.connect_timeout_slider.valueChanged.connect(lambda: self.mark_tab_dirty(TabIndex.GENERAL))
+        self.read_timeout_slider.valueChanged.connect(lambda: self.mark_tab_dirty(TabIndex.GENERAL))
+        self.confirm_delete_check.toggled.connect(lambda: self.mark_tab_dirty(TabIndex.GENERAL))
+        self.auto_rename_check.toggled.connect(lambda: self.mark_tab_dirty(TabIndex.GENERAL))
+        self.auto_regenerate_bbcode_check.toggled.connect(lambda: self.mark_tab_dirty(TabIndex.GENERAL))
+        self.auto_start_upload_check.toggled.connect(lambda: self.mark_tab_dirty(TabIndex.GENERAL))
+        self.auto_clear_completed_check.toggled.connect(lambda: self.mark_tab_dirty(TabIndex.GENERAL))
+        self.check_updates_checkbox.toggled.connect(lambda: self.mark_tab_dirty(TabIndex.GENERAL))
+        self.store_in_uploaded_check.toggled.connect(lambda: self.mark_tab_dirty(TabIndex.GENERAL))
+        self.store_in_central_check.toggled.connect(lambda: self.mark_tab_dirty(TabIndex.GENERAL))
+        self.home_radio.toggled.connect(lambda: self.mark_tab_dirty(TabIndex.GENERAL))
+        self.portable_radio.toggled.connect(lambda: self.mark_tab_dirty(TabIndex.GENERAL))
+        self.custom_radio.toggled.connect(lambda: self.mark_tab_dirty(TabIndex.GENERAL))
+        self.path_edit.textChanged.connect(lambda: self.mark_tab_dirty(TabIndex.GENERAL))
+        self.theme_combo.currentIndexChanged.connect(lambda: self.mark_tab_dirty(TabIndex.GENERAL))
+        self.font_size_spin.valueChanged.connect(lambda: self.mark_tab_dirty(TabIndex.GENERAL))
+        self.quick_settings_icons_only_check.toggled.connect(lambda: self.mark_tab_dirty(TabIndex.GENERAL))
+        self.show_worker_logos_check.toggled.connect(lambda: self.mark_tab_dirty(TabIndex.GENERAL))
 
         self.tab_widget.addTab(general_widget, "General")
         
@@ -1116,7 +1130,7 @@ class ComprehensiveSettingsDialog(QDialog):
         """Setup the Logs tab with log settings"""
         from src.gui.dialogs.log_settings_widget import LogSettingsWidget
         self.log_settings_widget = LogSettingsWidget(self)
-        self.log_settings_widget.settings_changed.connect(lambda: self.mark_tab_dirty(3))  # Logs tab is at index 3 (Tabs/Icons hidden)
+        self.log_settings_widget.settings_changed.connect(lambda: self.mark_tab_dirty(TabIndex.LOGS))
         self.log_settings_widget.load_settings()  # Load current settings
         self.tab_widget.addTab(self.log_settings_widget, "Logs")
         
@@ -1288,27 +1302,27 @@ class ComprehensiveSettingsDialog(QDialog):
         layout.addWidget(strategy_group)
         layout.addStretch()
         
-        # Connect change signals to mark tab as dirty (tab index 4 for scanning after hiding Tabs/Icons)
-        self.fast_scan_check.toggled.connect(lambda: self.mark_tab_dirty(4))
+        # Connect change signals to mark tab as dirty
+        self.fast_scan_check.toggled.connect(lambda: self.mark_tab_dirty(TabIndex.IMAGE_SCAN))
 
         # Connect new sampling controls
-        self.sampling_fixed_radio.toggled.connect(lambda: self.mark_tab_dirty(4))
-        self.sampling_percent_radio.toggled.connect(lambda: self.mark_tab_dirty(4))
-        self.sampling_fixed_spin.valueChanged.connect(lambda: self.mark_tab_dirty(4))
-        self.sampling_percent_spin.valueChanged.connect(lambda: self.mark_tab_dirty(4))
+        self.sampling_fixed_radio.toggled.connect(lambda: self.mark_tab_dirty(TabIndex.IMAGE_SCAN))
+        self.sampling_percent_radio.toggled.connect(lambda: self.mark_tab_dirty(TabIndex.IMAGE_SCAN))
+        self.sampling_fixed_spin.valueChanged.connect(lambda: self.mark_tab_dirty(TabIndex.IMAGE_SCAN))
+        self.sampling_percent_spin.valueChanged.connect(lambda: self.mark_tab_dirty(TabIndex.IMAGE_SCAN))
 
         # Connect exclusion controls
-        self.exclude_first_check.toggled.connect(lambda: self.mark_tab_dirty(4))
-        self.exclude_last_check.toggled.connect(lambda: self.mark_tab_dirty(4))
-        self.exclude_small_check.toggled.connect(lambda: self.mark_tab_dirty(4))
-        self.exclude_small_spin.valueChanged.connect(lambda: self.mark_tab_dirty(4))
-        self.exclude_patterns_check.toggled.connect(lambda: self.mark_tab_dirty(4))
-        self.exclude_patterns_edit.textChanged.connect(lambda: self.mark_tab_dirty(4))
+        self.exclude_first_check.toggled.connect(lambda: self.mark_tab_dirty(TabIndex.IMAGE_SCAN))
+        self.exclude_last_check.toggled.connect(lambda: self.mark_tab_dirty(TabIndex.IMAGE_SCAN))
+        self.exclude_small_check.toggled.connect(lambda: self.mark_tab_dirty(TabIndex.IMAGE_SCAN))
+        self.exclude_small_spin.valueChanged.connect(lambda: self.mark_tab_dirty(TabIndex.IMAGE_SCAN))
+        self.exclude_patterns_check.toggled.connect(lambda: self.mark_tab_dirty(TabIndex.IMAGE_SCAN))
+        self.exclude_patterns_edit.textChanged.connect(lambda: self.mark_tab_dirty(TabIndex.IMAGE_SCAN))
 
         # Connect stats calculation controls
-        self.stats_exclude_outliers_check.toggled.connect(lambda: self.mark_tab_dirty(4))
-        self.avg_mean_radio.toggled.connect(lambda: self.mark_tab_dirty(4))
-        self.avg_median_radio.toggled.connect(lambda: self.mark_tab_dirty(4))
+        self.stats_exclude_outliers_check.toggled.connect(lambda: self.mark_tab_dirty(TabIndex.IMAGE_SCAN))
+        self.avg_mean_radio.toggled.connect(lambda: self.mark_tab_dirty(TabIndex.IMAGE_SCAN))
+        self.avg_median_radio.toggled.connect(lambda: self.mark_tab_dirty(TabIndex.IMAGE_SCAN))
         
         self.tab_widget.addTab(scanning_widget, "Image Scan")
 
@@ -1342,13 +1356,13 @@ class ComprehensiveSettingsDialog(QDialog):
         layout.addStretch()
         self.tab_widget.addTab(external_widget, "Hooks")
 
-        # Connect signals to mark tab as dirty (tab index 5 after hiding Tabs and Icons)
-        self.hooks_parallel_radio.toggled.connect(lambda: self.mark_tab_dirty(5))
-        self.hooks_sequential_radio.toggled.connect(lambda: self.mark_tab_dirty(5))
+        # Connect signals to mark tab as dirty
+        self.hooks_parallel_radio.toggled.connect(lambda: self.mark_tab_dirty(TabIndex.HOOKS))
+        self.hooks_sequential_radio.toggled.connect(lambda: self.mark_tab_dirty(TabIndex.HOOKS))
         for hook_type in ['added', 'started', 'completed']:
-            getattr(self, f'hook_{hook_type}_enabled').toggled.connect(lambda: self.mark_tab_dirty(5))
-            getattr(self, f'hook_{hook_type}_command').textChanged.connect(lambda: self.mark_tab_dirty(5))
-            getattr(self, f'hook_{hook_type}_show_console').toggled.connect(lambda: self.mark_tab_dirty(5))
+            getattr(self, f'hook_{hook_type}_enabled').toggled.connect(lambda: self.mark_tab_dirty(TabIndex.HOOKS))
+            getattr(self, f'hook_{hook_type}_command').textChanged.connect(lambda: self.mark_tab_dirty(TabIndex.HOOKS))
+            getattr(self, f'hook_{hook_type}_show_console').toggled.connect(lambda: self.mark_tab_dirty(TabIndex.HOOKS))
 
     def _create_hook_section(self, parent_layout, title, hook_type):
         """Create a compact section for configuring a single hook"""
@@ -2273,7 +2287,7 @@ class ComprehensiveSettingsDialog(QDialog):
                 value = key_inputs[key].text().strip()
                 getattr(self, f'hook_{hook_type}_key{i}').setText(value)
 
-            self.mark_tab_dirty(5)  # External Apps tab is now at index 5 after hiding Tabs and Icons
+            self.mark_tab_dirty(TabIndex.HOOKS)
             dialog.accept()
 
         save_btn.clicked.connect(save_mapping)
@@ -2312,10 +2326,18 @@ class ComprehensiveSettingsDialog(QDialog):
         # Add tab
         self.tab_widget.addTab(self.file_hosts_widget, "File Hosts")
 
+    def setup_proxy_tab(self):
+        """Setup the Proxy settings tab."""
+        from src.gui.widgets.proxy_settings_widget import ProxySettingsWidget
+
+        self.proxy_widget = ProxySettingsWidget(self)
+        self.proxy_widget.settings_changed.connect(lambda: self.mark_tab_dirty(TabIndex.PROXY))
+        self.tab_widget.addTab(self.proxy_widget, "Proxy")
+
     def setup_advanced_tab(self):
         """Setup the Advanced settings tab."""
         self.advanced_widget = AdvancedSettingsWidget()
-        self.advanced_widget.settings_changed.connect(lambda: self.mark_tab_dirty(7))
+        self.advanced_widget.settings_changed.connect(lambda: self.mark_tab_dirty(TabIndex.ADVANCED))
         self.tab_widget.addTab(self.advanced_widget, "Advanced")
 
     def _load_advanced_settings(self):
@@ -2353,6 +2375,14 @@ class ComprehensiveSettingsDialog(QDialog):
 
         if values:
             self.advanced_widget.set_values(values)
+
+    def _save_proxy_settings(self):
+        """Save proxy settings.
+
+        The ProxySettingsWidget handles its own persistence via ProxyStorage,
+        so this just marks the tab as clean.
+        """
+        return True
 
     def _save_advanced_settings(self):
         """Save advanced settings to INI file (only non-default values).
@@ -2581,8 +2611,8 @@ class ComprehensiveSettingsDialog(QDialog):
         self.populate_icon_list()
         
         # Connect change signals - no need to mark dirty since icon replacement handles this
-        # self.light_icon_frame.icon_dropped.connect(lambda: self.mark_tab_dirty(6))
-        # self.dark_icon_frame.icon_dropped.connect(lambda: self.mark_tab_dirty(6))
+        # self.light_icon_frame.icon_dropped.connect(lambda: self.mark_tab_dirty(TabIndex.FILE_HOSTS))
+        # self.dark_icon_frame.icon_dropped.connect(lambda: self.mark_tab_dirty(TabIndex.FILE_HOSTS))
 
         # Icons management temporarily hidden while deciding on functionality
         # self.tab_widget.addTab(icons_widget, "Icons")
@@ -2609,7 +2639,7 @@ class ComprehensiveSettingsDialog(QDialog):
         if directory:
             self.custom_radio.setChecked(True)
             self.path_edit.setText(directory)
-            self.mark_tab_dirty(0)
+            self.mark_tab_dirty(TabIndex.GENERAL)
 
 
     def _center_on_parent(self):
@@ -3232,25 +3262,28 @@ class ComprehensiveSettingsDialog(QDialog):
 
         try:
             # NOTE: Tabs and Icons tabs are created but not added to tab widget
-            # Actual tab order: General(0), Credentials(1), Templates(2), Logs(3), Image Scanning(4), External Apps(5)
-            if current_index == 0:  # General tab
+            # Actual tab order: General(0), Credentials(1), Templates(2), Logs(3), Image Scanning(4),
+            #                   Hooks(5), File Hosts(6), Proxy(7), Advanced(8)
+            if current_index == TabIndex.GENERAL:
                 return self._save_general_tab()
-            elif current_index == 1:  # Credentials tab
+            elif current_index == TabIndex.CREDENTIALS:
                 return self._save_credentials_tab()
-            elif current_index == 2:  # Templates tab
+            elif current_index == TabIndex.TEMPLATES:
                 return self._save_templates_tab()
-            elif current_index == 3:  # Logs tab (Tabs/Icons hidden, so this shifts to index 3)
+            elif current_index == TabIndex.LOGS:
                 return self._save_logs_tab()
-            elif current_index == 4:  # Image Scanning tab
+            elif current_index == TabIndex.IMAGE_SCAN:
                 self._save_scanning_settings()
                 return True
-            elif current_index == 5:  # External Apps tab
+            elif current_index == TabIndex.HOOKS:
                 self._save_external_apps_settings()
                 return True
-            elif current_index == 6:  # File Hosts tab
+            elif current_index == TabIndex.FILE_HOSTS:
                 self._save_file_hosts_settings()
                 return True
-            elif current_index == 7:  # Advanced tab
+            elif current_index == TabIndex.PROXY:
+                return self._save_proxy_settings()
+            elif current_index == TabIndex.ADVANCED:
                 return self._save_advanced_settings()
             else:
                 return True
@@ -3415,9 +3448,9 @@ class ComprehensiveSettingsDialog(QDialog):
         """Reload current tab's form values from saved settings (discard changes)"""
         current_index = self.tab_widget.currentIndex()
         
-        if current_index == 0:  # General tab
+        if current_index == TabIndex.GENERAL:
             self._reload_general_tab()
-        elif current_index == 6:  # Image Scanning tab
+        elif current_index == TabIndex.IMAGE_SCAN:
             self._reload_scanning_tab()
         # Other tabs don't have form controls that need reloading
     
@@ -4529,7 +4562,7 @@ class ComprehensiveSettingsDialog(QDialog):
                 self.update_selected_icon_preview(icon_key)
                 
                 # Mark tab as dirty
-                self.mark_tab_dirty(4)  # Icons tab
+                self.mark_tab_dirty(TabIndex.IMAGE_SCAN)  # Legacy: Icon Manager accessed via View menu
                 
                 show_info(self, "Icon Reset", 
                                       f"Icon '{self.icon_data[icon_key]['display_name']}' has been reset to default.")
