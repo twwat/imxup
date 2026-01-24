@@ -2061,17 +2061,45 @@ class WorkerStatusWidget(QWidget):
         for i, col in enumerate(self._active_columns):
             self._preserved_widths[col.id] = self.status_table.columnWidth(i)
 
+        # Capture current visual order BEFORE modifying columns
+        header = self.status_table.horizontalHeader()
+        current_visual_order = []
+        for visual_idx in range(len(self._active_columns)):
+            logical_idx = header.logicalIndex(visual_idx)
+            if 0 <= logical_idx < len(self._active_columns):
+                current_visual_order.append(self._active_columns[logical_idx].id)
+
         if visible:
             # Add column if not present
             if col_id in AVAILABLE_COLUMNS and not self._is_column_visible(col_id):
                 self._active_columns.append(AVAILABLE_COLUMNS[col_id])
+                # Add new column to end of visual order
+                current_visual_order.append(col_id)
         else:
             # Remove column
             self._active_columns = [col for col in self._active_columns if col.id != col_id]
+            # Remove from visual order too
+            current_visual_order = [cid for cid in current_visual_order if cid != col_id]
 
         log(f"Active columns: {', '.join(col.id for col in self._active_columns)}", level="debug", category="ui")
 
         self._rebuild_table_columns()
+
+        # Restore visual order after rebuild
+        if current_visual_order and len(current_visual_order) == len(self._active_columns):
+            header = self.status_table.horizontalHeader()
+            header.blockSignals(True)
+            try:
+                col_id_to_logical = {col.id: i for i, col in enumerate(self._active_columns)}
+                for target_visual, cid in enumerate(current_visual_order):
+                    if cid in col_id_to_logical:
+                        logical_idx = col_id_to_logical[cid]
+                        current_visual = header.visualIndex(logical_idx)
+                        if current_visual != target_visual:
+                            header.moveSection(current_visual, target_visual)
+            finally:
+                header.blockSignals(False)
+
         self._save_column_settings()
 
     def _rebuild_table_columns(self):
