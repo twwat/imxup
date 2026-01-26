@@ -4,6 +4,60 @@ All notable changes to IMXuploader will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [0.8.0] - 2026-01-26
+
+v0.8.0: Complete proxy system, bbdrop rebrand, UI refinements
+
+### Breaking Changes
+- **Application renamed**: imxup → bbdrop
+  - Main script renamed: imxup.py → bbdrop.py
+  - All assets renamed: imxup*.{ico,png} → bbdrop*.{ico,png}
+  - QSettings namespace: ImxUploader → BBDropUploader
+  - All internal references updated (90+ files)
+
+### Added
+- **Complete proxy system**:
+  - Core data models and storage with SQLite backend
+  - Pool rotation and health tracking
+  - 3-level proxy resolver (global → category → service)
+  - pycurl proxy adapter for all file host uploads
+  - Bulk import utilities for proxy lists
+  - Proxy GUI widgets and dialogs
+  - Full integration with file host upload system
+- **New assets**: Unified check and IMX icon assets
+- **Status icons**: Visual status indicators in gallery table (replacing color-coded text)
+
+### Changed
+- **Proxy UI simplification**:
+  - Replaced complex `InheritableProxyControl` with `SimpleProxyDropdown`
+  - Radio button mode selection (Direct/System/Manual/Pool)
+  - Cleaner category and service-level proxy configuration
+  - Updated file host config dialog integration
+- **Branding updates**:
+  - New splash screen styling with blue theme (0,124,250)
+  - Updated logo positioning and sizing
+  - Refreshed icon assets
+  - Modified version display format
+- **UI refinements**:
+  - Image status dialog reorganized with QGroupBox sections
+  - Gallery table uses status icons instead of colored text
+  - Unified icon system with status helpers
+- **Code quality**: Normalized line endings (CRLF → LF)
+
+### Fixed
+- **File hosts**: Credential persistence and storage
+- **UI**: Preserve column order when adding/removing columns
+- **Layout**: Splitter state restoration and sizing improvements
+- **Settings**: Added TabIndex constants for proper proxy tab navigation
+- Misc bug fixes and improvements
+
+### Tests
+- Added proxy system tests (core functionality)
+- Added file host credential persistence tests
+- Added comprehensive proxy UI tests (1,161 lines):
+  - Unit tests for SimpleProxyDropdown widget (617 lines)
+  - Integration tests for proxy workflows (544 lines)
+
 ## [0.7.4] - 2026-01-19
 
 v0.7.4: Unified theme icons, bandwidth manager, table delegates
