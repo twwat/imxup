@@ -7,10 +7,14 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import pyqtSignal, Qt
 from PyQt6.QtGui import QColor
 from typing import Optional, List
+import logging
+import re
 
 from src.proxy.models import ProxyPool
 from src.proxy.storage import ProxyStorage
-from src.gui.widgets.inheritable_proxy_control import InheritableProxyControl
+from .simple_proxy_dropdown import SimpleProxyDropdown
+
+logger = logging.getLogger(__name__)
 
 
 class ProxySettingsWidget(QWidget):
@@ -55,27 +59,6 @@ class ProxySettingsWidget(QWidget):
         self.proxy_mode_group.buttonClicked.connect(self._on_proxy_mode_changed)
 
         layout.addWidget(mode_group)
-
-        # Global Settings Group (disabled unless custom mode)
-        self.global_group = QGroupBox("Global Settings")
-        global_layout = QVBoxLayout(self.global_group)
-
-        global_info = QLabel(
-            "Set the default proxy for all connections. Categories and services can override this."
-        )
-        global_info.setWordWrap(True)
-        global_layout.addWidget(global_info)
-
-        self.global_proxy_control = InheritableProxyControl(
-            parent=self,
-            level="global",
-            show_label=True,
-            label_text="Default Proxy:"
-        )
-        self.global_proxy_control.value_changed.connect(self._on_settings_changed)
-        global_layout.addWidget(self.global_proxy_control)
-
-        layout.addWidget(self.global_group)
 
         # Proxy Pools Group (disabled unless custom mode)
         self.pools_group = QGroupBox("Proxy Pools")
@@ -127,44 +110,34 @@ class ProxySettingsWidget(QWidget):
         category_layout = QVBoxLayout(self.category_group)
 
         category_info = QLabel(
-            "Override the global proxy for specific categories. "
-            "Uncheck 'Override' to inherit from global settings."
+            "Override the global proxy for specific categories."
         )
         category_info.setWordWrap(True)
         category_layout.addWidget(category_info)
 
         # File Hosts category
-        self.file_hosts_control = InheritableProxyControl(
-            parent=self,
-            level="category",
-            category="file_hosts",
-            show_label=True,
-            label_text="File Hosts:"
-        )
-        self.file_hosts_control.value_changed.connect(self._on_settings_changed)
-        category_layout.addWidget(self.file_hosts_control)
+        fh_layout = QHBoxLayout()
+        fh_layout.addWidget(QLabel("File Hosts:"))
+        self.file_hosts_dropdown = SimpleProxyDropdown(category="file_hosts")
+        self.file_hosts_dropdown.value_changed.connect(self._on_settings_changed)
+        fh_layout.addWidget(self.file_hosts_dropdown, 1)
+        category_layout.addLayout(fh_layout)
 
         # Forums category
-        self.forums_control = InheritableProxyControl(
-            parent=self,
-            level="category",
-            category="forums",
-            show_label=True,
-            label_text="Forums:"
-        )
-        self.forums_control.value_changed.connect(self._on_settings_changed)
-        category_layout.addWidget(self.forums_control)
+        forums_layout = QHBoxLayout()
+        forums_layout.addWidget(QLabel("Forums:"))
+        self.forums_dropdown = SimpleProxyDropdown(category="forums")
+        self.forums_dropdown.value_changed.connect(self._on_settings_changed)
+        forums_layout.addWidget(self.forums_dropdown, 1)
+        category_layout.addLayout(forums_layout)
 
         # API category
-        self.api_control = InheritableProxyControl(
-            parent=self,
-            level="category",
-            category="api",
-            show_label=True,
-            label_text="API:"
-        )
-        self.api_control.value_changed.connect(self._on_settings_changed)
-        category_layout.addWidget(self.api_control)
+        api_layout = QHBoxLayout()
+        api_layout.addWidget(QLabel("API:"))
+        self.api_dropdown = SimpleProxyDropdown(category="api")
+        self.api_dropdown.value_changed.connect(self._on_settings_changed)
+        api_layout.addWidget(self.api_dropdown, 1)
+        category_layout.addLayout(api_layout)
 
         layout.addWidget(self.category_group)
         layout.addStretch()
@@ -175,18 +148,25 @@ class ProxySettingsWidget(QWidget):
 
     def load_pools(self):
         """Load proxy pools from storage."""
-        # Load pools into list widget
-        pools = self.storage.list_pools()
+        try:
+            # Load pools into list widget
+            pools = self.storage.list_pools()
 
-        self.pools_list.clear()
-        for pool in pools:
-            self._add_pool_to_list(pool)
+            self.pools_list.clear()
+            for pool in pools:
+                self._add_pool_to_list(pool)
 
-        # Refresh all InheritableProxyControl widgets
-        self.global_proxy_control.refresh()
-        self.file_hosts_control.refresh()
-        self.forums_control.refresh()
-        self.api_control.refresh()
+            # Refresh all SimpleProxyDropdown widgets
+            self.file_hosts_dropdown.refresh()
+            self.forums_dropdown.refresh()
+            self.api_dropdown.refresh()
+        except Exception as e:
+            logger.error(f"Failed to load proxy pools: {e}")
+            QMessageBox.critical(
+                self,
+                "Error Loading Pools",
+                f"Failed to load proxy pools from storage.\n\nError: {e}"
+            )
 
     def _add_pool_to_list(self, pool: ProxyPool):
         """Add a pool to the list widget."""
@@ -211,18 +191,25 @@ class ProxySettingsWidget(QWidget):
 
     def _load_proxy_mode(self):
         """Load and set the appropriate proxy mode radio button."""
-        # Check current global settings to determine mode
-        use_os_proxy = self.storage.get_use_os_proxy()
-        default_pool = self.storage.get_global_default_pool()
+        # Block signals during initialization to prevent triggering _on_proxy_mode_changed
+        self.proxy_mode_group.blockSignals(True)
 
-        if use_os_proxy:
-            self.system_proxy_radio.setChecked(True)
-        elif default_pool or len(self.storage.list_pools()) > 0:
-            # Has pools configured = custom mode
-            self.custom_proxy_radio.setChecked(True)
-        else:
-            # No proxy configured
-            self.no_proxy_radio.setChecked(True)
+        try:
+            # Check current global settings to determine mode
+            use_os_proxy = self.storage.get_use_os_proxy()
+            default_pool = self.storage.get_global_default_pool()
+
+            if use_os_proxy:
+                self.system_proxy_radio.setChecked(True)
+            elif default_pool:
+                # Has pool assigned = custom mode
+                self.custom_proxy_radio.setChecked(True)
+            else:
+                # No proxy configured
+                self.no_proxy_radio.setChecked(True)
+        finally:
+            # Always re-enable signals
+            self.proxy_mode_group.blockSignals(False)
 
     def _on_proxy_mode_changed(self):
         """Handle proxy mode radio button change."""
@@ -246,7 +233,6 @@ class ProxySettingsWidget(QWidget):
         is_custom_mode = self.custom_proxy_radio.isChecked()
 
         # Enable/disable all proxy configuration sections
-        self.global_group.setEnabled(is_custom_mode)
         self.pools_group.setEnabled(is_custom_mode)
         self.category_group.setEnabled(is_custom_mode)
 
@@ -317,6 +303,25 @@ class ProxySettingsWidget(QWidget):
             self.load_pools()
             self.settings_changed.emit()
 
+    def _validate_proxy_host(self, host: str) -> bool:
+        """Validate proxy host to prevent injection attacks.
+
+        Args:
+            host: Proxy hostname or IP address
+
+        Returns:
+            True if host is valid, False otherwise
+        """
+        # Allow alphanumeric, dots, hyphens, and underscores for hostnames
+        # Allow IPv4 addresses (e.g., 192.168.1.1)
+        hostname_pattern = r'^[a-zA-Z0-9._-]+$'
+        ipv4_pattern = r'^(\d{1,3}\.){3}\d{1,3}$'
+
+        if not host or len(host) > 253:  # Max DNS hostname length
+            return False
+
+        return bool(re.match(hostname_pattern, host) or re.match(ipv4_pattern, host))
+
     def _on_test_pool(self):
         """Test first proxy in selected pool."""
         items = self.pools_list.selectedItems()
@@ -330,6 +335,16 @@ class ProxySettingsWidget(QWidget):
             return
 
         proxy = pool.proxies[0]
+
+        # Validate proxy host before testing
+        if not self._validate_proxy_host(proxy.host):
+            logger.error(f"Invalid proxy host detected: {proxy.host}")
+            QMessageBox.critical(
+                self,
+                "Security Error",
+                "Invalid proxy host configuration. Please check proxy settings."
+            )
+            return
 
         try:
             import pycurl
@@ -375,6 +390,7 @@ class ProxySettingsWidget(QWidget):
                 )
 
         except Exception as e:
+            logger.error(f"Proxy test failed for pool {pool.name}: {e}")
             QMessageBox.critical(
                 self,
                 "Proxy Test Failed",

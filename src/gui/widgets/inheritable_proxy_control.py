@@ -236,22 +236,7 @@ class InheritableProxyControl(QWidget):
 
     def _update_status_icon(self, overriding: bool):
         """Update the status icon based on override state."""
-        try:
-            from src.gui.icon_manager import get_icon_manager
-            icon_manager = get_icon_manager()
-            if icon_manager:
-                icon_name = 'edit' if overriding else 'link'
-                icon = icon_manager.get_icon(icon_name)
-                if icon and not icon.isNull():
-                    self.status_icon.setPixmap(icon.pixmap(16, 16))
-                    self.status_icon.setToolTip(
-                        "Custom value (overriding)" if overriding else "Inherited from parent"
-                    )
-                    return
-        except Exception:
-            pass
-
-        # Fallback to text
+        # Use simple text-based status indicator
         self.status_icon.setText("✏" if overriding else "🔗")
         self.status_icon.setToolTip(
             "Custom value (overriding)" if overriding else "Inherited from parent"
