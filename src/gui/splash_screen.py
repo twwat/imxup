@@ -35,7 +35,7 @@ class SplashScreen(QSplashScreen):
         try:
             from bbdrop import get_version
             APP_VERSION = get_version()
-            self.version = f"{APP_VERSION}  "
+            self.version = f"bbdrop v{APP_VERSION}    "
         except (ImportError, ModuleNotFoundError):
             self.version = "unknown"
         self.random_statuses = ['Establishing alibi...', 'Flicking bean...', 'Wiping front to back...']
@@ -81,27 +81,27 @@ class SplashScreen(QSplashScreen):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         
         # Draw rounded border with 2px thickness, 20px radius
-        painter.setPen(QPen(QColor(207, 69, 2), 3))
+        painter.setPen(QPen(QColor(0,124,250), 3))
         painter.drawRoundedRect(2, 2, self.width() - 3, self.height() - 3, 80, 80)
         
         # Draw logo at top if available
-        y_offset = 12
+        y_offset = 22
         if self.logo_pixmap and not self.logo_pixmap.isNull():
             # Scale logo to fit nicely at top
-            logo_height = 116
+            logo_height = 120
             logo_scaled = self.logo_pixmap.scaledToHeight(logo_height, Qt.TransformationMode.SmoothTransformation)
             logo_x = (self.width() - logo_scaled.width()) // 2
             painter.drawPixmap(logo_x, y_offset, logo_scaled)
-            y_offset += logo_height - 4  # bottom of logo is transparent
-        
+            y_offset += logo_height - 32
+
         # Draw version
-        version_font = QFont("Courier", 15, QFont.Weight.Bold)
+        version_font = QFont("Courier", 13, QFont.Weight.Bold)
         painter.setFont(version_font)
-        painter.setPen(QColor(208, 65, 0))
+        painter.setPen(QColor(0,124,250))
         version_rect = painter.fontMetrics().boundingRect(self.version)
         version_x = (self.width() - version_rect.width()) // 2
         painter.drawText(version_x, y_offset + 12, self.version)
-        y_offset += 32
+        y_offset += 42
         
         copyright_text = "Copyright © 2025-2026 twat"
         copyright_font = QFont("Courier", 12)
@@ -189,11 +189,10 @@ class SplashScreen(QSplashScreen):
         QApplication.processEvents()  # Ensure UI updates immediately
 
     def set_status(self, text):
-        """Set status text with random action word and add progress dot"""
+        """Set status text with progress dot"""
         #self.random_timer.stop()
         #action = random.choice(self.action_words).title()
-        #self.status_text = f"{action} {text}"
-        self.status_text = f"{text}..."
+        self.status_text = f"{text}"
         
         self.progress_dots += "•"
         self.repaint()
