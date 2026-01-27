@@ -152,9 +152,11 @@ def read_config() -> configparser.ConfigParser:
 def migrate_from_imxup() -> bool:
     """Migrate settings and data from old imxup to new bbdrop location.
 
-    Copies settings and data from ~/.imxup to ~/.bbdrop and migrates
+    Copies settings and data from old location to new location and migrates
     QSettings from ImxUploader/imxup to BBDropUploader/bbdrop namespaces.
     Also migrates keyring credentials from 'imxup' to 'bbdrop' service.
+
+    Handles custom base paths configured in old QSettings.
 
     Returns:
         True if migration was performed, False if not needed or failed.
@@ -162,13 +164,79 @@ def migrate_from_imxup() -> bool:
     import shutil
 
     home = os.path.expanduser("~")
-    old_path = os.path.join(home, ".imxup")
-    new_path = os.path.join(home, ".bbdrop")
+
+    # First, migrate QSettings (registry/config files) to get custom base path if it exists
+    old_custom_base = None
+    try:
+        from PyQt6.QtCore import QSettings
+
+        old_qsettings_pairs = [
+            ("ImxUploader", "ImxUploadGUI", "BBDropUploader", "BBDropGUI"),
+            ("ImxUploader", "QueueManager", "BBDropUploader", "QueueManager"),
+            ("ImxUploader", "Stats", "BBDropUploader", "Stats"),
+            ("ImxUploader", "Settings", "BBDropUploader", "Settings"),
+            ("ImxUploader", "TabManager", "BBDropUploader", "TabManager"),
+            ("imxup", "imxup", "bbdrop", "bbdrop"),
+        ]
+
+        # Check for custom base path in OLD settings FIRST
+        old_main_settings = QSettings("ImxUploader", "ImxUploadGUI")
+        old_custom_base = old_main_settings.value("config/base_path", "", type=str)
+
+        # Migrate all QSettings
+        for old_org, old_app, new_org, new_app in old_qsettings_pairs:
+            old_settings = QSettings(old_org, old_app)
+            new_settings = QSettings(new_org, new_app)
+
+            for key in old_settings.allKeys():
+                value = old_settings.value(key)
+                if value is not None:
+                    new_settings.setValue(key, value)
+
+            new_settings.sync()
+    except Exception:
+        pass  # QSettings migration is optional, continue with file migration
+
+    # Determine old and new paths (respecting custom base path if it was set)
+    if old_custom_base and os.path.isdir(old_custom_base):
+        old_path = old_custom_base
+        # Keep the custom path for new location too (already migrated in QSettings)
+        new_path = old_custom_base  # Same location, just rename files
+        log(f"Using custom base path from old settings: {old_custom_base}", level="info", category="migration")
+    else:
+        old_path = os.path.join(home, ".imxup")
+        new_path = os.path.join(home, ".bbdrop")
 
     # Check if migration is needed
     if not os.path.exists(old_path):
         return False  # No old data to migrate
 
+    # If using same custom path, only need to rename files, not check if target exists
+    if old_path == new_path:
+        # Same directory - just rename imxup files to bbdrop
+        files_to_rename = [
+            ("imxup.ini", "bbdrop.ini"),
+            ("imxup.db", "bbdrop.db"),
+            ("imxup.db-shm", "bbdrop.db-shm"),
+            ("imxup.db-wal", "bbdrop.db-wal"),
+        ]
+
+        renamed_any = False
+        for old_name, new_name in files_to_rename:
+            old_file = os.path.join(old_path, old_name)
+            new_file = os.path.join(new_path, new_name)
+            if os.path.exists(old_file) and not os.path.exists(new_file):
+                try:
+                    os.rename(old_file, new_file)
+                    renamed_any = True
+                except Exception:
+                    pass
+
+        if renamed_any:
+            log(f"Migrated files in custom location: {old_path}", level="info", category="migration")
+        return renamed_any
+
+    # Different paths - check if new location already has data
     if os.path.exists(new_path) and os.listdir(new_path):
         return False  # New location already has data
 

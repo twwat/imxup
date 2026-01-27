@@ -4,7 +4,7 @@ All notable changes to IMXuploader will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
-## [0.8.0] - 2026-01-26
+## [0.8.0] - 2026-01-27
 
 v0.8.0: Complete proxy system, bbdrop rebrand, UI refinements
 
