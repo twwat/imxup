@@ -9,7 +9,7 @@ pillow==12.2.0
 opencv-python>=4.8.0
 pymediainfo>=6.0.0
 tqdm==4.67.1
-cryptography==46.0.7
+cryptography==48.0.1
 standard-imghdr==3.10.14
 psutil>=5.9.0
 certifi>=2024.7.4
